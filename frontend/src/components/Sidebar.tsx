@@ -1,5 +1,6 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { SMELT_TYPES, SHEETS, type SelectedMethod, type SheetId } from '../types'
+import { ABOUT_NAV, APP_TAGLINE_SIDEBAR_EN, APP_TAGLINE_SIDEBAR_ZH_LINE1, APP_TAGLINE_SIDEBAR_ZH_LINE2, sidebarTitleForLang } from '../constants/appCopy'
 
 interface SidebarProps {
   selectedMethod: SelectedMethod | null
@@ -43,35 +44,9 @@ export default function Sidebar({
     heat_balance: 'Heat Balance',
     furnace: 'Furnace Design',
   }
-  const translations = useMemo(
-    () => ({
-      zh: {
-        appTitle: 'CINF配料软件',
-        appSubtitle: '专业冶金配料计算工具',
-        aboutUs: '了解我们',
-        settings: '设置',
-        cinf: '长沙有色冶金设计研究院有限公司',
-        metallurgy: '长沙院冶金事业部',
-        research: '长沙院科研创新中心',
-        footerBy: '由',
-        footerDev: '科研创新中心开发',
-      },
-      en: {
-        appTitle: 'CINF Batching Software',
-        appSubtitle: 'Professional metallurgical batching tool',
-        aboutUs: 'About Us',
-        settings: 'Settings',
-        cinf: 'Changsha Nonferrous Metallurgical Design & Research Institute Co., Ltd.',
-        metallurgy: 'Metallurgical Division',
-        research: 'Research Innovation Center',
-        footerBy: 'By',
-        footerDev: 'Research Innovation Center',
-      },
-    }),
-    [language]
-  )
+  const t = ABOUT_NAV[language]
 
-  const t = translations[language]
+  const sidebarTitle = sidebarTitleForLang(language)
 
   const isSelected = (smeltTypeId: string, smeltMethodId: string) =>
     selectedMethod?.smeltTypeId === smeltTypeId && selectedMethod?.smeltMethodId === smeltMethodId
@@ -94,7 +69,7 @@ export default function Sidebar({
 
   return (
     <div
-      className={`flex-[1] border-r flex flex-col min-w-[200px] max-w-[280px] ${
+      className={`w-[270px] shrink-0 border-r flex flex-col ${
         darkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
       }`}
     >
@@ -103,18 +78,23 @@ export default function Sidebar({
         <div className="flex items-center space-x-3">
           <img src="./icon.png" alt="Logo" className="w-14 h-14 object-contain" />
           <div>
-            <div className={`text-lg font-bold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>
-              {t.appTitle}
-            </div>
-            <div className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-              {t.appSubtitle}
+            <div className={`text-lg font-bold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{sidebarTitle}</div>
+            <div className={`text-xs leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+              {language === 'zh' ? (
+                <div className="text-right">
+                  <div className="block">{APP_TAGLINE_SIDEBAR_ZH_LINE1}</div>
+                  <div className="block">{APP_TAGLINE_SIDEBAR_ZH_LINE2}</div>
+                </div>
+              ) : (
+                APP_TAGLINE_SIDEBAR_EN
+              )}
             </div>
           </div>
         </div>
       </div>
 
       {/* 冶炼类型 → 冶炼方法（可展开显示计算模块） */}
-      <div className="flex-1 overflow-y-auto p-3 min-h-0">
+      <div className="sidebar-scroll flex-1 overflow-y-auto p-3 min-h-0">
         {SMELT_TYPES.map((smeltType) => (
           <div key={smeltType.id} className="mb-3">
             <div

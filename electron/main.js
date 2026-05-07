@@ -1,9 +1,80 @@
-const { app, BrowserWindow, dialog, ipcMain } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, nativeImage } = require('electron')
 const path = require('path')
 const { spawn, execSync } = require('child_process')
 const fs = require('fs')
 const os = require('os')
 const { autoUpdater } = require('electron-updater')
+const license = require('./license')
+
+/**
+ * 打包后固定 userData，避免 productName 变化导致 offline-license.dat 路径漂移、反复要求激活。
+ */
+function prepareStableUserDataPath() {
+  if (!app.isPackaged) return
+  const appData = app.getPath('appData')
+  const stableDir = path.join(appData, 'CINF_MetBatch')
+  const licenseFile = license.LICENSE_BASENAME
+
+  const legacyDirs = new Set()
+  try {
+    legacyDirs.add(app.getPath('userData'))
+  } catch (_) {
+    /* ignore */
+  }
+  for (const folderName of ['met_calculator', '长沙院冶金智能配料软件']) {
+    legacyDirs.add(path.join(appData, folderName))
+  }
+
+  const destLicense = path.join(stableDir, licenseFile)
+  if (!fs.existsSync(destLicense)) {
+    for (const dir of legacyDirs) {
+      if (!dir) continue
+      if (path.resolve(dir) === path.resolve(stableDir)) continue
+      const src = path.join(dir, licenseFile)
+      if (fs.existsSync(src)) {
+        try {
+          fs.mkdirSync(stableDir, { recursive: true })
+          fs.copyFileSync(src, destLicense)
+        } catch (e) {
+          console.error('离线许可迁移失败:', e)
+        }
+        break
+      }
+    }
+  }
+
+  try {
+    app.setPath('userData', stableDir)
+  } catch (e) {
+    console.error('setPath userData 失败:', e)
+  }
+}
+
+prepareStableUserDataPath()
+
+/** 与 frontend/src/constants/appCopy.ts 中 APP_NAME_ZH / APP_TAGLINE_ZH 保持同步 */
+const APP_DISPLAY_NAME = '长沙院冶金智能配料软件'
+const APP_SPLASH_TAGLINE = '基于能量守恒与质量守恒定律的专业冶金配料计算工具。'
+
+// 仅根据是否打包判断：打包后的 exe 始终为生产模式
+const isDev = !app.isPackaged
+
+function getResourcePath(...paths) {
+  if (isDev) {
+    return path.join(__dirname, '..', ...paths)
+  }
+  return path.join(process.resourcesPath, ...paths)
+}
+
+function isWindows7KernelOrOlder() {
+  if (process.platform !== 'win32') return false
+  const parts = (os.release() || '').split('.')
+  const major = parseInt(parts[0], 10) || 0
+  const minor = parseInt(parts[1], 10) || 0
+  if (major < 6) return true
+  if (major === 6 && minor <= 1) return true
+  return false
+}
 
 // 减轻 Windows 下缓存目录权限导致的 ERROR: Unable to move the cache / Gpu Cache Creation failed
 if (process.platform === 'win32') {
@@ -20,17 +91,97 @@ if (process.platform === 'win32') {
 
 let mainWindow
 let backendProcess
+let splashWindow
+/** 主窗显示与闪屏关闭仅处理一次（app:ready 或 90s 兜底） */
+let appReadyHandled = false
+let appReadyFallbackTimer = null
 
-// 判断是否为开发环境
-// 仅根据是否打包判断：打包后的 exe 始终为生产模式，避免“打开软件就进 dev 模式”
-const isDev = !app.isPackaged
+function showMainAndCloseSplash() {
+  if (appReadyHandled) return
+  appReadyHandled = true
+  if (appReadyFallbackTimer) {
+    try {
+      clearTimeout(appReadyFallbackTimer)
+    } catch (_) {}
+    appReadyFallbackTimer = null
+  }
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.close()
+    splashWindow = null
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show()
+    if (process.platform === 'darwin') {
+      app.dock.show()
+    }
+  }
+}
 
-// 获取资源路径（开发环境和生产环境不同）
-function getResourcePath(...paths) {
-  if (isDev) {
-    return path.join(__dirname, '..', ...paths)
-  } else {
-    return path.join(process.resourcesPath, ...paths)
+function createSplashWindow() {
+  try {
+    splashWindow = new BrowserWindow({
+      width: 520,
+      height: 320,
+      resizable: false,
+      movable: true,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      frame: false,
+      backgroundColor: '#FFFFFF',
+      show: false,
+      alwaysOnTop: true,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+      },
+    })
+
+    const splashPath = path.join(__dirname, 'splash.html')
+    const splashIconName = process.platform === 'win32' ? 'icon.ico' : 'icon.png'
+    const splashIconCandidates = isDev
+      ? [path.join(__dirname, 'build', splashIconName)]
+      : [getResourcePath('build', splashIconName), path.join(process.resourcesPath, 'app.asar.unpacked', 'build', splashIconName)]
+    let splashIconPath = ''
+    for (const p of splashIconCandidates) {
+      if (p && fs.existsSync(p)) {
+        splashIconPath = p
+        break
+      }
+    }
+    let splashIconPngDataUrl = ''
+    if (splashIconPath) {
+      try {
+        const img = nativeImage.createFromPath(splashIconPath)
+        const png = img && !img.isEmpty() ? img.toPNG() : null
+        if (png && png.length) splashIconPngDataUrl = `data:image/png;base64,${png.toString('base64')}`
+      } catch (_) {}
+    }
+
+    if (fs.existsSync(splashPath)) {
+      splashWindow.loadFile(splashPath, {
+        query: {
+          iconPng: splashIconPngDataUrl,
+          name: APP_DISPLAY_NAME,
+          tagline: APP_SPLASH_TAGLINE,
+        },
+      })
+    } else {
+      const fallbackSplashHtml = encodeURIComponent(
+        '<!doctype html><html><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Noto Sans SC,Microsoft YaHei,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;color:#475569;">正在启动，请稍候...</body></html>'
+      )
+      splashWindow.loadURL(`data:text/html;charset=utf-8,${fallbackSplashHtml}`)
+    }
+
+    splashWindow.once('ready-to-show', () => {
+      if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show()
+    })
+
+    splashWindow.on('closed', () => {
+      splashWindow = null
+    })
+  } catch (e) {
+    splashWindow = null
   }
 }
 
@@ -146,6 +297,14 @@ function startBackend() {
 
 // 创建主窗口
 function createWindow() {
+  if (appReadyFallbackTimer) {
+    try {
+      clearTimeout(appReadyFallbackTimer)
+    } catch (_) {}
+    appReadyFallbackTimer = null
+  }
+  appReadyHandled = false
+
   const windowOptions = {
     width: 1600,
     height: 1080,
@@ -204,14 +363,9 @@ function createWindow() {
     })
   }
 
-  // 页面加载完成后显示窗口
+  // 不立即显示主窗：等待渲染进程 app:ready；90s 兜底避免卡死
   mainWindow.once('ready-to-show', () => {
-    mainWindow.show()
-    
-    // 聚焦窗口
-    if (process.platform === 'darwin') {
-      app.dock.show()
-    }
+    appReadyFallbackTimer = setTimeout(showMainAndCloseSplash, 90000)
   })
 
   mainWindow.on('closed', () => {
@@ -237,7 +391,17 @@ if (!isDev) {
   // 如果使用通用服务器，确保 URL 正确配置
   autoUpdater.autoDownload = false // 不自动下载，等待用户确认
   autoUpdater.autoInstallOnAppQuit = true // 应用退出时自动安装更新
-  
+  if (isWindows7KernelOrOlder()) {
+    autoUpdater.channel = 'win7'
+  }
+
+  const gh = process.env.GH_TOKEN || process.env.GITHUB_TOKEN
+  if (gh) {
+    const t = String(gh).trim()
+    const auth = /^(?:token|Bearer)\s/i.test(t) ? t : `token ${t}`
+    autoUpdater.addAuthHeader(auth)
+  }
+
   // 更新检查事件（仅在生产环境）
   autoUpdater.on('checking-for-update', () => {
     console.log('正在检查更新...')
@@ -332,19 +496,33 @@ ipcMain.handle('get-app-version', () => {
   return app.getVersion()
 })
 
+ipcMain.on('app:ready', () => {
+  showMainAndCloseSplash()
+})
+
+ipcMain.handle('license:get-status', () => {
+  return license.getLicenseStatus(isDev)
+})
+
+ipcMain.handle('license:activate', async (_e, token) => {
+  return license.activateWithToken(isDev, token)
+})
+
 // 应用准备就绪
 app.whenReady().then(async () => {
   try {
+    license.setElectronApp(app)
+    createSplashWindow()
     // 启动后端服务器
     await startBackend()
-    
-    // 创建窗口
+
+    // 创建窗口（主窗 show 由 app:ready 或 90s 超时触发）
     createWindow()
     
-    // 应用启动后延迟检查更新（避免影响启动速度）
+    // 应用启动后延迟检查更新（避免影响启动速度）；静默检查，具体结果由设置页展示
     if (!isDev) {
       setTimeout(() => {
-        autoUpdater.checkForUpdatesAndNotify().catch(err => {
+        autoUpdater.checkForUpdates().catch((err) => {
           console.error('自动检查更新失败:', err)
         })
       }, 5000)

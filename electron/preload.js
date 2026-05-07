@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 // 暴露安全的API给渲染进程
 contextBridge.exposeInMainWorld('electronAPI', {
+  /** 前端就绪后主进程关闭闪屏并显示主窗口（与 Flow 一致） */
+  appReady: () => ipcRenderer.send('app:ready'),
   // 更新相关 API
   update: {
     // 检查更新
@@ -48,5 +50,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
   // 导出计算书：显示“另存为”对话框，返回用户选择的路径或 null
-  showSaveDialogForExport: (defaultFileName) => ipcRenderer.invoke('show-save-dialog-export', defaultFileName)
+  showSaveDialogForExport: (defaultFileName) => ipcRenderer.invoke('show-save-dialog-export', defaultFileName),
+  // 离线一机一证：设备码 + 授权码（前缀 CINF-MET-LIC1.）
+  license: {
+    getStatus: () => ipcRenderer.invoke('license:get-status'),
+    activate: (token) => ipcRenderer.invoke('license:activate', token),
+  },
 })
