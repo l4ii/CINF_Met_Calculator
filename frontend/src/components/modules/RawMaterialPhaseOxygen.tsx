@@ -7,8 +7,8 @@ import {
   type ElementRatios,
 } from '../../config/rawMaterialConfig'
 import { validateFloat, ValidationError } from '../../utils/validation'
-import { phaseAnalysis, type PhaseResult, type PhaseFeSAlgorithm } from '../../utils/phaseAnalysis'
-import { calcTheoreticalOxygen } from '../../utils/oxygenCalc'
+import { phaseAnalysis, type PhaseResult, type PhaseFeSAlgorithm, type ElementWeights } from '../../utils/phaseAnalysis'
+import { calcTheoreticalOxygen, type IronOxidationProduct } from '../../utils/oxygenCalc'
 import { runNsga2Solvent, type SolventSolution } from '../../utils/solventCalc'
 import {
   suggestBuiltinCheaperBlend,
@@ -17,7 +17,7 @@ import {
   BLEND_CORE_REL_ERR_LIMIT_PCT,
   type BlendSuggestResult,
 } from '../../utils/blendSuggest'
-import { useCalc } from '../../context/CalcContext'
+import { useCalc, type MaterialEntry } from '../../context/CalcContext'
 import ElementTableCompact from '../ElementTableCompact'
 import {
   btnPrimary,
@@ -68,6 +68,38 @@ function solventToElementRatios(ratios: ElementRatios): ElementRatios {
     }
   }
   return out
+}
+
+type PhaseInputBasis = {
+  elementWeights: ElementWeights
+  totalWeight: number
+  materialCount: number
+  materialNames: string[]
+}
+
+function aggregateSulfurBearingBasePhaseInput(materials: MaterialEntry[]): PhaseInputBasis {
+  const sulfurBearingBases = materials.filter((m) => {
+    const sulfurPct = typeof m.ratios['S (硫)'] === 'number' ? m.ratios['S (硫)'] : parseFloat(String(m.ratios['S (硫)'] ?? 0)) || 0
+    return m.type === 'base' && m.weight > 1e-12 && sulfurPct > 1e-9
+  })
+  const elementWeights: ElementWeights = {}
+  let totalWeight = 0
+
+  for (const mat of sulfurBearingBases) {
+    totalWeight += mat.weight
+    for (const elem of ['Sb(锑)', 'Fe(铁)', 'S (硫)']) {
+      const raw = mat.ratios[elem]
+      const pct = typeof raw === 'number' ? raw : parseFloat(String(raw ?? 0)) || 0
+      elementWeights[elem] = (elementWeights[elem] ?? 0) + (pct / 100) * mat.weight
+    }
+  }
+
+  return {
+    elementWeights,
+    totalWeight,
+    materialCount: sulfurBearingBases.length,
+    materialNames: sulfurBearingBases.map((m) => m.name),
+  }
 }
 
 type SlagRatioRange = {
@@ -219,9 +251,13 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
     exact: '0.5',
   })
   const [oxyPurity, setOxyPurity] = useState<string>('32')
-  const [excessRatio, setExcessRatio] = useState<string>('1.15')
+  const [oxygenCoefficient, setOxygenCoefficient] = useState<string>('1.15')
   const [oxyUnitPrice, setOxyUnitPrice] = useState<string>('0.45')
+  const [ironOxidationProduct, setIronOxidationProduct] = useState<IronOxidationProduct>('FeO')
+  const [customFeSO2Coeff, setCustomFeSO2Coeff] = useState<string>('1.50')
+  const [customFeS2O2Coeff, setCustomFeS2O2Coeff] = useState<string>('2.50')
   const [phaseData, setPhaseData] = useState<PhaseResult | null>(null)
+  const [phaseBasis, setPhaseBasis] = useState<PhaseInputBasis | null>(null)
   const [phaseAlgorithm, setPhaseAlgorithm] = useState<PhaseFeSAlgorithm>('adaptive')
   const [oxygenResult, setOxygenResult] = useState<ReturnType<typeof calcTheoreticalOxygen> | null>(null)
   const [nsga2Results, setNsga2Results] = useState<SolventSolution[] | null>(null)
@@ -238,7 +274,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
   const [blendSuggestDrawerOpen, setBlendSuggestDrawerOpen] = useState(false)
   const [blendSuggestLoading, setBlendSuggestLoading] = useState(false)
   const blendSuggestRequestRef = useRef(0)
-  /** 低成本配方优化结果：只在用户主动打开时展示，不自动改动当前配方 */
+  /** 原料成本最优方案结果：只在用户主动打开时展示，不自动改动当前配方 */
   const [blendSuggestModal, setBlendSuggestModal] = useState<
     (BlendSuggestResult & { currentCostYuanPerH: number; targetTotalWeight: number; generatedAt: number }) | null
   >(null)
@@ -270,13 +306,21 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
     [targetCaOSiO2, isEn]
   )
   const ratioModeButtonClass = (active: boolean) =>
-    `px-2.5 py-1 text-xs transition-colors ${
+    `px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
       active
-        ? 'bg-[#1890ff] text-white'
+        ? darkMode
+          ? 'border-blue-500 bg-blue-600 text-white'
+          : 'border-blue-600 bg-blue-600 text-white'
         : darkMode
-          ? 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-          : 'bg-white text-gray-600 hover:bg-gray-100'
+          ? 'border-gray-500 text-gray-300 hover:bg-gray-700 hover:border-gray-400'
+          : 'border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-gray-400'
     }`
+  const ironProductOptions: { value: IronOxidationProduct; label: string; labelEn: string }[] = [
+    { value: 'FeO', label: 'FeO 入渣', labelEn: 'FeO to slag' },
+    { value: 'Fe2O3', label: 'Fe₂O₃', labelEn: 'Fe₂O₃' },
+    { value: 'Fe3O4', label: 'Fe₃O₄', labelEn: 'Fe₃O₄' },
+    { value: 'custom', label: '自定义', labelEn: 'Custom' },
+  ]
   const switchFeSiO2Mode = (mode: SlagRatioMode) => {
     setTargetFeSiO2((prev) => {
       if (mode === 'exact' && prev.mode !== 'exact') {
@@ -332,6 +376,9 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
         unitPrice,
       },
     ])
+    setPhaseData(null)
+    setPhaseBasis(null)
+    setOxygenResult(null)
     setBaseWeight('')
     setBaseUnitPrice('')
     setEditingRatios(null)
@@ -508,6 +555,9 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
     setMaterials((prev) =>
       prev.map((m) => (m.id === id ? { ...m, weight: Math.max(0, newWeight) } : m))
     )
+    setPhaseData(null)
+    setPhaseBasis(null)
+    setOxygenResult(null)
   }
 
   const handleUpdateMaterialUnitPrice = (id: string, unitPrice: number) => {
@@ -521,6 +571,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
     setParetoFront([])
     setAppliedSolvent(null)
     setPhaseData(null)
+    setPhaseBasis(null)
     setOxygenResult(null)
     setHoveredPoint(null)
     setIsCalcRunning(false)
@@ -580,6 +631,9 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
       unitPrice: b.unitPriceYuanPerTon,
     }))
     setMaterials([...newBases, ...rest])
+    setPhaseData(null)
+    setPhaseBasis(null)
+    setOxygenResult(null)
     setBlendSuggestModal(null)
     setBlendSuggestDrawerOpen(false)
     setAddFeedback(isEn ? 'Optimized blend applied. Base materials were replaced.' : '已应用优化配方，当前原料行已替换')
@@ -591,7 +645,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
     const saving = bs.currentCostYuanPerH - bs.suggestedCostYuanPerH
     const savingPct = bs.currentCostYuanPerH > 0 ? (saving / bs.currentCostYuanPerH) * 100 : 0
     const lines = [
-      isEn ? 'Low-cost blend optimization suggestion' : '低成本配方优化建议',
+      isEn ? 'Raw-material cost-optimal blend suggestion' : '原料成本最优方案建议',
       `${isEn ? 'Target total mass' : '目标总质量'}: ${bs.targetTotalWeight.toFixed(4)} t/h`,
       `${isEn ? 'Current cost' : '当前成本'}: ${bs.currentCostYuanPerH.toFixed(0)} ${isEn ? 'CNY/h' : '元/h'}`,
       `${isEn ? 'Suggested cost' : '推荐成本'}: ${bs.suggestedCostYuanPerH.toFixed(0)} ${isEn ? 'CNY/h' : '元/h'}`,
@@ -618,9 +672,15 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
     try {
       if (!mixResult || mixResult.totalWeight <= 0) throw new ValidationError('请先添加物料并计算物料结果')
       if (!appliedSolvent) throw new ValidationError('请先在步骤3中选择并应用一个熔剂方案')
-      const phase = phaseAnalysis(mixResult.elementWeights, phaseAlgorithm)
+      const nextPhaseBasis = aggregateSulfurBearingBasePhaseInput(materials)
+      if (nextPhaseBasis.totalWeight <= 0 || nextPhaseBasis.materialCount === 0) {
+        throw new ValidationError('未检测到含硫基础原料，无法进行硫化物物相估算')
+      }
+      const phase = phaseAnalysis(nextPhaseBasis.elementWeights, phaseAlgorithm)
       setPhaseData(phase)
-      setAddFeedback('已更新物相分析结果')
+      setPhaseBasis(nextPhaseBasis)
+      setOxygenResult(null)
+      setAddFeedback('已更新物相估算结果')
     } catch (e) {
       setErrorMsg(e instanceof ValidationError ? e.message : String(e))
     }
@@ -630,11 +690,20 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
     try {
       if (!phaseData) throw new ValidationError('请先进行物相分析')
       const purity = validateFloat(oxyPurity, '氧气浓度', { min: 0, max: 100 })
-      const excess = validateFloat(excessRatio, '氧气过剩系数', { min: 0.01, max: 25 })
+      const supplyCoefficient = validateFloat(oxygenCoefficient, '供氧系数', { min: 0.01, max: 25 })
       const unitPrice = validateFloat(oxyUnitPrice, '富氧空气单价', { min: 0 })
+      const customFeS = ironOxidationProduct === 'custom'
+        ? validateFloat(customFeSO2Coeff, 'FeS 耗氧系数', { min: 0, required: true })
+        : undefined
+      const customFeS2 = ironOxidationProduct === 'custom'
+        ? validateFloat(customFeS2O2Coeff, 'FeS₂ 耗氧系数', { min: 0, required: true })
+        : undefined
       const res = calcTheoreticalOxygen(phaseData, {
         oxy_purity: purity,
-        excess_ratio: excess,
+        oxygen_coefficient: supplyCoefficient,
+        iron_product: ironOxidationProduct,
+        custom_FeS_O2_coeff: customFeS,
+        custom_FeS2_O2_coeff: customFeS2,
       })
       setOxygenResult(res)
       const totalAir = res.mass + res.N2_mass
@@ -645,9 +714,11 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
           {
             id: `oxygen-${Date.now()}`,
             name: '富氧空气',
+            // Store oxygen-enriched-air composition as percentages (0-100),
+            // consistent with all other material rows.
             ratios: {
-              'O (氧)': totalAir > 0 ? res.mass / totalAir : 0,
-              'N (氮)': totalAir > 0 ? res.N2_mass / totalAir : 0,
+              'O (氧)': totalAir > 0 ? (res.mass / totalAir) * 100 : 0,
+              'N (氮)': totalAir > 0 ? (res.N2_mass / totalAir) * 100 : 0,
             },
             weight: totalAir,
             type: 'oxygen' as const,
@@ -811,6 +882,9 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
       return next
     })
     setAppliedSolvent(sol)
+    setPhaseData(null)
+    setPhaseBasis(null)
+    setOxygenResult(null)
   }
 
   const dark = darkMode
@@ -835,7 +909,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                     <div className="flex items-start justify-between gap-4">
                       <div>
                         <h3 className={`text-lg font-semibold ${dark ? 'text-gray-100' : 'text-gray-900'}`}>
-                          {isEn ? 'Low-Cost Blend Optimization' : '低成本配方优化'}
+                          {isEn ? 'Raw-Material Cost-Optimal Blend' : '原料成本最优方案'}
                         </h3>
                         <p className={`mt-1 text-sm leading-relaxed ${dark ? 'text-gray-400' : 'text-gray-600'}`}>
                           {isEn
@@ -858,8 +932,8 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                       </div>
                       <p className={`mt-2 text-sm ${dark ? 'text-gray-400' : 'text-gray-600'}`}>
                         {isEn
-                          ? 'Searching the material library for the lowest-cost feasible mixed feed.'
-                          : '正在从原料库中寻找满足约束的最低成本混合矿配料方式。'}
+                          ? 'Searching the material library for the raw-material cost-optimal mixed feed.'
+                          : '正在从原料库中寻找满足约束的原料成本最优混合矿配料方式。'}
                       </p>
                     </div>
                   </div>
@@ -900,7 +974,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <h3 className={`text-lg font-semibold ${dark ? 'text-gray-100' : 'text-gray-900'}`}>
-                        {isEn ? 'Low-Cost Blend Optimization' : '低成本配方优化'}
+                        {isEn ? 'Raw-Material Cost-Optimal Blend' : '原料成本最优方案'}
                       </h3>
                       <p className={`mt-1 text-sm leading-relaxed ${dark ? 'text-gray-400' : 'text-gray-600'}`}>
                         {isEn
@@ -923,24 +997,24 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
 
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <div className={`rounded-lg border p-3 ${dark ? 'border-gray-600 bg-gray-700/45' : 'border-gray-200 bg-gray-50'}`}>
-                      <div className={`text-xs ${dark ? 'text-gray-400' : 'text-gray-500'}`}>{isEn ? 'Current cost' : '当前成本'}</div>
+                      <div className={`text-sm ${dark ? 'text-gray-400' : 'text-gray-500'}`}>{isEn ? 'Current cost' : '当前成本'}</div>
                       <div className={`mt-1 font-mono text-lg font-semibold ${dark ? 'text-gray-100' : 'text-gray-900'}`}>
                         {blendSuggestModal.currentCostYuanPerH.toFixed(0)}
-                        <span className="ml-1 text-xs font-normal">{isEn ? 'CNY/h' : '元/h'}</span>
+                        <span className="ml-1 text-sm font-normal">{isEn ? 'CNY/h' : '元/h'}</span>
                       </div>
                     </div>
                     <div className={`rounded-lg border p-3 ${dark ? 'border-emerald-700 bg-emerald-950/30' : 'border-emerald-200 bg-emerald-50'}`}>
-                      <div className={`text-xs ${dark ? 'text-emerald-200/80' : 'text-emerald-700'}`}>{isEn ? 'Suggested cost' : '推荐成本'}</div>
+                      <div className={`text-sm ${dark ? 'text-emerald-200/80' : 'text-emerald-700'}`}>{isEn ? 'Suggested cost' : '推荐成本'}</div>
                       <div className={`mt-1 font-mono text-lg font-semibold ${dark ? 'text-emerald-200' : 'text-emerald-700'}`}>
                         {blendSuggestModal.suggestedCostYuanPerH.toFixed(0)}
-                        <span className="ml-1 text-xs font-normal">{isEn ? 'CNY/h' : '元/h'}</span>
+                        <span className="ml-1 text-sm font-normal">{isEn ? 'CNY/h' : '元/h'}</span>
                       </div>
                     </div>
                     <div className={`rounded-lg border p-3 ${dark ? 'border-blue-700 bg-blue-950/25' : 'border-blue-200 bg-blue-50'}`}>
-                      <div className={`text-xs ${dark ? 'text-blue-200/80' : 'text-blue-700'}`}>{isEn ? 'Estimated saving' : '预计节约'}</div>
+                      <div className={`text-sm ${dark ? 'text-blue-200/80' : 'text-blue-700'}`}>{isEn ? 'Estimated saving' : '预计节约'}</div>
                       <div className={`mt-1 font-mono text-lg font-semibold ${saving >= 0 ? (dark ? 'text-blue-200' : 'text-blue-700') : (dark ? 'text-amber-200' : 'text-amber-700')}`}>
                         {saving.toFixed(0)}
-                        <span className="ml-1 text-xs font-normal">{isEn ? `CNY/h (${savingPct.toFixed(1)}%)` : `元/h (${savingPct.toFixed(1)}%)`}</span>
+                        <span className="ml-1 text-sm font-normal">{isEn ? `CNY/h (${savingPct.toFixed(1)}%)` : `元/h (${savingPct.toFixed(1)}%)`}</span>
                       </div>
                     </div>
                   </div>
@@ -949,12 +1023,16 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                     <summary className="cursor-pointer font-medium">{isEn ? 'Basis and constraints' : '优化依据与约束'}</summary>
                     <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
                       <div>
-                        <div className={`text-xs ${dark ? 'text-gray-400' : 'text-gray-500'}`}>{isEn ? 'Total mass' : '目标总质量'}</div>
+                        <div className={`text-sm ${dark ? 'text-gray-400' : 'text-gray-500'}`}>{isEn ? 'Total mass' : '目标总质量'}</div>
                         <div className="font-mono">{blendSuggestModal.targetTotalWeight.toFixed(4)} t/h</div>
                       </div>
                       <div>
-                        <div className={`text-xs ${dark ? 'text-gray-400' : 'text-gray-500'}`}>{isEn ? 'Available library' : '可用原料库'}</div>
-                        <div>{isEn ? `${Object.values(BASE_ELEMENTS).length} built-in materials` : `当前内置原料 ${Object.values(BASE_ELEMENTS).length} 种`}</div>
+                        <div className={`text-sm ${dark ? 'text-gray-400' : 'text-gray-500'}`}>{isEn ? 'Available library' : '可用原料库'}</div>
+                        <div>
+                          {isEn
+                            ? `${Object.values(BASE_ELEMENTS).length} materials currently available`
+                            : `当前可参与优化 ${Object.values(BASE_ELEMENTS).length} 种，随原料库配置变化`}
+                        </div>
                       </div>
                       <div>
                         <div className={`text-sm ${dark ? 'text-gray-400' : 'text-gray-500'}`}>{isEn ? 'Core constraint' : '核心约束'}</div>
@@ -970,7 +1048,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                           ? (blendSuggestModal.blend.length > 1 ? 'Suggested Mixed Feed' : 'Suggested Blend')
                           : (blendSuggestModal.blend.length > 1 ? '推荐混合矿配方' : '推荐配方')}
                       </h4>
-                      <span className={`text-xs ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
+                      <span className={`text-sm ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
                         {isEn ? 'Total' : '合计'} {blendTotalWeight.toFixed(4)} t/h
                       </span>
                     </div>
@@ -1045,7 +1123,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                 </div>
 
                 <div className={`sticky bottom-0 flex flex-wrap items-center justify-between gap-3 border-t px-6 py-4 ${dark ? 'bg-gray-800/95 border-gray-600' : 'bg-white/95 border-gray-200'} backdrop-blur`}>
-                  <p className={`max-w-md text-xs leading-relaxed ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  <p className={`max-w-md text-sm leading-relaxed ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
                     {isEn
                       ? `Core-element deviation must be within ${BLEND_CORE_REL_ERR_LIMIT_PCT}% before applying. Solvent and oxygen rows will be kept.`
                       : `应用前需确认核心元素偏差≤${BLEND_CORE_REL_ERR_LIMIT_PCT}%；替换时会保留熔剂与富氧空气行。`}
@@ -1307,7 +1385,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                 <div className={`text-sm font-medium ${dark ? 'text-gray-200' : 'text-gray-800'}`}>
                   {isEn ? 'Optional optimization' : '附加优化'}
                 </div>
-                <div className={`mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
+                <div className={`mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
                   <span>
                     {isEn ? 'Target mass' : '目标总质量'}：
                     <span className="font-mono">{baseSummary.totalWeight.toFixed(4)} t/h</span>
@@ -1316,7 +1394,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                     {isEn ? 'Current raw-material cost' : '当前原料成本'}：
                     <span className="font-mono">{baseSummary.currentCostYuanPerH.toFixed(0)} {isEn ? 'CNY/h' : '元/h'}</span>
                   </span>
-                  <span>{isEn ? 'Uses built-in material library' : '按当前元素总量在原料库中寻找低成本配比'}</span>
+                  <span>{isEn ? 'Uses the current material library' : '按当前元素总量在原料库中寻找原料成本最优方案'}</span>
                 </div>
               </div>
               <button
@@ -1324,9 +1402,9 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                 onClick={handleRunBlendOptimization}
                 disabled={!canOptimize}
                 className={canOptimize ? btnSecondary(dark) : btnPrimaryDisabled(dark)}
-                title={isEn ? 'Find a low-cost blend in the material library while keeping total base-feed mass fixed.' : '固定当前原料总质量，根据元素总量在原料库中寻找低成本配料方式'}
+                title={isEn ? 'Find the raw-material cost-optimal feasible blend while keeping total base-feed mass fixed.' : '固定当前原料总质量，根据元素总量在原料库中寻找原料成本最优配料方式'}
               >
-                {isEn ? 'Low-Cost Blend' : '低成本配方优化'}
+                {isEn ? 'Raw-Material Cost Optimum' : '原料成本最优方案'}
               </button>
             </div>
           )
@@ -1380,13 +1458,13 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
         <p className={`${hintText(dark)} mb-4`}>
           {isEn
             ? 'Set the allowed slag-ratio window. Range mode uses lower and upper limits; Exact mode solves toward one fixed ratio. Reversed limits are normalized automatically.'
-            : '设置目标渣型允许区间。范围模式填写下限与上限；精确模式填写单一目标值。上下限输反时，系统会自动按小到大计算。'}
+            : '设置目标渣型允许区间。范围模式填写下限与上限；精确模式填写单一目标值。'}
         </p>
         <div className="flex flex-wrap items-end gap-4 w-full">
           <div className="flex-1 min-w-[17rem]">
-            <div className="mb-1 flex items-center justify-between gap-2">
+            <div className="mb-2">
               <label className={labelBase(dark)}>{isEn ? 'Fe/SiO₂ iron-silica ratio' : 'Fe/SiO₂ 铁硅比'}</label>
-              <div className={`inline-flex overflow-hidden rounded-md border ${dark ? 'border-gray-600' : 'border-gray-300'}`}>
+              <div className="mt-2 flex flex-wrap gap-2">
                 <button type="button" onClick={() => switchFeSiO2Mode('range')} className={ratioModeButtonClass(targetFeSiO2.mode === 'range')}>
                   {isEn ? 'Range' : '范围'}
                 </button>
@@ -1423,9 +1501,9 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
             )}
           </div>
           <div className="flex-1 min-w-[17rem]">
-            <div className="mb-1 flex items-center justify-between gap-2">
+            <div className="mb-2">
               <label className={labelBase(dark)}>{isEn ? 'CaO/SiO₂ lime-silica ratio' : 'CaO/SiO₂ 钙硅比'}</label>
-              <div className={`inline-flex overflow-hidden rounded-md border ${dark ? 'border-gray-600' : 'border-gray-300'}`}>
+              <div className="mt-2 flex flex-wrap gap-2">
                 <button type="button" onClick={() => switchCaOSiO2Mode('range')} className={ratioModeButtonClass(targetCaOSiO2.mode === 'range')}>
                   {isEn ? 'Range' : '范围'}
                 </button>
@@ -1469,7 +1547,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
             {isCalcRunning ? (isEn ? 'Calculating...' : '计算中…') : (isEn ? 'Calculate' : '计算')}
           </button>
           {(targetFeSiO2Preview || targetCaOSiO2Preview) && (
-            <p className={`${hintText(dark)} basis-full -mt-2 text-xs`}>
+            <p className={`${hintText(dark)} basis-full -mt-2`}>
               {[targetFeSiO2Preview, targetCaOSiO2Preview].filter(Boolean).join(' · ')}
             </p>
           )}
@@ -1541,14 +1619,14 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
               return (
                 <div className={`mb-5 rounded-lg overflow-visible w-full min-w-0 ${dark ? 'bg-gray-800/50 border border-gray-700' : 'bg-gray-50 border border-gray-200'}`}>
                   <h4 className={`text-sm font-semibold px-3 pt-3 pb-1 ${dark ? 'text-gray-200' : 'text-gray-800'}`}>{isEn ? 'Pareto Front and Single-Objective Optima' : '帕累托前沿解与单目标最优解'}</h4>
-                  <p className={`text-xs px-3 pt-0.5 pb-2 leading-relaxed ${dark ? 'text-gray-400' : 'text-gray-600'}`}>
+                  <p className={`text-sm px-3 pt-0.5 pb-2 leading-relaxed ${dark ? 'text-gray-400' : 'text-gray-600'}`}>
                     {isEn
                       ? 'This chart shows the NSGA-II Pareto front in the feasible slag-type space (Fe/SiO₂ vs CaO/SiO₂). X-axis: Fe/SiO₂ ratio; Y-axis: CaO/SiO₂ ratio. Point color indicates cost (CNY/h) with the color bar on the right. Small points are Pareto solutions, and dashed callouts indicate five single-objective optimum solutions. Hover to inspect each point and click to apply.'
                       : '本图在渣型可行域（Fe/SiO₂–CaO/SiO₂ 平面）内展示 NSGA-II 多目标优化的 Pareto 前沿分布。横轴为 Fe/SiO₂ 铁硅比，纵轴为 CaO/SiO₂ 钙硅比；散点颜色表示成本（元/h），右侧色条为成本刻度。小点为全部 Pareto 前沿解，虚线引出标注为五类单目标最优解。支持悬浮查看各点渣型与成本、点击任意点快速应用。'}
                   </p>
                   <div className="relative">
                     {hoveredPoint && (
-                      <div className={`absolute top-2 left-3 right-3 z-10 px-3 py-2 rounded text-xs ${dark ? 'bg-gray-900/95 text-gray-100 border border-gray-600' : 'bg-white/95 text-gray-800 border border-gray-200 shadow-md'}`}>
+                      <div className={`absolute top-2 left-3 right-3 z-10 px-3 py-2 rounded text-sm ${dark ? 'bg-gray-900/95 text-gray-100 border border-gray-600' : 'bg-white/95 text-gray-800 border border-gray-200 shadow-md'}`}>
                         <span className="font-semibold">{hoveredPoint.label || 'Pareto 解'}</span>
                         {' · Fe/SiO₂ '}{(hoveredPoint.feSiO2 ?? 0).toFixed(4)}
                         {' · CaO/SiO₂ '}{(hoveredPoint.caOSiO2 ?? 0).toFixed(4)}
@@ -1660,7 +1738,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                       </td>
                       <td className="text-center py-2 pl-4 pr-3">
                         {appliedSolvent && Math.abs((appliedSolvent.limestone ?? 0) - (sol.limestone ?? 0)) < 1e-4 && Math.abs((appliedSolvent.ironOre ?? 0) - (sol.ironOre ?? 0)) < 1e-4 ? (
-                          <span className={`text-xs ${dark ? 'text-green-400' : 'text-green-600'}`}>{isEn ? 'Applied' : '已应用'}</span>
+                          <span className={`text-sm ${dark ? 'text-green-400' : 'text-green-600'}`}>{isEn ? 'Applied' : '已应用'}</span>
                         ) : (
                           <button onClick={(e) => { e.stopPropagation(); handleApplySolvent(sol) }} className={btnPrimarySm(dark)}>
                             {isEn ? 'Apply' : '应用'}
@@ -1686,7 +1764,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
               onToggle={(e) => setAlgoDetailsOpen((e.target as HTMLDetailsElement).open)}
             >
               <summary className="cursor-pointer text-sm font-medium hover:underline">{isEn ? 'Algorithm Notes' : '算法说明'}</summary>
-              <div className="mt-2 text-xs leading-relaxed space-y-2.5 pl-2 border-l-2 border-blue-200 dark:border-blue-800">
+              <div className="mt-2 text-sm leading-relaxed space-y-2.5 pl-2 border-l-2 border-blue-200 dark:border-blue-800">
                 <p><strong>优化问题定义</strong>：决策变量 X=[石灰,铁矿石]；目标函数 F(X)=[成本,石灰用量,总渣量] 均最小化；约束为 Fe/SiO₂、CaO/SiO₂ 在目标范围内。若输入单个数，则该比值按精确目标求解。</p>
                 <p><strong>精准渣型解</strong>：线性方程组精确求解，使渣型达到目标比值。</p>
                 <p><strong>NSGA-II 迭代</strong>：初始化种群（精确解+网格）→ 非支配排序+拥挤度 → 选择、交叉、变异 → 种群进化至收敛。</p>
@@ -1703,19 +1781,8 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
         <h3 className={sectionTitle(dark)}>{isEn ? '4. Phase Analysis' : '4. 物相分析'}</h3>
         <p className={`${hintText(dark)} mb-3`}>
           {isEn
-            ? 'Based on mixed feed element composition (Sb, Fe, S), Sb₂S₃ is assigned first using Sb:S=2:3, then remaining Fe and S are distributed to FeS and FeS₂ according to selected strategy.'
-            : '基于固态原料混料元素组成（Sb、Fe、S 质量），先以 Sb:S=2:3 分配 Sb₂S₃，再按所选策略分配剩余 Fe、S 至 FeS 与 FeS₂。'}
-        </p>
-        <p className={`${hintText(dark)} mb-4 text-xs leading-relaxed`}>
-          {isEn ? (
-            <>
-              <strong>Algorithm notes:</strong> Adaptive mode chooses by residual S/Fe ratio (prefers FeS₂ when &gt;=2, FeS only when &lt;=1, linear solve when 1&lt;S/Fe&lt;2). Linear mode maximizes total sulfide amount in 1&lt;S/Fe&lt;2 and degenerates to single-phase allocation at boundaries. FeS₂-first / FeS-first modes use fixed allocation order regardless of S/Fe.
-            </>
-          ) : (
-            <>
-              <strong>算法区别：</strong>自适应按剩余 S/Fe 比自动选择（≥2 时倾向 FeS₂，≤1 时仅 FeS，1&lt;S/Fe&lt;2 时用线性方程）。线性方程在 1&lt;S/Fe&lt;2 时可最大化总矿物量，边界外退化为优先 FeS 或 FeS₂。优先 FeS₂ / 优先 FeS 为固定顺序分配，不随 S/Fe 变化。
-            </>
-          )}
+            ? 'This is an estimation mode for oxygen-demand calculation. The phase input uses only sulfur-bearing base materials; solvent oxides such as iron ore are excluded so oxide Fe is not converted into FeS or FeS₂.'
+            : '本步骤为耗氧计算提供估算物相。物相输入仅取含硫基础原料，排除石灰、铁矿石等熔剂，避免将氧化物熔剂中的 Fe 误判为可生成 FeS 或 FeS₂ 的硫化铁来源。'}
         </p>
         <div className={`flex flex-wrap items-center gap-x-6 gap-y-3 py-3 ${dark ? 'text-gray-300' : 'text-gray-700'}`}>
           <span className="text-sm font-medium shrink-0 w-full sm:w-auto">{isEn ? 'Fe-S allocation strategy:' : 'Fe-S 分配策略：'}</span>
@@ -1748,9 +1815,27 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
             {isEn ? 'Run Phase Analysis' : '开始物相分析'}
           </button>
         </div>
-        {phaseData && mixResult && (
+        <p className={`${hintText(dark)} mb-4 leading-relaxed`}>
+          {isEn ? (
+            <>
+              <strong>Strategy difference:</strong> Adaptive mode chooses by residual S/Fe ratio; linear mode solves FeS and FeS₂ simultaneously in the 1&lt;S/Fe&lt;2 interval and falls back to a boundary allocation outside it; FeS₂-first and FeS-first use a fixed priority order. This is a model assumption and should be checked against mineralogical data and furnace conditions.
+            </>
+          ) : (
+            <>
+              <strong>策略区别：</strong>自适应按剩余 S/Fe 比自动选择；线性方程在 1&lt;S/Fe&lt;2 区间内同时求解 FeS 与 FeS₂，超出边界时退化为单相边界分配；优先 FeS₂ / 优先 FeS 为固定顺序分配。该步骤是元素守恒反推的估算模式，不代表真实矿物学分析；后续可升级为按原料矿物相或反应分配表输入。
+            </>
+          )}
+        </p>
+        {phaseData && phaseBasis && (
           <div className={`mt-4 ${resultBox(dark)}`}>
-            <h4 className={`text-sm font-semibold mb-3 ${dark ? 'text-gray-200' : 'text-gray-800'}`}>{isEn ? 'Feed Materials - Phase Analysis Results' : '入炉物料 - 物相分析结果'}</h4>
+            <h4 className={`text-sm font-semibold mb-2 ${dark ? 'text-gray-200' : 'text-gray-800'}`}>
+              {isEn ? 'Sulfur-Bearing Base Feed - Estimated Phase Results' : '含硫基础原料 - 估算物相结果'}
+            </h4>
+            <p className={`${hintText(dark)} mb-3 leading-relaxed`}>
+              {isEn
+                ? `Basis: ${phaseBasis.materialCount} sulfur-bearing base material(s), total ${phaseBasis.totalWeight.toFixed(4)} t/h. Solvent Fe is excluded from FeS/FeS₂ allocation.`
+                : `估算基准：${phaseBasis.materialCount} 种含硫基础原料，合计 ${phaseBasis.totalWeight.toFixed(4)} t/h；熔剂中的 Fe 不参与 FeS/FeS₂ 分配。`}
+            </p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -1778,25 +1863,25 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                       <td className={`py-2 px-3 ${dark ? 'text-gray-300' : 'text-gray-700'}`}>{name}</td>
                       <td className="text-center py-2 px-3 font-mono">{mass.toFixed(4)}</td>
                       <td className="text-center py-2 px-3 font-mono">
-                        {mixResult.totalWeight > 0 ? ((mass / mixResult.totalWeight) * 100).toFixed(2) : '0.00'}%
+                        {phaseBasis.totalWeight > 0 ? ((mass / phaseBasis.totalWeight) * 100).toFixed(2) : '0.00'}%
                       </td>
                     </tr>
                   ))}
                   {(() => {
                     const sulfideTotal = phaseData.Sb2S3 + phaseData.FeS + phaseData.FeS2 + phaseData.剩余Sb + phaseData.剩余Fe + phaseData.剩余S
-                    const otherMass = Math.max(0, mixResult.totalWeight - sulfideTotal)
+                    const otherMass = Math.max(0, phaseBasis.totalWeight - sulfideTotal)
                     return (
                       <>
                         <tr className={`border-b ${dark ? 'border-gray-600/50' : 'border-gray-200'} ${dark ? 'bg-green-900/30' : 'bg-green-50/70'}`}>
-                          <td className={`py-2 px-3 ${dark ? 'text-gray-300' : 'text-gray-700'}`}>{isEn ? 'Other materials (oxides, impurities, etc.)' : '其他物料 (氧化物、杂质等)'}</td>
+                          <td className={`py-2 px-3 ${dark ? 'text-gray-300' : 'text-gray-700'}`}>{isEn ? 'Other in sulfur-bearing base feed' : '含硫基础原料中其他组分'}</td>
                           <td className="text-center py-2 px-3 font-mono">{otherMass.toFixed(4)}</td>
                           <td className="text-center py-2 px-3 font-mono">
-                            {mixResult.totalWeight > 0 ? ((otherMass / mixResult.totalWeight) * 100).toFixed(2) : '0.00'}%
+                            {phaseBasis.totalWeight > 0 ? ((otherMass / phaseBasis.totalWeight) * 100).toFixed(2) : '0.00'}%
                           </td>
                         </tr>
                         <tr className={`${dark ? 'bg-orange-900/40' : 'bg-orange-100/80'}`}>
                           <td className={`py-2 px-3 font-semibold ${dark ? 'text-gray-200' : 'text-gray-800'}`}>{isEn ? 'Total' : '总计'}</td>
-                          <td className="text-center py-2 px-3 font-mono font-semibold">{mixResult.totalWeight.toFixed(4)}</td>
+                          <td className="text-center py-2 px-3 font-mono font-semibold">{phaseBasis.totalWeight.toFixed(4)}</td>
                           <td className="text-center py-2 px-3 font-mono font-semibold">100.00%</td>
                         </tr>
                       </>
@@ -1814,8 +1899,8 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
         <h3 className={sectionTitle(dark)}>{isEn ? '5. Oxygen-Enriched Air Settings' : '5. 富氧空气参数设置'}</h3>
         <p className={`${hintText(dark)} mb-4 leading-relaxed`}>
           {isEn
-            ? '1) Input parameters: oxygen concentration, excess coefficient, and unit price. 2) Oxygen demand: theoretical oxygen is computed from phase analysis (Sb₂S₃, FeS, FeS₂) and oxidation reactions, then corrected by excess coefficient. 3) Material update: oxygen-enriched air mass is merged into total feed.'
-            : '1. 参数输入：氧气浓度、过剩系数、单价；2. 耗氧计算：基于物相分析结果（Sb₂S₃、FeS、FeS₂），按硫化物氧化反应方程式计算完全氧化所需理论耗氧量，再结合用户输入的过剩系数计算实际耗氧量；3. 物料更新：将富氧空气质量并入入炉物料总质量。'}
+            ? 'The oxygen-enriched air calculation uses the phase-analysis sulfide inventory as the reaction basis. Sb₂S₃ is oxidized to Sb₂O₃, while FeS and FeS₂ oxygen coefficients follow the selected iron oxidation product, then the result is corrected by the oxygen supply coefficient and oxygen concentration.'
+            : '富氧空气计算以物相分析得到的硫化物量作为反应基础。Sb₂S₃ 按氧化生成 Sb₂O₃ 计，FeS 与 FeS₂ 的耗氧系数随所选铁氧化终产物联动，再结合供氧系数与富氧空气氧浓度折算供氧量、空气体积和成本。'}
         </p>
         <div className="flex flex-wrap items-end gap-4 w-full">
           <div className="flex-1 min-w-[7rem]">
@@ -1824,15 +1909,78 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
               className={`${inputBase(dark)} w-full`} />
           </div>
           <div className="flex-1 min-w-[7rem]">
-            <label className={labelBase(dark)}>{isEn ? 'Oxygen excess coefficient' : '氧气过剩系数'}</label>
-            <input type="text" value={excessRatio} onChange={(e) => setExcessRatio(e.target.value)}
+            <label className={labelBase(dark)}>{isEn ? 'Oxygen supply coefficient' : '供氧系数'}</label>
+            <input type="text" value={oxygenCoefficient} onChange={(e) => setOxygenCoefficient(e.target.value)}
               className={`${inputBase(dark)} w-full`} />
+            <p className={`${hintText(dark)} mt-1`}>
+              {isEn ? 'actual O₂ / theoretical O₂; 1 = theoretical, >1 = excess, <1 = partial supply' : '实际供氧/理论需氧；=1 为理论供氧，>1 为过量供氧，<1 为不足或部分氧化。'}
+            </p>
           </div>
           <div className="flex-1 min-w-[7rem]">
             <label className={labelBase(dark)}>{isEn ? 'Unit price (CNY/Nm³)' : '单价 (元/Nm³)'}</label>
             <input type="text" value={oxyUnitPrice} onChange={(e) => setOxyUnitPrice(e.target.value)}
               className={`${inputBase(dark)} w-full`} placeholder="0.45" />
           </div>
+          <div className="basis-full">
+            <label className={labelBase(dark)}>{isEn ? 'Iron oxidation product for FeS/FeS₂' : 'FeS/FeS₂ 铁氧化终产物'}</label>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {ironProductOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    setIronOxidationProduct(option.value)
+                    setOxygenResult(null)
+                  }}
+                  className={ratioModeButtonClass(ironOxidationProduct === option.value)}
+                  title={
+                    option.value === 'FeO'
+                      ? (isEn ? 'Lower oxygen demand; suitable when sulfide iron mainly enters slag as FeO.' : '耗氧较低，适用于硫化铁氧化后主要以 FeO 入渣的工况。')
+                      : option.value === 'Fe2O3'
+                        ? (isEn ? 'Higher oxygen demand; keeps the previous Fe₂O₃ assumption.' : '耗氧较高，保留原先按 Fe₂O₃ 计的强氧化假设。')
+                        : option.value === 'Fe3O4'
+                          ? (isEn ? 'Intermediate oxygen demand between FeO and Fe₂O₃.' : '耗氧介于 FeO 与 Fe₂O₃ 假设之间。')
+                          : (isEn ? 'Manually set mol O₂ consumed per mol FeS and FeS₂.' : '手动设置每 mol FeS、FeS₂ 消耗的 mol O₂。')
+                  }
+                >
+                  {isEn ? option.labelEn : option.label}
+                </button>
+              ))}
+            </div>
+            <p className={`${hintText(dark)} mt-2 leading-relaxed`}>
+              {isEn
+                ? 'FeO is usually closer when oxidized iron mainly enters slag as ferrous oxide; Fe₂O₃ represents a stronger oxidation assumption.'
+                : '若硫化铁氧化后主要以 FeO 进入渣相，应选择 FeO；Fe₂O₃ 表示更强氧化假设，会提高 FeS/FeS₂ 的理论耗氧。'}
+            </p>
+          </div>
+          {ironOxidationProduct === 'custom' && (
+            <div className="basis-full grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className={labelBase(dark)}>{isEn ? 'FeS O₂ coefficient' : 'FeS 耗氧系数 (mol O₂/mol FeS)'}</label>
+                <input
+                  type="text"
+                  value={customFeSO2Coeff}
+                  onChange={(e) => {
+                    setCustomFeSO2Coeff(e.target.value)
+                    setOxygenResult(null)
+                  }}
+                  className={`${inputBase(dark)} w-full`}
+                />
+              </div>
+              <div>
+                <label className={labelBase(dark)}>{isEn ? 'FeS₂ O₂ coefficient' : 'FeS₂ 耗氧系数 (mol O₂/mol FeS₂)'}</label>
+                <input
+                  type="text"
+                  value={customFeS2O2Coeff}
+                  onChange={(e) => {
+                    setCustomFeS2O2Coeff(e.target.value)
+                    setOxygenResult(null)
+                  }}
+                  className={`${inputBase(dark)} w-full`}
+                />
+              </div>
+            </div>
+          )}
           <button onClick={handleCalcOxygen} disabled={!phaseData}
             className={phaseData ? btnPrimary(dark) : btnPrimaryDisabled(dark)}>
             {isEn ? 'Calculate O₂ demand and update materials' : '计算耗氧量并更新物料'}
@@ -1858,6 +2006,11 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                 <div className="font-mono">{(oxygenResult.mass + oxygenResult.N2_mass).toFixed(4)} t/h</div>
               </div>
             </div>
+            <p className={`${hintText(dark)} mt-3 leading-relaxed`}>
+              {isEn
+                ? `Oxygen supply coefficient: ${oxygenResult.oxygenCoefficient.toFixed(3)}; iron product: ${oxygenResult.ironProduct}; coefficients: FeS ${oxygenResult.FeS_O2_coeff.toFixed(3)} mol O₂/mol, FeS₂ ${oxygenResult.FeS2_O2_coeff.toFixed(3)} mol O₂/mol.`
+                : `供氧系数：${oxygenResult.oxygenCoefficient.toFixed(3)}；铁氧化终产物：${oxygenResult.ironProduct}；耗氧系数：FeS ${oxygenResult.FeS_O2_coeff.toFixed(3)} mol O₂/mol，FeS₂ ${oxygenResult.FeS2_O2_coeff.toFixed(3)} mol O₂/mol。`}
+            </p>
           </div>
         )}
       </div>
@@ -1876,7 +2029,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
             </span>
             <button
               onClick={() => setPinned(!pinned)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                 pinned
                   ? 'bg-blue-600 text-white'
                   : darkMode

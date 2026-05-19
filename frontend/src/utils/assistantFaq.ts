@@ -38,7 +38,7 @@ export function buildAssistantWelcome(language: 'zh' | 'en'): string {
     `欢迎使用「${APP_NAME_ZH}」。`,
     '',
     '我是本软件的智能助手，可协助您：',
-    '• 在左侧选择冶炼类型与方法，并在「配料计算」「产出计算」等页签间切换；',
+    '• 在左侧选择冶炼类型与方法，并在「配矿计算」「产出计算」等页签间切换；',
     '• 理解配料表、混合矿与元素分布等相关字段含义；',
     '• 说明设置页中的许可、隐私与更新提示。',
     '',
@@ -77,7 +77,7 @@ export function tryRuleBasedAssistantReply(
   if (zh ? /侧栏|左边|导航|在哪|找不到|切换/.test(raw) : /\bsidebar\b|\bnavigation\b|\bwhere\b.*\b(find|open)/i.test(q)) {
     const groups = [...new Set(SMELT_TYPES.map((t) => t.name))].slice(0, 8)
     return zh
-      ? `请在左侧展开冶炼类型（如：${groups.join('、')}），点选具体冶炼方法后，右侧会出现「配料计算」等页签；「设置」「了解我们」也在侧栏底部区域。`
+      ? `请在左侧展开冶炼类型（如：${groups.join('、')}），点选具体冶炼方法后，右侧会出现「配矿计算」等页签；「设置」「了解我们」也在侧栏底部区域。`
       : `Expand smelting categories on the left, pick a method, then switch sheets like Raw batching / Product in the main pane. Settings and About live in the sidebar footer area.`
   }
 

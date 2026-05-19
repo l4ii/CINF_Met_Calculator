@@ -1,6 +1,6 @@
 /**
  * 在用户当前入炉原料的元素总量约束下，用内置几种标准原料配比逼近该组成，并尽量降低原料成本。
- * 方法：先在核心元素偏差约束内求最低成本可行配方；若原料库无可行解，再退回到元素匹配优先的近似配方。
+ * 方法：先在核心元素偏差约束内求原料成本最优可行配方；若原料库无可行解，再退回到元素匹配优先的近似配方。
  */
 import {
   BASE_ELEMENTS,
@@ -54,7 +54,7 @@ function projectSimplex(v: number[], z: number): number[] {
 
 /** 渣型/主金属相关，匹配权重更高 */
 export const BLEND_CORE_ELEMENTS = new Set(['Sb(锑)', 'S (硫)', 'Fe(铁)', 'Si(硅)', 'Ca(钙)'])
-/** 低成本配方优化的核心元素相对偏差校核阈值 */
+/** 原料成本最优方案的核心元素相对偏差校核阈值 */
 export const BLEND_CORE_REL_ERR_LIMIT_PCT = 5
 
 function elemMatchWeight(el: string): number {
@@ -125,7 +125,7 @@ function combinations(total: number, pick: number): number[][] {
 }
 
 /**
- * 从当前「仅原料 base」的元素量与总重，求内置料低成本近似配方。
+ * 从当前「仅原料 base」的元素量与总重，求原料库中的原料成本最优可行配方。
  */
 export function suggestBuiltinCheaperBlend(
   targetElementWeights: ElementWeights,

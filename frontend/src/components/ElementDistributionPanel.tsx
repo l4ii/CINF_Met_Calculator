@@ -33,7 +33,7 @@ export default function ElementDistributionPanel({
           入炉原料元素组成分析
         </h3>
         <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-          请先在配料计算页添加物料
+          请先在配矿计算页添加物料
         </p>
       </div>
     )

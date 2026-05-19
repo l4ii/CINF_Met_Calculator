@@ -9,6 +9,10 @@ import { phaseAnalysis, type ElementWeights } from '../utils/phaseAnalysis'
 export interface MaterialEntry {
   id: string
   name: string
+  /**
+   * Composition ratios are stored as percentages (0-100) for all material
+   * rows, including oxygen-enriched air.
+   */
   ratios: ElementRatios
   weight: number
   type?: 'base' | 'solvent' | 'oxygen'
@@ -200,8 +204,8 @@ export function CalcProvider({ children }: { children: ReactNode }) {
       const ratios = mat.ratios
       const elements: Record<string, number> = {}
       for (const [elem, ratio] of Object.entries(ratios)) {
-        const frac = typeof ratio === 'number' ? ratio : parseFloat(String(ratio)) || 0
-        elements[elem] = frac * 100
+        const pct = typeof ratio === 'number' ? ratio : parseFloat(String(ratio)) || 0
+        elements[elem] = pct
         allElements.add(elem)
       }
       result.push({
@@ -217,8 +221,8 @@ export function CalcProvider({ children }: { children: ReactNode }) {
       const totalElemWeights: Record<string, number> = { ...mixResult.elementWeights }
       for (const om of oxygenMats) {
         for (const [elem, ratio] of Object.entries(om.ratios)) {
-          const frac = typeof ratio === 'number' ? ratio : parseFloat(String(ratio)) || 0
-          totalElemWeights[elem] = (totalElemWeights[elem] ?? 0) + frac * om.weight
+          const pct = typeof ratio === 'number' ? ratio : parseFloat(String(ratio)) || 0
+          totalElemWeights[elem] = (totalElemWeights[elem] ?? 0) + (pct / 100) * om.weight
         }
       }
       const elemSet = new Set([...allElements, ...Object.keys(totalElemWeights)])

@@ -63,7 +63,7 @@ export const SMELT_TYPES: SmeltType[] = [
 
 /** Sheet 配置 */
 export const SHEETS: { id: SheetId; name: string }[] = [
-  { id: 'raw_material', name: '配料计算' },
+  { id: 'raw_material', name: '配矿计算' },
   { id: 'product', name: '产出计算' },
   { id: 'heat_balance', name: '热平衡计算' },
   { id: 'furnace', name: '炉型计算' },

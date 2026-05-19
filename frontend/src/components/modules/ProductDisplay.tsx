@@ -157,7 +157,7 @@ export default function ProductDisplay({ darkMode, language = 'zh' }: ProductDis
             <p>
               {isEn
                 ? 'This module uses feed-element composition from batching results, distributes elements into five products (slag, flue gas, Sb₂O₃ powder, matte, noble antimony), and then calculates composition and mass of each product.'
-                : '本模块根据配料计算得到的入炉物料元素组成，按元素分配规则将各元素分配至五类产物（熔炼渣、烟气、锑氧粉、锑锍、贵锑），再根据组分分配系数计算各产物的化学组分与质量。'}
+                : '本模块根据配矿计算得到的入炉物料元素组成，按元素分配规则将各元素分配至五类产物（熔炼渣、烟气、锑氧粉、锑锍、贵锑），再根据组分分配系数计算各产物的化学组分与质量。'}
             </p>
             <p>
               <strong className={dark ? 'text-gray-300' : 'text-gray-700'}>{isEn ? 'Element distribution:' : '元素分配规则：'}</strong>{isEn ? ' Precious metals (Au, Ag) mostly report to noble antimony. Sulfur first reacts with Fe to form FeS (matte), then with Sb to form Sb₂S₃. Remaining Fe is oxidized to FeO (slag), and Sb is oxidized to volatile Sb₂O₃ (mainly Sb₂O₃ powder). Slagging elements such as Si, Ca, Al mainly enter slag as oxides. Pb/As/Zn are distributed by preset coefficients.' : '贵金属 Au、Ag 因其化学惰性与密度，近乎定量进入贵锑金属相；可用于形成硫化物的总硫量确定后，铁优先与硫结合形成 FeS 进入锑锍相，直至硫或铁耗尽；剩余硫与锑结合形成 Sb₂S₃ 进入锑锍相；未被硫化的 Fe 氧化为 FeO 进入熔炼渣，Sb 氧化为挥发性 Sb₂O₃，大部分进入锑氧粉；Si、Ca、Al 等造渣元素几乎全部以氧化物形式进入熔炼渣；Pb、As、Zn 等按预设分配系数进入相应产物。'}
@@ -168,11 +168,11 @@ export default function ProductDisplay({ darkMode, language = 'zh' }: ProductDis
             <p className={`text-xs ${dark ? 'text-gray-500' : 'text-gray-500'}`}>
               {isEn
                 ? 'Please add materials and solvents in the batching page and finish that calculation first, then click calculate here.'
-                : '请先在配料计算页添加物料、熔剂并完成计算，再在本页点击「计算」进行产出计算。'}
+                : '请先在配矿计算页添加物料、熔剂并完成计算，再在本页点击「计算」进行产出计算。'}
             </p>
           </div>
           <div className={`mt-4 p-4 rounded-lg border-2 border-dashed ${dark ? 'border-gray-600 bg-gray-800/40 text-gray-400' : 'border-gray-300 bg-gray-50 text-gray-500'}`}>
-            {isEn ? 'No feed data available. Please complete batching calculation first.' : '当前无入炉物料数据，请先完成配料计算。'}
+            {isEn ? 'No feed data available. Please complete batching calculation first.' : '当前无入炉物料数据，请先完成配矿计算。'}
           </div>
         </div>
       </>
