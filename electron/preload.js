@@ -56,4 +56,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getStatus: () => ipcRenderer.invoke('license:get-status'),
     activate: (token) => ipcRenderer.invoke('license:activate', token),
   },
+  getDeployInfo: () => ipcRenderer.invoke('get-deploy-info'),
 })

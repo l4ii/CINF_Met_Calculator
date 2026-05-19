@@ -5,9 +5,12 @@ import {
   APP_ORG_NAME_EN,
   APP_ORG_NAME_ZH,
   APP_SHORT_NAME_EN,
+  SETTINGS_ASSISTANT_STATUS_UI,
   SETTINGS_LEGAL,
   SETTINGS_OFFLINE_LICENSE_UI,
+  SETTINGS_PACKAGE_INFO,
 } from '../../constants/appCopy'
+import { API_BASE_URL } from '../../config/api'
 import { formatUpdateError } from '../../utils/formatUpdateError'
 
 export interface SettingsPageProps {
@@ -40,12 +43,21 @@ export default function SettingsPage({
   const [licenseBusy, setLicenseBusy] = useState(false)
   const [licenseMsg, setLicenseMsg] = useState<string | null>(null)
   const [licenseCopyOk, setLicenseCopyOk] = useState(false)
+  const [deployInfo, setDeployInfo] = useState<{
+    assistantLocalDeploy?: boolean
+    version?: string
+    packaged?: boolean
+  } | null>(null)
+  const [assistantStatus, setAssistantStatus] = useState<Record<string, unknown> | 'loading' | null>('loading')
 
   const leg = SETTINGS_LEGAL[language]
   const licUi = SETTINGS_OFFLINE_LICENSE_UI[language]
   const hasElectronLicense =
     typeof window !== 'undefined' &&
     !!(window as { electronAPI?: { license?: unknown } }).electronAPI?.license
+
+  const pkgInfo = SETTINGS_PACKAGE_INFO[language]
+  const astUi = SETTINGS_ASSISTANT_STATUS_UI[language]
 
   const feedbackMail = useMemo(() => {
     const subZh = `【${APP_NAME_ZH}】软件建议与反馈`
@@ -116,6 +128,38 @@ export default function SettingsPage({
       api.removeAllListeners('update-downloaded')
     }
   }, [language])
+
+  useEffect(() => {
+    const api = (window as { electronAPI?: { getDeployInfo?: () => Promise<unknown> } }).electronAPI?.getDeployInfo
+    if (!api) return
+    void api()
+      .then((x) =>
+        setDeployInfo(x as { assistantLocalDeploy?: boolean; version?: string; packaged?: boolean } | null)
+      )
+      .catch(() => setDeployInfo(null))
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const run = async () => {
+      let tid: number | undefined
+      try {
+        const ac = new AbortController()
+        tid = window.setTimeout(() => ac.abort(), 8000)
+        const res = await fetch(`${API_BASE_URL}/assistant/status`, { signal: ac.signal })
+        const j = (await res.json()) as Record<string, unknown>
+        if (!cancelled) setAssistantStatus(j)
+      } catch {
+        if (!cancelled) setAssistantStatus(null)
+      } finally {
+        if (tid !== undefined) window.clearTimeout(tid)
+      }
+    }
+    void run()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const handleCheckForUpdates = async () => {
     if (!(window as any).electronAPI?.update) {
@@ -194,7 +238,19 @@ export default function SettingsPage({
     browserNoUpdate: language === 'en' ? 'No auto-update in browser preview.' : '（浏览器环境下无自动更新）',
     appVerOnly: language === 'en' ? 'App version' : '应用版本',
     legal: language === 'en' ? 'Legal' : '法律与声明',
+    packageBuild: language === 'en' ? 'Installer packaging' : '安装包构建',
+    backendHint: language === 'en' ? 'Deploy metadata & updater hint' : '分发标记与更新提示',
+    aiHintTitle: language === 'en' ? 'Assistant backend' : '助手后端检测',
   }
+
+  const inferenceReady =
+    assistantStatus !== null &&
+    assistantStatus !== 'loading' &&
+    Boolean((assistantStatus as { inferenceReady?: boolean }).inferenceReady)
+  const localDeployEnabled =
+    assistantStatus !== null &&
+    assistantStatus !== 'loading' &&
+    (assistantStatus as { localDeploymentEnabled?: boolean }).localDeploymentEnabled !== false
 
   return (
     <div className={`flex-[4] overflow-y-auto ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
@@ -207,6 +263,68 @@ export default function SettingsPage({
             <div className={`text-sm mt-0.5 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{t.orgLine}</div>
           </div>
         </div>
+
+        <section className="mb-8">
+          <h2 className={`${sectionTitleCls} border-l-4 ${accentBorder} pl-3`}>{t.packageBuild}</h2>
+          <div className={`grid grid-cols-1 lg:grid-cols-2 gap-4`}>
+            <div className={cardCls}>
+              <h3 className={`text-base font-semibold mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{pkgInfo.title}</h3>
+              <p className={`text-sm leading-relaxed mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{pkgInfo.variantIntro}</p>
+              <p className={`text-sm leading-relaxed mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{pkgInfo.nsisNote}</p>
+              <p className={`text-sm leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{pkgInfo.updateNote}</p>
+              {deployInfo != null && (
+                <div className={`mt-4 rounded-lg border px-3 py-2 text-xs ${darkMode ? 'border-gray-600 bg-gray-800/60 text-gray-300' : 'border-gray-200 bg-gray-50 text-gray-700'}`}>
+                  <div>
+                    cinfAssistantLocalDeploy:{' '}
+                    <span className="font-mono">{deployInfo.assistantLocalDeploy === false ? 'false' : 'true'}</span>
+                  </div>
+                  <div className="mt-1">
+                    Electron version: <span className="font-mono">{deployInfo.version ?? currentVersion}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className={cardCls}>
+              <h3 className={`text-base font-semibold mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{t.aiHintTitle}</h3>
+              {assistantStatus === 'loading' ? (
+                <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{astUi.loading}</p>
+              ) : assistantStatus === null ? (
+                <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{astUi.unavailable}</p>
+              ) : !localDeployEnabled ? (
+                <p className={`text-sm ${darkMode ? 'text-amber-300' : 'text-amber-800'}`}>{astUi.localDeployOff}</p>
+              ) : (
+                <div className={`space-y-2 text-sm ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`inline-flex h-2 w-2 rounded-full ${inferenceReady ? 'bg-green-500' : 'bg-amber-500'}`}
+                      aria-hidden
+                    />
+                    {inferenceReady ? astUi.inferenceReady : astUi.inferenceNotReady}
+                  </div>
+                  {typeof assistantStatus.knowledgeLoadedChars === 'number' ? (
+                    <div className="text-xs opacity-90">
+                      {astUi.knowledgeChars} {assistantStatus.knowledgeLoadedChars}
+                    </div>
+                  ) : null}
+                  {(assistantStatus as { failureDiagnosticZh?: string }).failureDiagnosticZh &&
+                  language === 'zh' ? (
+                    <p className={`text-xs leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                      {(assistantStatus as { failureDiagnosticZh?: string }).failureDiagnosticZh}
+                    </p>
+                  ) : null}
+                  {(assistantStatus as { failureDiagnosticEn?: string }).failureDiagnosticEn &&
+                  language === 'en' ? (
+                    <p className={`text-xs leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                      {(assistantStatus as { failureDiagnosticEn?: string }).failureDiagnosticEn}
+                    </p>
+                  ) : null}
+                </div>
+              )}
+              <p className={`text-xs mt-4 ${darkMode ? 'text-gray-500' : 'text-gray-500'}`}>{t.backendHint}</p>
+            </div>
+          </div>
+        </section>
+
         {hasElectronLicense && (
           <section className="mb-8 mt-2">
             <h2
@@ -470,7 +588,7 @@ export default function SettingsPage({
         </section>
         <section>
           <h2 className={`${sectionTitleCls} border-l-4 ${accentBorder} pl-3`}>{t.legal}</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             <div className={cardCls}>
               <h3 className={`text-base font-semibold mb-3 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{leg.disclaimerTitle}</h3>
               <div className={`text-sm leading-relaxed space-y-2 ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
@@ -482,6 +600,10 @@ export default function SettingsPage({
             <div className={cardCls}>
               <h3 className={`text-base font-semibold mb-3 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{leg.privacyTitle}</h3>
               <p className={`text-sm leading-relaxed ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>{leg.privacyP}</p>
+            </div>
+            <div className={`${cardCls} md:col-span-2 xl:col-span-1`}>
+              <h3 className={`text-base font-semibold mb-3 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{leg.aiAssistantTitle}</h3>
+              <p className={`text-sm leading-relaxed ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>{leg.aiAssistantP}</p>
             </div>
           </div>
         </section>

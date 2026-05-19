@@ -72,12 +72,20 @@ function forceRemoveWinUnpackedOnly(relativeReleaseDir) {
 }
 
 if (process.platform === 'win32') {
-  console.log('[build-win] 释放 release\\win-unpacked（结束可能占用 app.asar 的进程）...')
+  console.log('[build-win] 释放 win-unpacked …')
   forceRemoveWinUnpackedOnly('release')
+  forceRemoveWinUnpackedOnly('release-ai')
+}
+
+const builderConfig = process.env.CINF_ELECTRON_BUILDER_CONFIG
+let builderCmd = 'npx electron-builder --win'
+if (builderConfig) {
+  const cfgPath = path.join(root, builderConfig)
+  builderCmd += ` --config "${cfgPath}"`
 }
 
 try {
-  run('npx electron-builder --win')
+  run(builderCmd)
 } catch (e) {
   const fallbackOutput = `release-fallback-${Date.now()}`
   console.warn(`[build-win] 默认输出目录打包失败，自动切换到 ${fallbackOutput} 重试...`)

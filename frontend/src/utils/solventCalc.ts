@@ -4,7 +4,7 @@
  * 步骤 1：定义优化问题
  *   - 决策变量：X = [石灰用量, 铁矿石用量]，取值 [0, maxSolvent]
  *   - 目标函数：F(X) = [cost(X), limestone(X), totalSlag(X)]，均最小化
- *   - 约束条件：Fe/SiO₂ ∈ [目标±波动%]，CaO/SiO₂ ∈ [目标±波动%]
+ *   - 约束条件：Fe/SiO₂、CaO/SiO₂ 位于目标范围内
  *
  * 步骤 2：初始化种群
  *   - 以精确解为中心，确定性网格生成满足约束的初始解
@@ -163,7 +163,7 @@ export interface SolventResult {
 }
 
 /**
- * NSGA-II 风格多目标求解：在目标±波动范围内采样，返回 Pareto 前沿解供用户选择
+ * NSGA-II 风格多目标求解：在目标范围内采样，返回 Pareto 前沿解供用户选择
  * @param onProgress 可选回调，用于实时上报进度（percent 0-100，stage 当前阶段描述）
  */
 export async function runNsga2Solvent(
@@ -196,13 +196,16 @@ export async function runNsga2Solvent(
   const feMax = targetFeSiO2 * (1 + feSiO2FluctPct / 100)
   const caMin = targetCaOSiO2 * (1 - caOSiO2FluctPct / 100)
   const caMax = targetCaOSiO2 * (1 + caOSiO2FluctPct / 100)
+  const RANGE_EPS = 1e-9
+  const withinRange = (value: number, min: number, max: number) =>
+    value >= min - RANGE_EPS && value <= max + RANGE_EPS
 
   const solutions: SolventSolution[] = []
 
   // 1. 精确解（若有效且在范围内）
   if (exact.valid) {
     const inRange =
-      exact.feSiO2 >= feMin && exact.feSiO2 <= feMax && exact.caOSiO2 >= caMin && exact.caOSiO2 <= caMax
+      withinRange(exact.feSiO2, feMin, feMax) && withinRange(exact.caOSiO2, caMin, caMax)
     if (inRange) {
       solutions.push({
         limestone: exact.limestone,
@@ -234,7 +237,7 @@ export async function runNsga2Solvent(
     }
   }
   const isFeasible = (s: SolventSolution) =>
-    s.feSiO2 >= feMin && s.feSiO2 <= feMax && s.caOSiO2 >= caMin && s.caOSiO2 <= caMax
+    withinRange(s.feSiO2, feMin, feMax) && withinRange(s.caOSiO2, caMin, caMax)
 
   const centerL = exact.valid ? exact.limestone : maxSolvent * 0.1
   const centerI = exact.valid ? exact.ironOre : maxSolvent * 0.1
@@ -299,6 +302,7 @@ export async function runNsga2Solvent(
     }
   }
   for (let k = 0; population.length < POP_SIZE && k < 500; k++) {
+    if (population.length === 0) break
     const idx = k % Math.max(1, population.length)
     const p = population[idx]
     const t = (k * 7919 + 1) % 100 / 100
@@ -359,7 +363,7 @@ export async function runNsga2Solvent(
   const deduped = allCandidates.length > 0 ? allCandidates : population
   const anySol = deduped[0]
   if (!anySol || !Number.isFinite(anySol.limestone) || !Number.isFinite(anySol.ironOre)) {
-    throw new Error('未找到可行解，请放宽 Fe/SiO₂、CaO/SiO₂ 波动范围')
+    throw new Error('未找到可行解，请放宽 Fe/SiO₂、CaO/SiO₂ 目标范围')
   }
 
   // 从可行解中选出各目标最优解

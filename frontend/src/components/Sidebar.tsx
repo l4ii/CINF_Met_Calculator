@@ -79,7 +79,7 @@ export default function Sidebar({
           <img src="./icon.png" alt="Logo" className="w-14 h-14 object-contain" />
           <div>
             <div className={`text-lg font-bold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{sidebarTitle}</div>
-            <div className={`text-xs leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+            <div className={`text-sm leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
               {language === 'zh' ? (
                 <div className="text-right">
                   <div className="block">{APP_TAGLINE_SIDEBAR_ZH_LINE1}</div>
@@ -133,7 +133,7 @@ export default function Sidebar({
                       }`}
                     >
                       <span>{language === 'en' ? (methodNameEn[method.id] ?? method.name) : method.name}</span>
-                      <span className={`text-xs transition-transform ${expanded ? 'rotate-90' : ''}`}>▶</span>
+                      <span className={`text-sm transition-transform ${expanded ? 'rotate-90' : ''}`}>▶</span>
                     </button>
                     {expanded && active && (
                       <div className="pl-4 mt-1 space-y-0.5">
@@ -146,7 +146,7 @@ export default function Sidebar({
                                 e.stopPropagation()
                                 onSheetSelect(sheet.id)
                               }}
-                              className={`w-full text-left px-2 py-1.5 rounded text-xs transition-colors ${
+                              className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
                                 sheetActive
                                   ? darkMode ? 'bg-blue-700 text-white' : 'bg-blue-100 text-blue-900'
                                   : darkMode
@@ -249,7 +249,7 @@ export default function Sidebar({
           </a>
           <div className="mt-1">{t.footerDev}</div>
           {import.meta.env.VITE_BUILD_ID && import.meta.env.VITE_BUILD_ID !== 'dev' && (
-            <div className="mt-1 text-xs opacity-70">构建: {import.meta.env.VITE_BUILD_ID}</div>
+            <div className="mt-1 text-sm opacity-70">构建: {import.meta.env.VITE_BUILD_ID}</div>
           )}
         </div>
       </div>

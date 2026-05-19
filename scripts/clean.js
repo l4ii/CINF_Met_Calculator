@@ -5,8 +5,9 @@ const { execSync } = require('child_process')
 const root = path.join(__dirname, '..')
 const arg = process.argv[2]
 // release: 只清 release；release-win7: 只清 release-win7；frontend: 只清 frontend/dist；legacy: 只清 release-win7+frontend（不动 release）
-const onlyRelease = arg === 'release' || arg === 'release-win7'
-const releaseDir = arg === 'release-win7' ? 'release-win7' : 'release'
+const onlyRelease = arg === 'release' || arg === 'release-win7' || arg === 'release-ai'
+const releaseDir =
+  arg === 'release-win7' ? 'release-win7' : arg === 'release-ai' ? 'release-ai' : 'release'
 const legacyClean = arg === 'legacy'
 const frontendOnly = arg === 'frontend'
 
@@ -41,7 +42,7 @@ toClean.forEach((name) => {
   const dir = path.join(root, name)
   if (!fs.existsSync(dir)) return
   console.log('清理:', dir)
-  if (process.platform === 'win32' && (name === 'release' || name === 'release-win7')) forceRemoveWin(name)
+  if (process.platform === 'win32' && (name === 'release' || name === 'release-win7' || name === 'release-ai')) forceRemoveWin(name)
   else removeDir(dir)
 })
 console.log('清理完成')

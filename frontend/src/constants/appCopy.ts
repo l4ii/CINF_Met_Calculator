@@ -33,7 +33,7 @@ export const APP_TAGLINE_SIDEBAR_EN = 'Professional metallurgical batching tool'
 export const APP_TAGLINE_SIDEBAR_ZH_LINE1 = '专业冶金配料'
 export const APP_TAGLINE_SIDEBAR_ZH_LINE2 = '计算工具'
 
-/** 设置页：免责声明 / 隐私（与 Flow MainContent 对齐） */
+/** 设置页：免责声明 / 隐私 / 智能助手说明 */
 export const SETTINGS_LEGAL = {
   zh: {
     disclaimerTitle: '免责声明',
@@ -45,7 +45,10 @@ export const SETTINGS_LEGAL = {
       '若将本软件产出的计算结果、或依本软件功能形成的参数与指标，作为工程设计依据、设备选型或对外技术条件的依据，或用于对设计起结论性指导的，须同时具备与「长沙有色冶金设计研究院有限公司」合法有效且与项目范围相符的正式合同或该院出具的书面项目授权。本软件使用许可不替代上述合同或授权。未经该院书面同意，不得以长沙有色院或本公司名义将本软件结果用于正式报审、对外技术承诺或担保性表述。',
     privacyTitle: '数据与隐私',
     privacyP:
-      '本软件在本地完成计算，不收集、不上传您的输入数据或计算结果。导出 Word 等操作均在您本机完成，不会将内容发送至外部服务器。',
+      '配料与产出等计算在用户本机内存中完成；默认不向公网上传输入数据或计算结果。导出文档在用户本机生成。右下角「智能助手」若启用本地模型，请求仅发往本机 127.0.0.1 后端以加载 GGUF；若安装包未包含模型或未启用本地 AI，助手仅以内置规则 FAQ 应答。',
+    aiAssistantTitle: '智能助手（可选本地模型）',
+    aiAssistantP:
+      '本地 AI 推理完全离线：模型权重（.gguf）位于安装目录 resources/backend/models/，对话内容不会发往互联网。助手答复仅供软件操作说明与辅助理解，不构成工程设计结论或担保；涉合规与安全的关键决策仍须由专业工程师审定。',
   },
   en: {
     disclaimerTitle: 'Disclaimer',
@@ -57,7 +60,54 @@ export const SETTINGS_LEGAL = {
       'If you use this software’s outputs or parameters/indicators derived from its features as a basis for engineering design or as material guidance, you must also have a valid, applicable contract or written project authorization from Changsha Nonferrous Metallurgical Design & Research Institute Co., Ltd. The app license is not a substitute for such authorization. Without the company’s written consent, you may not use the institute’s name when submitting results for formal design review or external technical commitments.',
     privacyTitle: 'Data & Privacy',
     privacyP:
-      'All calculations are performed locally. The app does not collect or upload your input data or results. Exporting to Word is also done on your machine without sending content to external servers.',
+      'Batching and related calculations run locally on your machine by default; input and results are not uploaded to the internet. Exports are written locally. If local AI is enabled, the assistant talks only to the Flask backend on 127.0.0.1 to run an embedded GGUF; otherwise replies are rule-based FAQ only.',
+    aiAssistantTitle: 'Assistant (optional local model)',
+    aiAssistantP:
+      'Local inference stays offline: GGUF weights ship under resources/backend/models/. Answers are software guidance only—not engineering sign-off or a substitute for codes or engineer judgment.',
+  },
+} as const
+
+/** 安装包变体与许可文件说明（设置页展示） */
+export const SETTINGS_PACKAGE_INFO = {
+  zh: {
+    title: '安装包与许可文件',
+    variantIntro:
+      '发行构建可分为「含本地 AI 资源」与「不含 GGUF」两类：前者文件名通常带 `_AI` 后缀且 package.json 标记 cinfAssistantLocalDeploy=true；后者体积更小，智能助手仅能使用规则 FAQ。',
+    nsisNote:
+      'NSIS 安装向导中的协议正文来自仓库根目录 LICENSE.txt；构建脚本会生成 GBK 编码的 LICENSE.nsis.txt 供安装界面正确显示中文。',
+    updateNote:
+      '自动更新需在 electron-builder 中配置可用的更新服务器地址；占位或未配置的 URL 会导致检查更新失败，请联系管理员部署后再试。',
+  },
+  en: {
+    title: 'Installer & license files',
+    variantIntro:
+      'Builds may ship with local GGUF (_AI artifact, cinfAssistantLocalDeploy=true) or without GGUF (FAQ-only assistant, smaller installer).',
+    nsisNote:
+      'The NSIS license page reads LICENSE.txt from the repo root; LICENSE.nsis.txt is a GBK conversion for Windows installers.',
+    updateNote:
+      'Auto-update requires a valid publish URL in electron-builder; placeholder URLs will make update checks fail.',
+  },
+} as const
+
+/** 设置页「助手状态」简短标签 */
+export const SETTINGS_ASSISTANT_STATUS_UI = {
+  zh: {
+    sectionTitle: '智能助手运行状态',
+    loading: '正在检测后端…',
+    unavailable: '当前无法连接本地助手服务（浏览器预览或未启动后端）。',
+    inferenceReady: '本地模型可推理',
+    inferenceNotReady: '本地模型不可用（缺少 GGUF、依赖或未启用 AI 安装包）',
+    knowledgeChars: '已加载知识库字符约',
+    localDeployOff: '当前安装包未启用本地 AI 部署。',
+  },
+  en: {
+    sectionTitle: 'Assistant runtime',
+    loading: 'Checking backend…',
+    unavailable: 'Cannot reach local assistant (browser preview or backend stopped).',
+    inferenceReady: 'Local model inference ready',
+    inferenceNotReady: 'Local model not ready (missing GGUF/deps or No-AI package)',
+    knowledgeChars: 'Knowledge chars loaded:',
+    localDeployOff: 'Local AI deployment is disabled in this package variant.',
   },
 } as const
 

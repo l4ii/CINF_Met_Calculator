@@ -14,6 +14,7 @@ import {
   suggestBuiltinCheaperBlend,
   aggregateBaseMaterials,
   BLEND_CORE_ELEMENTS,
+  BLEND_CORE_REL_ERR_LIMIT_PCT,
   type BlendSuggestResult,
 } from '../../utils/blendSuggest'
 import { useCalc } from '../../context/CalcContext'
@@ -67,6 +68,56 @@ function solventToElementRatios(ratios: ElementRatios): ElementRatios {
     }
   }
   return out
+}
+
+type SlagRatioRange = {
+  min: number
+  max: number
+  target: number
+  fluctPct: number
+  isExact: boolean
+}
+
+type SlagRatioMode = 'range' | 'exact'
+
+type SlagRatioInput = {
+  mode: SlagRatioMode
+  min: string
+  max: string
+  exact: string
+}
+
+function buildSlagRatioRange(input: SlagRatioInput, label: string): SlagRatioRange {
+  const values =
+    input.mode === 'exact'
+      ? [validateFloat(input.exact, `${label}精确值`, { min: 0 })]
+      : [
+          validateFloat(input.min, `${label}下限`, { min: 0 }),
+          validateFloat(input.max, `${label}上限`, { min: 0 }),
+        ]
+
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const isExact = Math.abs(max - min) < 1e-12
+  const target = isExact ? min : (min + max) / 2
+  const fluctPct = target > 0 ? ((max - min) / (min + max)) * 100 : 0
+  return { min, max, target, fluctPct, isExact }
+}
+
+function formatRatioNumber(value: number) {
+  return Number(value.toFixed(4)).toString()
+}
+
+function previewSlagRatioRange(value: SlagRatioInput, label: string, isEn: boolean) {
+  try {
+    const range = buildSlagRatioRange(value, label)
+    if (range.isExact) {
+      return `${label}: ${isEn ? 'exact' : '精确'} ${formatRatioNumber(range.target)}`
+    }
+    return `${label}: ${isEn ? 'range' : '范围'} ${formatRatioNumber(range.min)}-${formatRatioNumber(range.max)}`
+  } catch {
+    return ''
+  }
 }
 
 export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: RawMaterialPhaseOxygenProps) {
@@ -155,10 +206,18 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
     total: number
     ratios: { 'Fe(铁)': number; 'SiO₂(二氧化硅)': number; 'CaO(氧化钙)': number }
   } | null>(null)
-  const [targetFeSiO2, setTargetFeSiO2] = useState<string>('1.0')
-  const [targetFeSiO2Fluct, setTargetFeSiO2Fluct] = useState<string>('10')
-  const [targetCaOSiO2, setTargetCaOSiO2] = useState<string>('0.5')
-  const [targetCaOSiO2Fluct, setTargetCaOSiO2Fluct] = useState<string>('10')
+  const [targetFeSiO2, setTargetFeSiO2] = useState<SlagRatioInput>({
+    mode: 'range',
+    min: '0.9',
+    max: '1.1',
+    exact: '1.0',
+  })
+  const [targetCaOSiO2, setTargetCaOSiO2] = useState<SlagRatioInput>({
+    mode: 'range',
+    min: '0.45',
+    max: '0.55',
+    exact: '0.5',
+  })
   const [oxyPurity, setOxyPurity] = useState<string>('32')
   const [excessRatio, setExcessRatio] = useState<string>('1.15')
   const [oxyUnitPrice, setOxyUnitPrice] = useState<string>('0.45')
@@ -176,9 +235,12 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
   const [calcStage, setCalcStage] = useState('')
   /** 错误提示弹窗（使用自定义弹窗，避免 window.alert 在 Electron/Cursor 中不显示） */
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-  /** 内置料配方优化结果 */
+  const [blendSuggestDrawerOpen, setBlendSuggestDrawerOpen] = useState(false)
+  const [blendSuggestLoading, setBlendSuggestLoading] = useState(false)
+  const blendSuggestRequestRef = useRef(0)
+  /** 低成本配方优化结果：只在用户主动打开时展示，不自动改动当前配方 */
   const [blendSuggestModal, setBlendSuggestModal] = useState<
-    (BlendSuggestResult & { currentCostYuanPerH: number }) | null
+    (BlendSuggestResult & { currentCostYuanPerH: number; targetTotalWeight: number; generatedAt: number }) | null
   >(null)
   /** 元素总和偏差时让用户选择处理方式 */
   const [ratioAdjustModal, setRatioAdjustModal] = useState<{
@@ -199,6 +261,46 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
     for (const k of Object.keys(BASE_ELEMENTS[1].ratios)) r[k] = 0
     return r
   })
+  const targetFeSiO2Preview = useMemo(
+    () => previewSlagRatioRange(targetFeSiO2, 'Fe/SiO₂', isEn),
+    [targetFeSiO2, isEn]
+  )
+  const targetCaOSiO2Preview = useMemo(
+    () => previewSlagRatioRange(targetCaOSiO2, 'CaO/SiO₂', isEn),
+    [targetCaOSiO2, isEn]
+  )
+  const ratioModeButtonClass = (active: boolean) =>
+    `px-2.5 py-1 text-xs transition-colors ${
+      active
+        ? 'bg-[#1890ff] text-white'
+        : darkMode
+          ? 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+          : 'bg-white text-gray-600 hover:bg-gray-100'
+    }`
+  const switchFeSiO2Mode = (mode: SlagRatioMode) => {
+    setTargetFeSiO2((prev) => {
+      if (mode === 'exact' && prev.mode !== 'exact') {
+        try {
+          return { ...prev, mode, exact: formatRatioNumber(buildSlagRatioRange(prev, 'Fe/SiO₂').target) }
+        } catch {
+          return { ...prev, mode }
+        }
+      }
+      return { ...prev, mode }
+    })
+  }
+  const switchCaOSiO2Mode = (mode: SlagRatioMode) => {
+    setTargetCaOSiO2((prev) => {
+      if (mode === 'exact' && prev.mode !== 'exact') {
+        try {
+          return { ...prev, mode, exact: formatRatioNumber(buildSlagRatioRange(prev, 'CaO/SiO₂').target) }
+        } catch {
+          return { ...prev, mode }
+        }
+      }
+      return { ...prev, mode }
+    })
+  }
 
   const baseList = useMemo(() => Object.values(BASE_ELEMENTS), [])
   const elementKeys = useMemo(() => Object.keys(BASE_ELEMENTS[1].ratios), [])
@@ -426,6 +528,92 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
     setCalcStage('')
   }
 
+  const closeBlendSuggestDrawer = () => {
+    blendSuggestRequestRef.current += 1
+    setBlendSuggestDrawerOpen(false)
+    setBlendSuggestLoading(false)
+    setBlendSuggestModal(null)
+  }
+
+  const handleRunBlendOptimization = () => {
+    const { targetElementWeights, totalWeight, currentCostYuanPerH } = aggregateBaseMaterials(materials)
+    if (!Number.isFinite(totalWeight) || totalWeight <= 0) {
+      setErrorMsg(isEn ? 'Please add raw materials before optimizing.' : '请先添加原料后再进行优化')
+      return
+    }
+
+    const requestId = blendSuggestRequestRef.current + 1
+    blendSuggestRequestRef.current = requestId
+    setBlendSuggestDrawerOpen(true)
+    setBlendSuggestLoading(true)
+    setBlendSuggestModal(null)
+
+    window.setTimeout(() => {
+      if (blendSuggestRequestRef.current !== requestId) return
+      const result = suggestBuiltinCheaperBlend(targetElementWeights, totalWeight)
+      if (!result.ok) {
+        setBlendSuggestLoading(false)
+        setBlendSuggestDrawerOpen(false)
+        setErrorMsg(result.message ?? (isEn ? 'Unable to optimize the current blend.' : '无法优化当前配方'))
+        return
+      }
+      setBlendSuggestModal({
+        ...result,
+        currentCostYuanPerH,
+        targetTotalWeight: totalWeight,
+        generatedAt: Date.now(),
+      })
+      setBlendSuggestLoading(false)
+    }, 1000)
+  }
+
+  const handleApplyBlendSuggestion = () => {
+    const bs = blendSuggestModal
+    if (!bs) return
+    const rest = materials.filter((m) => m.type !== 'base')
+    const newBases = bs.blend.map((b, i) => ({
+      id: `base-blend-${b.id}-${Date.now()}-${i}`,
+      name: b.name,
+      ratios: { ...b.ratios },
+      weight: b.weight,
+      type: 'base' as const,
+      unitPrice: b.unitPriceYuanPerTon,
+    }))
+    setMaterials([...newBases, ...rest])
+    setBlendSuggestModal(null)
+    setBlendSuggestDrawerOpen(false)
+    setAddFeedback(isEn ? 'Optimized blend applied. Base materials were replaced.' : '已应用优化配方，当前原料行已替换')
+  }
+
+  const handleCopyBlendSuggestion = async () => {
+    const bs = blendSuggestModal
+    if (!bs) return
+    const saving = bs.currentCostYuanPerH - bs.suggestedCostYuanPerH
+    const savingPct = bs.currentCostYuanPerH > 0 ? (saving / bs.currentCostYuanPerH) * 100 : 0
+    const lines = [
+      isEn ? 'Low-cost blend optimization suggestion' : '低成本配方优化建议',
+      `${isEn ? 'Target total mass' : '目标总质量'}: ${bs.targetTotalWeight.toFixed(4)} t/h`,
+      `${isEn ? 'Current cost' : '当前成本'}: ${bs.currentCostYuanPerH.toFixed(0)} ${isEn ? 'CNY/h' : '元/h'}`,
+      `${isEn ? 'Suggested cost' : '推荐成本'}: ${bs.suggestedCostYuanPerH.toFixed(0)} ${isEn ? 'CNY/h' : '元/h'}`,
+      `${isEn ? 'Saving' : '节约'}: ${saving.toFixed(0)} ${isEn ? 'CNY/h' : '元/h'} (${savingPct.toFixed(1)}%)`,
+      `${isEn ? 'Core-element constraint' : '核心元素约束'}: ${isEn ? '<=' : '≤'} ${BLEND_CORE_REL_ERR_LIMIT_PCT}%`,
+      '',
+      isEn ? 'Suggested blend:' : '推荐配方：',
+      ...bs.blend.map(
+        (b) =>
+          `${displayMaterialName(b.name)}\t${b.weight.toFixed(4)} t/h\t${(b.unitPriceYuanPerTon / 10000).toFixed(2)} ${isEn ? 'x10k CNY/t' : '万元/吨'}`
+      ),
+      '',
+      `${isEn ? 'Max core-element relative error' : '核心元素最大相对偏差'}: ${bs.maxCoreRelErrPct.toFixed(2)}%`,
+    ]
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'))
+      setAddFeedback(isEn ? 'Optimized blend copied.' : '已复制优化配方')
+    } catch {
+      setErrorMsg(isEn ? 'Failed to copy the optimized blend.' : '复制优化配方失败')
+    }
+  }
+
   const handleRunPhase = () => {
     try {
       if (!mixResult || mixResult.totalWeight <= 0) throw new ValidationError('请先添加物料并计算物料结果')
@@ -492,10 +680,8 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
           elementWeights[elem] = (elementWeights[elem] ?? 0) + val
         }
       }
-      const targetFe = validateFloat(targetFeSiO2, 'Fe/SiO₂ 目标值', { min: 0 })
-      const targetCa = validateFloat(targetCaOSiO2, 'CaO/SiO₂ 目标值', { min: 0 })
-      const fluctFe = validateFloat(targetFeSiO2Fluct, 'Fe/SiO₂ 波动%', { min: 0, max: 100 })
-      const fluctCa = validateFloat(targetCaOSiO2Fluct, 'CaO/SiO₂ 波动%', { min: 0, max: 100 })
+      const feRange = buildSlagRatioRange(targetFeSiO2, 'Fe/SiO₂')
+      const caRange = buildSlagRatioRange(targetCaOSiO2, 'CaO/SiO₂')
       const limestonePrice = parseFloat(limeParams.unitPrice.replace(',', '.')) || SOLVENT_DEFAULT_PRICES['石灰']
       const ironOrePrice = parseFloat(ironOreParams.unitPrice.replace(',', '.')) || SOLVENT_DEFAULT_PRICES['铁矿石']
 
@@ -511,10 +697,10 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
       const result = await runNsga2Solvent(
         {
           elementWeights,
-          targetFeSiO2: targetFe,
-          targetCaOSiO2: targetCa,
-          feSiO2FluctPct: fluctFe,
-          caOSiO2FluctPct: fluctCa,
+          targetFeSiO2: feRange.target,
+          targetCaOSiO2: caRange.target,
+          feSiO2FluctPct: feRange.fluctPct,
+          caOSiO2FluctPct: caRange.fluctPct,
           baseMaterials: baseMats,
           limestoneComposition: limeComp,
           ironOreComposition: ironComp,
@@ -535,7 +721,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
           Number.isFinite(s.ironOre) &&
           Number.isFinite(s.cost)
       )
-      if (valid.length === 0) throw new ValidationError('在目标范围内未找到可行解，请放宽波动范围或检查原料')
+      if (valid.length === 0) throw new ValidationError('在目标范围内未找到可行解，请放宽范围或检查原料')
 
       const elapsed = Date.now() - startTime
       const remain = Math.max(0, MIN_DISPLAY_MS - elapsed)
@@ -631,118 +817,265 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
 
   return (
     <div className="space-y-6">
-      {/* 错误提示弹窗 — 大气简洁 */}
-      {blendSuggestModal && (
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-          onClick={() => setBlendSuggestModal(null)}
-        >
-          <div
-            className={`relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl shadow-2xl border-l-4 ${
-              dark ? 'bg-gray-800/95 border-l-emerald-500' : 'bg-white border-l-emerald-500'
-            }`}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-6">
-              <h3 className={`text-lg font-semibold mb-2 ${dark ? 'text-gray-100' : 'text-gray-900'}`}>
-                {isEn ? 'Built-in Blend Optimization Result' : '内置料配方优化结果'}
-              </h3>
-              <p className={`text-sm mb-4 ${dark ? 'text-gray-400' : 'text-gray-600'}`}>
-                {isEn
-                  ? 'With total feed rate fixed, the optimizer uses five built-in materials (default prices) to match your current elemental totals. Large deviation means these five standard materials cannot fully substitute your current recipe.'
-                  : '在总投料量不变的前提下，用内置五种原料（默认单价）配比，逼近您当前原料的元素总量。若偏差较大，说明单一五种标准料难以完全替代您的配方。'}
-              </p>
-              {blendSuggestModal.message && (
-                <p className={`text-sm mb-3 rounded-lg px-3 py-2 ${dark ? 'bg-amber-900/40 text-amber-200' : 'bg-amber-50 text-amber-900'}`}>
-                  {blendSuggestModal.message}
-                </p>
-              )}
-              <div className={`grid grid-cols-2 gap-3 mb-4 text-sm ${dark ? 'text-gray-300' : 'text-gray-700'}`}>
-                <div className={`rounded-lg p-3 ${dark ? 'bg-gray-700/50' : 'bg-gray-50'}`}>
-                  <div className="text-xs opacity-80">{isEn ? 'Current recipe cost (table prices)' : '当前原料成本（表内单价）'}</div>
-                  <div className="text-lg font-mono font-semibold">
-                    {blendSuggestModal.currentCostYuanPerH.toFixed(0)} {isEn ? 'CNY/h' : '元/h'}
+      {blendSuggestDrawerOpen && (() => {
+        if (blendSuggestLoading || !blendSuggestModal) {
+          return (
+            <div
+              className="fixed inset-0 z-[9999] flex justify-end bg-black/40 backdrop-blur-sm"
+              onClick={closeBlendSuggestDrawer}
+            >
+              <aside
+                className={`h-full w-full max-w-[48rem] overflow-y-auto border-l shadow-2xl ${
+                  dark ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'
+                }`}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex min-h-full flex-col">
+                  <div className={`sticky top-0 z-10 border-b px-6 py-5 ${dark ? 'bg-gray-800/95 border-gray-600' : 'bg-white/95 border-gray-200'} backdrop-blur`}>
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className={`text-lg font-semibold ${dark ? 'text-gray-100' : 'text-gray-900'}`}>
+                          {isEn ? 'Low-Cost Blend Optimization' : '低成本配方优化'}
+                        </h3>
+                        <p className={`mt-1 text-sm leading-relaxed ${dark ? 'text-gray-400' : 'text-gray-600'}`}>
+                          {isEn
+                            ? `The optimizer keeps total mass fixed, enforces core-element deviation within ${BLEND_CORE_REL_ERR_LIMIT_PCT}%, then minimizes cost.`
+                            : `正在固定总质量并校核核心元素偏差≤${BLEND_CORE_REL_ERR_LIMIT_PCT}%，再寻找成本最低的可行配比。`}
+                        </p>
+                      </div>
+                      <button type="button" onClick={closeBlendSuggestDrawer} className={btnText(dark)}>
+                        {isEn ? 'Close' : '关闭'}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex flex-1 items-center justify-center px-6 py-12">
+                    <div className="text-center">
+                      <div className={`mx-auto h-12 w-12 animate-spin rounded-full border-4 ${
+                        dark ? 'border-gray-600 border-t-blue-400' : 'border-gray-200 border-t-blue-600'
+                      }`} />
+                      <div className={`mt-5 text-base font-semibold ${dark ? 'text-gray-100' : 'text-gray-900'}`}>
+                        {isEn ? 'Calculating raw-material blend...' : '原料配比计算中…'}
+                      </div>
+                      <p className={`mt-2 text-sm ${dark ? 'text-gray-400' : 'text-gray-600'}`}>
+                        {isEn
+                          ? 'Searching the material library for the lowest-cost feasible mixed feed.'
+                          : '正在从原料库中寻找满足约束的最低成本混合矿配料方式。'}
+                      </p>
+                    </div>
                   </div>
                 </div>
-                <div className={`rounded-lg p-3 ${dark ? 'bg-emerald-900/30' : 'bg-emerald-50'}`}>
-                  <div className="text-xs opacity-80">{isEn ? 'Suggested recipe cost (built-in default prices)' : '建议配方成本（内置默认单价）'}</div>
-                  <div className="text-lg font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-                    {blendSuggestModal.suggestedCostYuanPerH.toFixed(0)} {isEn ? 'CNY/h' : '元/h'}
-                  </div>
-                </div>
-              </div>
-              <div className={`text-xs mb-2 ${dark ? 'text-gray-500' : 'text-gray-500'}`}>
-                {isEn ? 'Max relative error of core elements (Sb/S/Fe/Si/Ca)' : '核心元素（Sb/S/Fe/Si/Ca）最大相对偏差'}：{blendSuggestModal.maxCoreRelErrPct.toFixed(2)}%
-              </div>
-              <div className={`text-sm font-medium mb-2 ${dark ? 'text-gray-200' : 'text-gray-800'}`}>{isEn ? 'Suggested Blend' : '建议配比'}</div>
-              <table className={`w-full text-sm mb-4 ${dark ? 'text-gray-300' : 'text-gray-700'}`}>
-                <thead>
-                  <tr className={dark ? 'border-b border-gray-600' : 'border-b border-gray-200'}>
-                    <th className="text-left py-2">{isEn ? 'Material' : '原料'}</th>
-                    <th className="text-right py-2">t/h</th>
-                    <th className="text-right py-2">{isEn ? 'CNY/t' : '元/t'}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {blendSuggestModal.blend.map((b) => (
-                    <tr key={b.id + b.name} className={dark ? 'border-b border-gray-700/50' : 'border-b border-gray-100'}>
-                      <td className="py-1.5">{b.name}</td>
-                      <td className="text-right font-mono">{b.weight.toFixed(4)}</td>
-                      <td className="text-right font-mono">{(b.unitPriceYuanPerTon / 10000).toFixed(2)}{isEn ? ' x10k' : '万'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <details className={`text-sm mb-4 ${dark ? 'text-gray-400' : 'text-gray-600'}`}>
-                <summary className="cursor-pointer">{isEn ? 'Element achieved vs target (prioritize |error| > 3%)' : '元素达成 vs 目标（偏差 > 3% 优先看）'}</summary>
-                <ul className="mt-2 max-h-40 overflow-y-auto font-mono text-xs space-y-1">
-                  {blendSuggestModal.achievedVsTarget
-                    .filter(
-                      (row) =>
-                        Math.abs(row.target) > 1e-8 &&
-                        (Math.abs(row.relErrPct) > 3 || BLEND_CORE_ELEMENTS.has(row.element))
-                    )
-                    .slice(0, 24)
-                    .map((row) => (
-                      <li key={row.element}>
-                        {row.element}: {isEn ? 'target' : '目标'} {row.target.toFixed(4)} {'->'} {isEn ? 'achieved' : '达成'} {row.achieved.toFixed(4)} t/h
-                        （{row.relErrPct >= 0 ? '+' : ''}
-                        {row.relErrPct.toFixed(1)}%）
-                      </li>
-                    ))}
-                </ul>
-              </details>
-              <div className="flex flex-wrap justify-end gap-2">
-                <button type="button" onClick={() => setBlendSuggestModal(null)} className={btnSecondary(dark)}>
-                  {isEn ? 'Close' : '关闭'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const bs = blendSuggestModal
-                    if (!bs) return
-                    const rest = materials.filter((m) => m.type !== 'base')
-                    const newBases = bs.blend.map((b, i) => ({
-                      id: `base-blend-${b.id}-${Date.now()}-${i}`,
-                      name: b.name,
-                      ratios: { ...b.ratios },
-                      weight: b.weight,
-                      type: 'base' as const,
-                      unitPrice: b.unitPriceYuanPerTon,
-                    }))
-                    setMaterials([...newBases, ...rest])
-                    setBlendSuggestModal(null)
-                    setAddFeedback(isEn ? 'Built-in optimized blend applied (all base rows replaced).' : '已应用内置优化配方（已替换全部原料行）')
-                  }}
-                  className={btnPrimary(dark)}
-                >
-                  {isEn ? 'Apply Blend (replace current base materials)' : '应用配方（替换当前原料）'}
-                </button>
-              </div>
+              </aside>
             </div>
+          )
+        }
+        const saving = blendSuggestModal.currentCostYuanPerH - blendSuggestModal.suggestedCostYuanPerH
+        const savingPct = blendSuggestModal.currentCostYuanPerH > 0 ? (saving / blendSuggestModal.currentCostYuanPerH) * 100 : 0
+        const blendTotalWeight = blendSuggestModal.blend.reduce((sum, item) => sum + item.weight, 0)
+        const blendCoreWithinLimit = blendSuggestModal.maxCoreRelErrPct <= BLEND_CORE_REL_ERR_LIMIT_PCT
+        const achievedRows = blendSuggestModal.achievedVsTarget
+          .filter(
+            (row) =>
+              Math.abs(row.target) > 1e-8 &&
+              (BLEND_CORE_ELEMENTS.has(row.element) || Math.abs(row.relErrPct) > BLEND_CORE_REL_ERR_LIMIT_PCT)
+          )
+          .sort((a, b) => {
+            const aCore = BLEND_CORE_ELEMENTS.has(a.element) ? 1 : 0
+            const bCore = BLEND_CORE_ELEMENTS.has(b.element) ? 1 : 0
+            return bCore - aCore || Math.abs(b.relErrPct) - Math.abs(a.relErrPct)
+          })
+          .slice(0, 18)
+        return (
+          <div
+            className="fixed inset-0 z-[9999] flex justify-end bg-black/40 backdrop-blur-sm"
+            onClick={closeBlendSuggestDrawer}
+          >
+            <aside
+              className={`h-full w-full max-w-[48rem] overflow-y-auto border-l shadow-2xl ${
+                dark ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'
+              }`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex min-h-full flex-col">
+                <div className={`sticky top-0 z-10 border-b px-6 py-5 ${dark ? 'bg-gray-800/95 border-gray-600' : 'bg-white/95 border-gray-200'} backdrop-blur`}>
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h3 className={`text-lg font-semibold ${dark ? 'text-gray-100' : 'text-gray-900'}`}>
+                        {isEn ? 'Low-Cost Blend Optimization' : '低成本配方优化'}
+                      </h3>
+                      <p className={`mt-1 text-sm leading-relaxed ${dark ? 'text-gray-400' : 'text-gray-600'}`}>
+                        {isEn
+                          ? 'The current blend is kept unchanged until you explicitly apply the suggestion.'
+                          : '优化结果仅作为建议展示，只有点击应用后才会替换当前原料。'}
+                      </p>
+                    </div>
+                    <button type="button" onClick={closeBlendSuggestDrawer} className={btnText(dark)}>
+                      {isEn ? 'Close' : '关闭'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex-1 space-y-5 px-6 py-5">
+                  {blendSuggestModal.message && (
+                    <p className={`rounded-lg px-3 py-2 text-sm ${dark ? 'bg-amber-900/40 text-amber-200' : 'bg-amber-50 text-amber-900'}`}>
+                      {blendSuggestModal.message}
+                    </p>
+                  )}
+
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div className={`rounded-lg border p-3 ${dark ? 'border-gray-600 bg-gray-700/45' : 'border-gray-200 bg-gray-50'}`}>
+                      <div className={`text-xs ${dark ? 'text-gray-400' : 'text-gray-500'}`}>{isEn ? 'Current cost' : '当前成本'}</div>
+                      <div className={`mt-1 font-mono text-lg font-semibold ${dark ? 'text-gray-100' : 'text-gray-900'}`}>
+                        {blendSuggestModal.currentCostYuanPerH.toFixed(0)}
+                        <span className="ml-1 text-xs font-normal">{isEn ? 'CNY/h' : '元/h'}</span>
+                      </div>
+                    </div>
+                    <div className={`rounded-lg border p-3 ${dark ? 'border-emerald-700 bg-emerald-950/30' : 'border-emerald-200 bg-emerald-50'}`}>
+                      <div className={`text-xs ${dark ? 'text-emerald-200/80' : 'text-emerald-700'}`}>{isEn ? 'Suggested cost' : '推荐成本'}</div>
+                      <div className={`mt-1 font-mono text-lg font-semibold ${dark ? 'text-emerald-200' : 'text-emerald-700'}`}>
+                        {blendSuggestModal.suggestedCostYuanPerH.toFixed(0)}
+                        <span className="ml-1 text-xs font-normal">{isEn ? 'CNY/h' : '元/h'}</span>
+                      </div>
+                    </div>
+                    <div className={`rounded-lg border p-3 ${dark ? 'border-blue-700 bg-blue-950/25' : 'border-blue-200 bg-blue-50'}`}>
+                      <div className={`text-xs ${dark ? 'text-blue-200/80' : 'text-blue-700'}`}>{isEn ? 'Estimated saving' : '预计节约'}</div>
+                      <div className={`mt-1 font-mono text-lg font-semibold ${saving >= 0 ? (dark ? 'text-blue-200' : 'text-blue-700') : (dark ? 'text-amber-200' : 'text-amber-700')}`}>
+                        {saving.toFixed(0)}
+                        <span className="ml-1 text-xs font-normal">{isEn ? `CNY/h (${savingPct.toFixed(1)}%)` : `元/h (${savingPct.toFixed(1)}%)`}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <details className={`rounded-lg border p-3 text-sm ${dark ? 'border-gray-600 bg-gray-700/35 text-gray-300' : 'border-gray-200 bg-gray-50 text-gray-700'}`}>
+                    <summary className="cursor-pointer font-medium">{isEn ? 'Basis and constraints' : '优化依据与约束'}</summary>
+                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div>
+                        <div className={`text-xs ${dark ? 'text-gray-400' : 'text-gray-500'}`}>{isEn ? 'Total mass' : '目标总质量'}</div>
+                        <div className="font-mono">{blendSuggestModal.targetTotalWeight.toFixed(4)} t/h</div>
+                      </div>
+                      <div>
+                        <div className={`text-xs ${dark ? 'text-gray-400' : 'text-gray-500'}`}>{isEn ? 'Available library' : '可用原料库'}</div>
+                        <div>{isEn ? `${Object.values(BASE_ELEMENTS).length} built-in materials` : `当前内置原料 ${Object.values(BASE_ELEMENTS).length} 种`}</div>
+                      </div>
+                      <div>
+                        <div className={`text-sm ${dark ? 'text-gray-400' : 'text-gray-500'}`}>{isEn ? 'Core constraint' : '核心约束'}</div>
+                        <div>{isEn ? `Core deviation <= ${BLEND_CORE_REL_ERR_LIMIT_PCT}%` : `核心元素偏差 ≤ ${BLEND_CORE_REL_ERR_LIMIT_PCT}%`}</div>
+                      </div>
+                    </div>
+                  </details>
+
+                  <section>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <h4 className={`text-sm font-semibold ${dark ? 'text-gray-100' : 'text-gray-900'}`}>
+                        {isEn
+                          ? (blendSuggestModal.blend.length > 1 ? 'Suggested Mixed Feed' : 'Suggested Blend')
+                          : (blendSuggestModal.blend.length > 1 ? '推荐混合矿配方' : '推荐配方')}
+                      </h4>
+                      <span className={`text-xs ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
+                        {isEn ? 'Total' : '合计'} {blendTotalWeight.toFixed(4)} t/h
+                      </span>
+                    </div>
+                    <div className={`overflow-x-auto rounded-lg border ${dark ? 'border-gray-600' : 'border-gray-200'}`}>
+                      <table className={`w-full min-w-[36rem] text-sm ${dark ? 'text-gray-300' : 'text-gray-700'}`}>
+                        <thead className={dark ? 'bg-gray-700/60 text-gray-300' : 'bg-gray-50 text-gray-600'}>
+                          <tr>
+                            <th className="px-3 py-2 text-left font-medium">{isEn ? 'Material' : '原料'}</th>
+                            <th className="px-3 py-2 text-right font-medium">t/h</th>
+                            <th className="px-3 py-2 text-right font-medium">{isEn ? 'Share' : '占比'}</th>
+                            <th className="px-3 py-2 text-right font-medium">{isEn ? 'Unit price' : '单价'}</th>
+                            <th className="px-3 py-2 text-right font-medium">{isEn ? 'Cost' : '成本'}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {blendSuggestModal.blend.map((b) => (
+                            <tr key={b.id + b.name} className={dark ? 'border-t border-gray-700' : 'border-t border-gray-100'}>
+                              <td className="px-3 py-2">{displayMaterialName(b.name)}</td>
+                              <td className="px-3 py-2 text-right font-mono">{b.weight.toFixed(4)}</td>
+                              <td className="px-3 py-2 text-right font-mono">{blendTotalWeight > 0 ? ((b.weight / blendTotalWeight) * 100).toFixed(2) : '0.00'}%</td>
+                              <td className="px-3 py-2 text-right font-mono">{(b.unitPriceYuanPerTon / 10000).toFixed(2)}{isEn ? ' x10k' : '万'}</td>
+                              <td className="px-3 py-2 text-right font-mono">{(b.weight * b.unitPriceYuanPerTon).toFixed(0)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+
+                  <section>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <h4 className={`text-sm font-semibold ${dark ? 'text-gray-100' : 'text-gray-900'}`}>{isEn ? 'Element Match Check' : '元素达成校核'}</h4>
+                      <span className={`text-sm ${blendCoreWithinLimit ? (dark ? 'text-emerald-300' : 'text-emerald-700') : (dark ? 'text-red-300' : 'text-red-700')}`}>
+                        {isEn ? 'Max core error' : '核心最大偏差'} {blendSuggestModal.maxCoreRelErrPct.toFixed(2)}%
+                      </span>
+                    </div>
+                    <div className={`overflow-x-auto rounded-lg border ${dark ? 'border-gray-600' : 'border-gray-200'}`}>
+                      <table className={`w-full min-w-[34rem] text-sm ${dark ? 'text-gray-300' : 'text-gray-700'}`}>
+                        <thead className={dark ? 'bg-gray-700/60 text-gray-300' : 'bg-gray-50 text-gray-600'}>
+                          <tr>
+                            <th className="px-3 py-2 text-left font-medium">{isEn ? 'Element' : '元素'}</th>
+                            <th className="px-3 py-2 text-right font-medium">{isEn ? 'Target' : '目标'}</th>
+                            <th className="px-3 py-2 text-right font-medium">{isEn ? 'Achieved' : '达成'}</th>
+                            <th className="px-3 py-2 text-right font-medium">{isEn ? 'Deviation' : '偏差'}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {achievedRows.map((row) => {
+                            const absErr = Math.abs(row.relErrPct)
+                            const isCoreElement = BLEND_CORE_ELEMENTS.has(row.element)
+                            const severity =
+                              isCoreElement && absErr > BLEND_CORE_REL_ERR_LIMIT_PCT
+                                ? dark ? 'text-red-300' : 'text-red-700'
+                                : !isCoreElement && absErr > 10
+                                  ? dark ? 'text-amber-200' : 'text-amber-700'
+                                  : dark ? 'text-gray-300' : 'text-gray-700'
+                            return (
+                              <tr key={row.element} className={dark ? 'border-t border-gray-700' : 'border-t border-gray-100'}>
+                                <td className="px-3 py-2">{displayElementLabel(row.element)}</td>
+                                <td className="px-3 py-2 text-right font-mono">{row.target.toFixed(4)}</td>
+                                <td className="px-3 py-2 text-right font-mono">{row.achieved.toFixed(4)}</td>
+                                <td className={`px-3 py-2 text-right font-mono ${severity}`}>
+                                  {row.relErrPct >= 0 ? '+' : ''}{row.relErrPct.toFixed(1)}%
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                </div>
+
+                <div className={`sticky bottom-0 flex flex-wrap items-center justify-between gap-3 border-t px-6 py-4 ${dark ? 'bg-gray-800/95 border-gray-600' : 'bg-white/95 border-gray-200'} backdrop-blur`}>
+                  <p className={`max-w-md text-xs leading-relaxed ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
+                    {isEn
+                      ? `Core-element deviation must be within ${BLEND_CORE_REL_ERR_LIMIT_PCT}% before applying. Solvent and oxygen rows will be kept.`
+                      : `应用前需确认核心元素偏差≤${BLEND_CORE_REL_ERR_LIMIT_PCT}%；替换时会保留熔剂与富氧空气行。`}
+                  </p>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button type="button" onClick={handleCopyBlendSuggestion} className={btnSecondary(dark)}>
+                      {isEn ? 'Copy Suggestion' : '复制推荐方案'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const ok = window.confirm(
+                          isEn
+                            ? 'This will replace all current base material rows. Continue?'
+                            : '将替换当前所有原料行，熔剂和富氧空气会保留。是否继续？'
+                        )
+                        if (ok) handleApplyBlendSuggestion()
+                      }}
+                      disabled={!blendCoreWithinLimit}
+                      className={blendCoreWithinLimit ? btnPrimary(dark) : btnPrimaryDisabled(dark)}
+                    >
+                      {isEn ? 'Apply and Replace' : '应用并替换当前原料'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </aside>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {errorMsg && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setErrorMsg(null)}>
@@ -904,26 +1237,6 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
               </div>
               <button onClick={() => setShowCustomBase(true)} className={btnSecondary(dark)}>{isEn ? 'Add custom material' : '添加自定义原料'}</button>
               <button onClick={handleAddBase} className={btnPrimary(dark)}>{isEn ? 'Add' : '添加'}</button>
-              <button
-                type="button"
-                onClick={() => {
-                  const { targetElementWeights, totalWeight, currentCostYuanPerH } =
-                    aggregateBaseMaterials(materials)
-                  const r = suggestBuiltinCheaperBlend(targetElementWeights, totalWeight)
-                  if (!r.ok) {
-                    setErrorMsg(r.message ?? '无法优化')
-                    return
-                  }
-                  setBlendSuggestModal({ ...r, currentCostYuanPerH })
-                }}
-                disabled={!materials.some((m) => m.type === 'base')}
-                className={
-                  materials.some((m) => m.type === 'base') ? btnSecondary(dark) : btnPrimaryDisabled(dark)
-                }
-                title={isEn ? 'Auto-balance with five built-in materials to match current elemental totals and reduce cost (using default prices).' : '按当前入炉原料总元素量，在内置五种标准料中自动配比，尽量降低成本（单价取配置默认值）'}
-              >
-                {isEn ? 'Built-in Blend Optimizer' : '内置料配方优化'}
-              </button>
             </div>
             {selectedMaterial && (
               <div className={`mt-4 p-4 rounded-lg border ${dark ? 'border-gray-600 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
@@ -931,7 +1244,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                 <div className="flex flex-wrap gap-4">
                   {Object.entries(editingRatios ?? selectedMaterial.ratios).map(([elem, val]) => (
                     <div key={elem} className="flex items-center gap-2 min-w-[7rem]">
-                      <span className={`text-xs w-24 truncate ${dark ? 'text-gray-400' : 'text-gray-600'}`}>{displayElementLabel(elem)}</span>
+                      <span className={`text-sm w-24 truncate ${dark ? 'text-gray-400' : 'text-gray-600'}`}>{displayElementLabel(elem)}</span>
                       <input type="text" value={String((editingRatios ?? selectedMaterial.ratios)[elem] ?? 0)}
                         onChange={(e) => {
                           const v = parseFloat(e.target.value.replace(',', '.')) || 0
@@ -970,7 +1283,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
               <div className="flex flex-wrap gap-4">
                 {elementKeys.map((elem) => (
                   <div key={elem} className="flex items-center gap-2 min-w-[7rem]">
-                    <span className={`text-xs w-24 truncate ${dark ? 'text-gray-400' : 'text-gray-600'}`}>{displayElementLabel(elem)}</span>
+                    <span className={`text-sm w-24 truncate ${dark ? 'text-gray-400' : 'text-gray-600'}`}>{displayElementLabel(elem)}</span>
                     <input type="text" value={String(customBaseRatios[elem] ?? 0)}
                       onChange={(e) => {
                         const v = parseFloat(e.target.value.replace(',', '.')) || 0
@@ -983,6 +1296,41 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
             </div>
           </div>
         )}
+        {(() => {
+          const baseSummary = aggregateBaseMaterials(materials)
+          const canOptimize = baseSummary.totalWeight > 0 && materials.some((m) => m.type === 'base')
+          return (
+            <div className={`mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 ${
+              dark ? 'border-gray-600 bg-gray-800/35' : 'border-gray-200 bg-gray-50'
+            }`}>
+              <div className="min-w-0">
+                <div className={`text-sm font-medium ${dark ? 'text-gray-200' : 'text-gray-800'}`}>
+                  {isEn ? 'Optional optimization' : '附加优化'}
+                </div>
+                <div className={`mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  <span>
+                    {isEn ? 'Target mass' : '目标总质量'}：
+                    <span className="font-mono">{baseSummary.totalWeight.toFixed(4)} t/h</span>
+                  </span>
+                  <span>
+                    {isEn ? 'Current raw-material cost' : '当前原料成本'}：
+                    <span className="font-mono">{baseSummary.currentCostYuanPerH.toFixed(0)} {isEn ? 'CNY/h' : '元/h'}</span>
+                  </span>
+                  <span>{isEn ? 'Uses built-in material library' : '按当前元素总量在原料库中寻找低成本配比'}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleRunBlendOptimization}
+                disabled={!canOptimize}
+                className={canOptimize ? btnSecondary(dark) : btnPrimaryDisabled(dark)}
+                title={isEn ? 'Find a low-cost blend in the material library while keeping total base-feed mass fixed.' : '固定当前原料总质量，根据元素总量在原料库中寻找低成本配料方式'}
+              >
+                {isEn ? 'Low-Cost Blend' : '低成本配方优化'}
+              </button>
+            </div>
+          )
+        })()}
       </div>
 
       {/* 2. 熔剂 */}
@@ -1031,29 +1379,87 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
         <h3 className={sectionTitle(dark)}>{isEn ? '3. Target Slag Type' : '3. 目标渣型'}</h3>
         <p className={`${hintText(dark)} mb-4`}>
           {isEn
-            ? 'Set target values and tolerance. Multi-objective optimization balances exact slag target, minimum cost, minimum energy and minimum slag.'
-            : '目标值 + 波动%。多目标协同：精准渣型解、最小成本、最低能耗、最小渣量。'}
+            ? 'Set the allowed slag-ratio window. Range mode uses lower and upper limits; Exact mode solves toward one fixed ratio. Reversed limits are normalized automatically.'
+            : '设置目标渣型允许区间。范围模式填写下限与上限；精确模式填写单一目标值。上下限输反时，系统会自动按小到大计算。'}
         </p>
         <div className="flex flex-wrap items-end gap-4 w-full">
-          <div className="flex-1 min-w-[7rem]">
-            <label className={labelBase(dark)}>{isEn ? 'Fe/SiO₂ target' : 'Fe/SiO₂ 目标值'}</label>
-            <input type="text" value={targetFeSiO2} onChange={(e) => setTargetFeSiO2(e.target.value)} placeholder="1.0"
-              className={`${inputBase(dark)} w-full`} />
+          <div className="flex-1 min-w-[17rem]">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <label className={labelBase(dark)}>{isEn ? 'Fe/SiO₂ iron-silica ratio' : 'Fe/SiO₂ 铁硅比'}</label>
+              <div className={`inline-flex overflow-hidden rounded-md border ${dark ? 'border-gray-600' : 'border-gray-300'}`}>
+                <button type="button" onClick={() => switchFeSiO2Mode('range')} className={ratioModeButtonClass(targetFeSiO2.mode === 'range')}>
+                  {isEn ? 'Range' : '范围'}
+                </button>
+                <button type="button" onClick={() => switchFeSiO2Mode('exact')} className={ratioModeButtonClass(targetFeSiO2.mode === 'exact')}>
+                  {isEn ? 'Exact' : '精确'}
+                </button>
+              </div>
+            </div>
+            {targetFeSiO2.mode === 'range' ? (
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  value={targetFeSiO2.min}
+                  onChange={(e) => setTargetFeSiO2((p) => ({ ...p, min: e.target.value }))}
+                  placeholder={isEn ? 'Lower' : '下限'}
+                  className={`${inputBase(dark)} w-full`}
+                />
+                <input
+                  type="text"
+                  value={targetFeSiO2.max}
+                  onChange={(e) => setTargetFeSiO2((p) => ({ ...p, max: e.target.value }))}
+                  placeholder={isEn ? 'Upper' : '上限'}
+                  className={`${inputBase(dark)} w-full`}
+                />
+              </div>
+            ) : (
+              <input
+                type="text"
+                value={targetFeSiO2.exact}
+                onChange={(e) => setTargetFeSiO2((p) => ({ ...p, exact: e.target.value }))}
+                placeholder={isEn ? 'Exact value' : '精确值'}
+                className={`${inputBase(dark)} w-full`}
+              />
+            )}
           </div>
-          <div className="flex-1 min-w-[5rem]">
-            <label className={labelBase(dark)}>{isEn ? 'Tolerance ±%' : '波动 ±%'}</label>
-            <input type="text" value={targetFeSiO2Fluct} onChange={(e) => setTargetFeSiO2Fluct(e.target.value)} placeholder="10"
-              className={`${inputBase(dark)} w-full`} />
-          </div>
-          <div className="flex-1 min-w-[7rem]">
-            <label className={labelBase(dark)}>{isEn ? 'CaO/SiO₂ target' : 'CaO/SiO₂ 目标值'}</label>
-            <input type="text" value={targetCaOSiO2} onChange={(e) => setTargetCaOSiO2(e.target.value)} placeholder="0.5"
-              className={`${inputBase(dark)} w-full`} />
-          </div>
-          <div className="flex-1 min-w-[5rem]">
-            <label className={labelBase(dark)}>{isEn ? 'Tolerance ±%' : '波动 ±%'}</label>
-            <input type="text" value={targetCaOSiO2Fluct} onChange={(e) => setTargetCaOSiO2Fluct(e.target.value)} placeholder="10"
-              className={`${inputBase(dark)} w-full`} />
+          <div className="flex-1 min-w-[17rem]">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <label className={labelBase(dark)}>{isEn ? 'CaO/SiO₂ lime-silica ratio' : 'CaO/SiO₂ 钙硅比'}</label>
+              <div className={`inline-flex overflow-hidden rounded-md border ${dark ? 'border-gray-600' : 'border-gray-300'}`}>
+                <button type="button" onClick={() => switchCaOSiO2Mode('range')} className={ratioModeButtonClass(targetCaOSiO2.mode === 'range')}>
+                  {isEn ? 'Range' : '范围'}
+                </button>
+                <button type="button" onClick={() => switchCaOSiO2Mode('exact')} className={ratioModeButtonClass(targetCaOSiO2.mode === 'exact')}>
+                  {isEn ? 'Exact' : '精确'}
+                </button>
+              </div>
+            </div>
+            {targetCaOSiO2.mode === 'range' ? (
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  value={targetCaOSiO2.min}
+                  onChange={(e) => setTargetCaOSiO2((p) => ({ ...p, min: e.target.value }))}
+                  placeholder={isEn ? 'Lower' : '下限'}
+                  className={`${inputBase(dark)} w-full`}
+                />
+                <input
+                  type="text"
+                  value={targetCaOSiO2.max}
+                  onChange={(e) => setTargetCaOSiO2((p) => ({ ...p, max: e.target.value }))}
+                  placeholder={isEn ? 'Upper' : '上限'}
+                  className={`${inputBase(dark)} w-full`}
+                />
+              </div>
+            ) : (
+              <input
+                type="text"
+                value={targetCaOSiO2.exact}
+                onChange={(e) => setTargetCaOSiO2((p) => ({ ...p, exact: e.target.value }))}
+                placeholder={isEn ? 'Exact value' : '精确值'}
+                className={`${inputBase(dark)} w-full`}
+              />
+            )}
           </div>
           <button
             onClick={handleNsga2Solve}
@@ -1062,6 +1468,11 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
           >
             {isCalcRunning ? (isEn ? 'Calculating...' : '计算中…') : (isEn ? 'Calculate' : '计算')}
           </button>
+          {(targetFeSiO2Preview || targetCaOSiO2Preview) && (
+            <p className={`${hintText(dark)} basis-full -mt-2 text-xs`}>
+              {[targetFeSiO2Preview, targetCaOSiO2Preview].filter(Boolean).join(' · ')}
+            </p>
+          )}
         </div>
 
         {isCalcRunning && (
@@ -1276,7 +1687,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
             >
               <summary className="cursor-pointer text-sm font-medium hover:underline">{isEn ? 'Algorithm Notes' : '算法说明'}</summary>
               <div className="mt-2 text-xs leading-relaxed space-y-2.5 pl-2 border-l-2 border-blue-200 dark:border-blue-800">
-                <p><strong>优化问题定义</strong>：决策变量 X=[石灰,铁矿石]；目标函数 F(X)=[成本,石灰用量,总渣量] 均最小化；约束为 Fe/SiO₂、CaO/SiO₂ 在目标±波动%内。</p>
+                <p><strong>优化问题定义</strong>：决策变量 X=[石灰,铁矿石]；目标函数 F(X)=[成本,石灰用量,总渣量] 均最小化；约束为 Fe/SiO₂、CaO/SiO₂ 在目标范围内。若输入单个数，则该比值按精确目标求解。</p>
                 <p><strong>精准渣型解</strong>：线性方程组精确求解，使渣型达到目标比值。</p>
                 <p><strong>NSGA-II 迭代</strong>：初始化种群（精确解+网格）→ 非支配排序+拥挤度 → 选择、交叉、变异 → 种群进化至收敛。</p>
                 <p><strong>帕累托最优解</strong>：从 Pareto 前沿中选取理想点最近解，代表成本/石灰/渣量的折中。</p>

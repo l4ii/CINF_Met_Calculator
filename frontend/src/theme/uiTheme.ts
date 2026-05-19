@@ -30,14 +30,14 @@ export function btnSecondary(dark: boolean) {
 
 /** 小号主按钮（如「应用此方案」） */
 export function btnPrimarySm(dark: boolean) {
-  return `px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+  return `px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
     dark ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'
   }`
 }
 
 /** 文本链接按钮（如关闭、取消） */
 export function btnText(dark: boolean) {
-  return `text-xs transition-colors ${dark ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700'}`
+  return `text-sm transition-colors ${dark ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700'}`
 }
 
 /** 标准输入框 */
@@ -85,7 +85,7 @@ export function descText(dark: boolean) {
 
 /** 辅助说明（小字） */
 export function hintText(dark: boolean) {
-  return `text-xs ${dark ? 'text-gray-500' : 'text-gray-500'}`
+  return `text-sm ${dark ? 'text-gray-400' : 'text-gray-600'}`
 }
 
 /** 操作栏容器：输入靠左、主按钮靠右 */

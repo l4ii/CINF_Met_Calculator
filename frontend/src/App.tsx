@@ -2,8 +2,57 @@ import { useState, useEffect, useRef } from 'react'
 import Sidebar from './components/Sidebar'
 import MainContent from './components/MainContent'
 import LicenseActivation from './components/LicenseActivation'
+import AssistantPanel from './components/AssistantPanel'
+import { AssistantProvider } from './context/AssistantContext'
 import { CalcProvider } from './context/CalcContext'
 import type { SelectedMethod, SheetId } from './types'
+import {
+  APP_NAME_EN,
+  APP_NAME_ZH,
+  APP_ORG_NAME_EN,
+  APP_ORG_NAME_ZH,
+  APP_TAGLINE_MAIN_EN,
+  APP_TAGLINE_ZH,
+} from './constants/appCopy'
+
+const BOOT_LOGO_SRC = './icon.png'
+
+function LicenseCheckingSplash({ language }: { language: 'zh' | 'en' }) {
+  const [logoOk, setLogoOk] = useState(true)
+  const appName = language === 'en' ? APP_NAME_EN : APP_NAME_ZH
+  const tagline = language === 'en' ? APP_TAGLINE_MAIN_EN : APP_TAGLINE_ZH
+  const org = language === 'en' ? APP_ORG_NAME_EN : APP_ORG_NAME_ZH
+  const lines =
+    language === 'en'
+      ? ['Verifying offline license…', 'Starting local assistant service…']
+      : ['正在校验离线许可…', '正在启动本地助手服务…']
+
+  return (
+    <div className="relative isolate flex min-h-[100dvh] flex-col items-center justify-center overflow-hidden bg-[radial-gradient(ellipse_120%_80%_at_50%_-20%,rgba(59,130,246,0.12),transparent)] px-4">
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_bottom,transparent,rgba(248,250,252,0.92))]" />
+      <div className="relative z-10 flex max-w-lg flex-col items-center text-center">
+        <div className="mb-5 flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl bg-white shadow-lg ring-1 ring-slate-200">
+          {logoOk ? (
+            <img src={BOOT_LOGO_SRC} alt="" className="h-full w-full object-contain p-2" onError={() => setLogoOk(false)} />
+          ) : (
+            <span className="text-lg font-black text-slate-800">CINF</span>
+          )}
+        </div>
+        <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">{appName}</h1>
+        <p className="mt-2 max-w-md text-sm leading-relaxed text-slate-600">{tagline}</p>
+        <div className="mt-8 flex flex-col items-center gap-3">
+          <div className="h-9 w-9 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" aria-hidden />
+          <div className="space-y-1 text-xs text-slate-500">
+            {lines.map((t) => (
+              <p key={t}>{t}</p>
+            ))}
+          </div>
+        </div>
+        <p className="mt-10 text-[11px] text-slate-400">{org}</p>
+      </div>
+    </div>
+  )
+}
 
 function initialLicenseGate(): 'unknown' | 'ok' | 'blocked' {
   if (typeof window === 'undefined') return 'ok'
@@ -114,41 +163,40 @@ function App() {
   }
 
   if (licenseGate === 'unknown') {
-    return (
-      <div className="flex h-screen items-center justify-center bg-slate-50 text-slate-600">
-        {language === 'en' ? 'Loading…' : '正在加载…'}
-      </div>
-    )
+    return <LicenseCheckingSplash language={language} />
   }
 
   return (
-    <CalcProvider>
-    <div className={`flex h-screen overflow-hidden ${darkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
-      <Sidebar
-        selectedMethod={selectedMethod}
-        activeSheet={activeSheet}
-        onMethodSelect={handleMethodSelect}
-        onSheetSelect={setActiveSheet}
-        darkMode={darkMode}
-        language={language}
-        onShowAbout={handleShowAbout}
-        onShowSettings={handleShowSettings}
-        currentView={currentView}
-        aboutDepartment={aboutDepartment}
-      />
-      <MainContent
-        selectedMethod={selectedMethod}
-        activeSheet={activeSheet}
-        darkMode={darkMode}
-        currentView={currentView}
-        aboutDepartment={aboutDepartment}
-        language={language}
-        darkModeValue={darkMode}
-        onDarkModeChange={setDarkMode}
-        onLanguageChange={setLanguage}
-      />
-    </div>
-    </CalcProvider>
+    <AssistantProvider>
+      <CalcProvider>
+        <div className={`relative flex h-screen overflow-hidden ${darkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
+          <Sidebar
+            selectedMethod={selectedMethod}
+            activeSheet={activeSheet}
+            onMethodSelect={handleMethodSelect}
+            onSheetSelect={setActiveSheet}
+            darkMode={darkMode}
+            language={language}
+            onShowAbout={handleShowAbout}
+            onShowSettings={handleShowSettings}
+            currentView={currentView}
+            aboutDepartment={aboutDepartment}
+          />
+          <MainContent
+            selectedMethod={selectedMethod}
+            activeSheet={activeSheet}
+            darkMode={darkMode}
+            currentView={currentView}
+            aboutDepartment={aboutDepartment}
+            language={language}
+            darkModeValue={darkMode}
+            onDarkModeChange={setDarkMode}
+            onLanguageChange={setLanguage}
+          />
+          <AssistantPanel darkMode={darkMode} language={language} onSheetSelect={setActiveSheet} />
+        </div>
+      </CalcProvider>
+    </AssistantProvider>
   )
 }
 

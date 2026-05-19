@@ -252,3 +252,7 @@ export function useCalc() {
   if (!ctx) throw new Error('useCalc must be used within CalcProvider')
   return ctx
 }
+
+export function useCalcOptional() {
+  return useContext(CalcContext)
+}

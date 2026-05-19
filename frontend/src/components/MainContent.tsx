@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { SMELT_TYPES, type SelectedMethod, type SheetId } from '../types'
 import RawMaterialPhaseOxygen from './modules/RawMaterialPhaseOxygen'
 import ProductDisplay from './modules/ProductDisplay'
@@ -7,6 +8,8 @@ import { cardBase, descText } from '../theme/uiTheme'
 import AboutPage from './shell/AboutPage'
 import SettingsPage from './shell/SettingsPage'
 import { appSubtitleForLang, appTitleForLang } from '../constants/appCopy'
+import { useAssistantSnapshotOptional } from '../context/AssistantContext'
+import { useCalcOptional } from '../context/CalcContext'
 
 interface MainContentProps {
   selectedMethod: SelectedMethod | null
@@ -34,6 +37,34 @@ export default function MainContent({
   const isEn = language === 'en'
   const appTitle = appTitleForLang(language)
   const appSubtitle = appSubtitleForLang(language)
+  const { setAssistantSnapshot } = useAssistantSnapshotOptional()
+  const calcCtx = useCalcOptional()
+
+  useEffect(() => {
+    const mats = calcCtx?.materials ?? []
+    const preview = mats.slice(0, 12).map((m) => m.name)
+    setAssistantSnapshot({
+      currentView,
+      language,
+      aboutDepartment: aboutDepartment ?? null,
+      selectedMethod: selectedMethod
+        ? { smeltTypeName: selectedMethod.smeltTypeName, smeltMethodName: selectedMethod.smeltMethodName }
+        : null,
+      activeSheet,
+      materialCount: mats.length,
+      mixTotalWeight: calcCtx?.mixResult?.totalWeight ?? null,
+      totalCostPerHour: calcCtx?.totalCost ?? 0,
+      materialsPreview: preview,
+    })
+  }, [
+    activeSheet,
+    aboutDepartment,
+    calcCtx,
+    currentView,
+    language,
+    selectedMethod,
+    setAssistantSnapshot,
+  ])
 
   if (currentView === 'about' && aboutDepartment) {
     return <AboutPage darkMode={darkMode} language={language} aboutDepartment={aboutDepartment} />
@@ -82,7 +113,7 @@ export default function MainContent({
     <div className={`flex-[4] min-h-0 flex flex-col overflow-hidden ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
       <div className="flex-shrink-0 px-6 pt-4 pb-2">
         <h1 className={`text-2xl font-bold mb-1 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{appTitle}</h1>
-        <p className={`text-xs mb-4 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{appSubtitle}</p>
+        <p className={`text-sm mb-4 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{appSubtitle}</p>
         <h2 className={`text-lg font-semibold mb-1 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{selectedMethodDisplayName}</h2>
         {selectedMethod.description && (
           <p className={`text-sm leading-relaxed max-w-3xl ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{selectedMethod.description}</p>

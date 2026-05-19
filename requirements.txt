@@ -1,5 +1,8 @@
+# -*- coding: utf-8 -*-
 flask==3.0.0
 flask-cors==4.0.0
 python-docx==1.1.0
 numpy==1.26.2
 pyinstaller>=6.0.0
+# Windows：优先 CPU 预编译 wheel — npm run build:python 会通过 scripts/build-python.js 追加索引
+llama-cpp-python>=0.3.0

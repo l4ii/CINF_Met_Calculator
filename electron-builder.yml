@@ -15,17 +15,17 @@ directories:
 #   repo: your-repo-name
 
 # 选项2: 使用通用 HTTP 服务器
+# publish.url 若为占位域名，electron-updater 检查更新将失败——上线前务必替换为可用静态资源地址。
 publish:
   provider: generic
   url: https://your-update-server.com/updates
-  # 或者使用本地/内网服务器
-  # url: http://192.168.1.100:8080/updates
 
-# 前端不放进 asar，改由 extraResources 放到 resources/frontend-dist，安装时必被覆盖，避免旧缓存/旧 asar 导致看到旧版
+# 前端不放进 asar，改由 extraResources 放到 resources/frontend-dist。backend 仅在 extraResources，勿再打進 asar 以免与 backend.exe/GGUF 重复体积翻倍。
 files:
   - electron/**
-  - backend/**
+  - "!backend/**"
   - requirements.txt
+  - requirements.noai.txt
   - package.json
   - "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}"
   - "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}"
@@ -115,17 +115,23 @@ extraResources:
   # 安装包图标等（打包后运行时窗口图标从 resources/build 读取）
   - from: electron/build
     to: build
-  # 包含后端文件（优先使用打包的exe，如果没有则使用源代码）
+  # 运行时后端：PyInstaller 产物 + 助手知识片段（不打入未编译 .py，以免暴露源码）
   - from: backend
     to: backend
     filter:
-      - "**/*.py"
       - "**/*.exe"
       - "**/dist/**"
+      - "**/assistant_knowledge/**/*.txt"
+      - "**/assistant_knowledge/**/*.md"
       - "!**/__pycache__/**"
       - "!**/*.pyc"
       - "!**/build/**"
       - "!**/*.spec"
       - "!**/build_backend.py"
+      - "!**/python38/**"
+  - from: build/pack-resources/backend/models
+    to: backend/models
+    filter:
+      - "**/*.gguf"
   - from: requirements.txt
     to: requirements.txt
