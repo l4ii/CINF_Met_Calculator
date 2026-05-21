@@ -19,20 +19,19 @@
         -webkit-user-select: none;
       }
       .card {
-        width: 420px;
-        padding: 28px 26px 22px;
-        border-radius: 16px;
-        background: rgba(255, 255, 255, 0.78);
+        width: 462px;
+        padding: 22px 24px 18px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.86);
         box-shadow: 0 18px 60px rgba(2, 6, 23, 0.12);
         border: 1px solid rgba(148, 163, 184, 0.35);
         backdrop-filter: blur(10px);
         -webkit-backdrop-filter: blur(10px);
-        text-align: center;
       }
       .logo {
         width: 76px;
         height: 76px;
-        border-radius: 18px;
+        border-radius: 16px;
         margin: 0 auto 14px;
         display: grid;
         place-items: center;
@@ -47,25 +46,27 @@
         border-radius: 18px;
       }
       .title {
-        font-size: 16px;
-        font-weight: 700;
+        font-size: 22px;
+        font-weight: 800;
         color: #0f172a;
         letter-spacing: 0.2px;
-        margin: 0 0 6px;
+        margin: 0 0 10px;
+        text-align: center;
       }
       .subtitle {
-        font-size: 12px;
-        line-height: 1.55;
+        font-size: 13px;
+        line-height: 1.7;
         color: #475569;
-        margin: 0 0 16px;
+        margin: 0 0 18px;
         text-align: center;
-        max-width: 100%;
       }
       .row {
         display: flex;
         align-items: center;
-        justify-content: center;
+        justify-content: space-between;
         gap: 10px;
+        border-top: 1px solid #e2e8f0;
+        padding-top: 12px;
       }
       .spinner {
         width: 16px;
@@ -76,6 +77,8 @@
         animation: spin 1s linear infinite;
       }
       .hint { font-size: 12px; color: #64748b; }
+      .status { display: flex; align-items: center; gap: 9px; }
+      .org { font-size: 11px; color: #94a3b8; }
       @keyframes spin { to { transform: rotate(360deg); } }
     </style>
   </head>
@@ -89,13 +92,15 @@
         </svg>
       </div>
       <p class="title" id="appName">长沙院冶金智能配料软件</p>
-      <!-- 默认与 frontend/src/constants/appCopy.ts 中 APP_TAGLINE_ZH 同步；主进程 loadFile query 可覆盖 name、tagline -->
       <p class="subtitle" id="appSubtitle">
-        基于能量守恒与质量守恒定律的专业冶金配料计算工具。
+        面向有色冶炼配料计算、渣型控制和物料平衡的专业工程工具。支持原料、熔剂、物相和阶段流程的本地化计算与复核。
       </p>
       <div class="row">
-        <div class="spinner" aria-hidden="true"></div>
-        <div class="hint">正在启动，请稍候…</div>
+        <div class="status">
+          <div class="spinner" aria-hidden="true"></div>
+          <div class="hint">正在加载计算模块与本地服务…</div>
+        </div>
+        <div class="org">CINF</div>
       </div>
     </div>
     <script>

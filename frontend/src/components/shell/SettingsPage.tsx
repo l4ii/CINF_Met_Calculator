@@ -241,6 +241,10 @@ export default function SettingsPage({
     packageBuild: language === 'en' ? 'Installer packaging' : '安装包构建',
     backendHint: language === 'en' ? 'Deploy metadata & updater hint' : '分发标记与更新提示',
     aiHintTitle: language === 'en' ? 'Assistant backend' : '助手后端检测',
+    localDeployLabel: language === 'en' ? 'Local assistant deployment' : '本地助手部署',
+    electronVersionLabel: language === 'en' ? 'Electron version' : 'Electron 版本',
+    yes: language === 'en' ? 'Yes' : '是',
+    no: language === 'en' ? 'No' : '否',
   }
 
   const inferenceReady =
@@ -275,11 +279,11 @@ export default function SettingsPage({
               {deployInfo != null && (
                 <div className={`mt-4 rounded-lg border px-3 py-2 text-xs ${darkMode ? 'border-gray-600 bg-gray-800/60 text-gray-300' : 'border-gray-200 bg-gray-50 text-gray-700'}`}>
                   <div>
-                    cinfAssistantLocalDeploy:{' '}
-                    <span className="font-mono">{deployInfo.assistantLocalDeploy === false ? 'false' : 'true'}</span>
+                    {t.localDeployLabel}：{' '}
+                    <span>{deployInfo.assistantLocalDeploy === false ? t.no : t.yes}</span>
                   </div>
                   <div className="mt-1">
-                    Electron version: <span className="font-mono">{deployInfo.version ?? currentVersion}</span>
+                    {t.electronVersionLabel}：<span className="font-mono">{deployInfo.version ?? currentVersion}</span>
                   </div>
                 </div>
               )}

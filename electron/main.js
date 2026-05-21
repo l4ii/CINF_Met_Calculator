@@ -55,7 +55,7 @@ prepareStableUserDataPath()
 
 /** 与 frontend/src/constants/appCopy.ts 中 APP_NAME_ZH / APP_TAGLINE_ZH 保持同步 */
 const APP_DISPLAY_NAME = '长沙院冶金智能配料软件'
-const APP_SPLASH_TAGLINE = '基于能量守恒与质量守恒定律的专业冶金配料计算工具。'
+const APP_SPLASH_TAGLINE = '面向有色冶炼配料计算、渣型控制和物料平衡的专业工程工具。支持原料、熔剂、物相和阶段流程的本地化计算与复核。'
 
 // 仅根据是否打包判断：打包后的 exe 始终为生产模式
 const isDev = !app.isPackaged
@@ -721,6 +721,19 @@ ipcMain.handle('license:get-status', () => {
 
 ipcMain.handle('license:activate', async (_e, token) => {
   return license.activateWithToken(isDev, token)
+})
+
+ipcMain.handle('copper-case:save-desktop', async (_e, payload) => {
+  try {
+    const rawName = typeof payload?.fileName === 'string' ? payload.fileName : '铜冶炼案例.metcal-copper-case.json'
+    const baseName = path.basename(rawName).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    const fileName = baseName.endsWith('.metcal-copper-case.json') ? baseName : `${baseName}.metcal-copper-case.json`
+    const filePath = path.join(app.getPath('desktop'), fileName)
+    fs.writeFileSync(filePath, String(payload?.content ?? ''), 'utf8')
+    return { ok: true, filePath }
+  } catch (error) {
+    return { ok: false, error: error?.message ?? String(error) }
+  }
 })
 
 // 应用准备就绪

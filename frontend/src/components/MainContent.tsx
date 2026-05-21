@@ -1,7 +1,9 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { SMELT_TYPES, type SelectedMethod, type SheetId } from '../types'
 import RawMaterialPhaseOxygen from './modules/RawMaterialPhaseOxygen'
 import ProductDisplay from './modules/ProductDisplay'
+import LeadFlashBlendOptimizer from './modules/LeadFlashBlendOptimizer'
+import CopperWorkflow from './modules/CopperWorkflow'
 import ElementDistributionFab from './ElementDistributionFab'
 import ErrorBoundary from './ErrorBoundary'
 import { cardBase, descText } from '../theme/uiTheme'
@@ -21,6 +23,7 @@ interface MainContentProps {
   darkModeValue?: boolean
   onDarkModeChange?: (dark: boolean) => void
   onLanguageChange?: (lang: 'zh' | 'en') => void
+  onSheetSelect?: (sheet: SheetId) => void
 }
 
 export default function MainContent({
@@ -33,12 +36,15 @@ export default function MainContent({
   darkModeValue = false,
   onDarkModeChange,
   onLanguageChange,
+  onSheetSelect,
 }: MainContentProps) {
   const isEn = language === 'en'
   const appTitle = appTitleForLang(language)
   const appSubtitle = appSubtitleForLang(language)
   const { setAssistantSnapshot } = useAssistantSnapshotOptional()
   const calcCtx = useCalcOptional()
+  const [copperCaseTitleDraft, setCopperCaseTitleDraft] = useState('')
+  const [hasActiveCopperCase, setHasActiveCopperCase] = useState(false)
 
   useEffect(() => {
     const mats = calcCtx?.materials ?? []
@@ -86,7 +92,7 @@ export default function MainContent({
     return (
       <div className={`flex-1 flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
         <div className={darkMode ? 'text-gray-400' : 'text-gray-500'}>
-          {isEn ? 'Please select a smelting method from the left sidebar.' : '请从左侧选择冶炼方法'}
+          {isEn ? 'Please select a smelting method from the left sidebar.' : '请从左侧选择冶炼类型'}
         </div>
       </div>
     )
@@ -97,6 +103,10 @@ export default function MainContent({
     product: isEn ? 'Element distribution, slag, matte, noble antimony, Sb2O3 powder, flue gas' : '元素分配系数、熔炼渣、锑锍、贵锑、锑氧粉、烟气组分',
     heat_balance: isEn ? 'Heat balance (Coming soon)' : '热平衡计算（待实现）',
     furnace: isEn ? 'Furnace design (Coming soon)' : '炉型计算（待实现）',
+    cu_smelting: isEn ? 'Copper smelting' : '铜熔炼',
+    cu_converting: isEn ? 'Copper converting' : '铜吹炼',
+    cu_refining: isEn ? 'Copper refining' : '铜精炼',
+    cu_equipment: isEn ? 'Copper equipment selection' : '铜设备选型',
   }
 
   const selectedMethodDisplayName = (() => {
@@ -104,17 +114,34 @@ export default function MainContent({
     const smeltType = SMELT_TYPES.find((s) => s.id === selectedMethod.smeltTypeId)
     const method = smeltType?.methods.find((m) => m.id === selectedMethod.smeltMethodId)
     if (!method) return selectedMethod.smeltMethodName
+    if (method.id === 'copper') return 'Copper Smelting'
     if (method.id === 'oxy-side-blast') return 'Oxygen-Enriched Side-Blown'
     if (method.id === 'flash') return 'Flash Smelting'
     return method.name
   })()
+  const isLeadFlash = selectedMethod.smeltTypeId === 'pb' && selectedMethod.smeltMethodId === 'flash'
+  const isCopper = selectedMethod.smeltTypeId === 'cu'
+  const copperHeaderTitle = copperCaseTitleDraft || selectedMethodDisplayName
 
   return (
     <div className={`flex-[4] min-h-0 flex flex-col overflow-hidden ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
       <div className="flex-shrink-0 px-6 pt-4 pb-2">
         <h1 className={`text-2xl font-bold mb-1 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{appTitle}</h1>
         <p className={`text-sm mb-4 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{appSubtitle}</p>
-        <h2 className={`text-lg font-semibold mb-1 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{selectedMethodDisplayName}</h2>
+        {isCopper && hasActiveCopperCase ? (
+          <input
+            aria-label="案例名"
+            className={`mb-1 w-full max-w-xl rounded border bg-transparent px-2 py-1 text-lg font-semibold outline-none transition-colors ${
+              darkMode
+                ? 'border-gray-700 text-gray-100 focus:border-blue-500'
+                : 'border-transparent text-gray-900 hover:border-gray-300 focus:border-blue-500'
+            }`}
+            value={copperHeaderTitle}
+            onChange={(event) => setCopperCaseTitleDraft(event.target.value)}
+          />
+        ) : (
+          <h2 className={`text-lg font-semibold mb-1 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{selectedMethodDisplayName}</h2>
+        )}
         {selectedMethod.description && (
           <p className={`text-sm leading-relaxed max-w-3xl ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{selectedMethod.description}</p>
         )}
@@ -122,19 +149,51 @@ export default function MainContent({
 
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="w-full max-w-[1600px] mx-auto p-6">
-          {activeSheet === 'raw_material' && (
+          {isCopper && (
+            <ErrorBoundary>
+              <CopperWorkflow
+                darkMode={darkMode}
+                language={language}
+                activeSheet={activeSheet}
+                onStageSelect={onSheetSelect ?? (() => undefined)}
+                caseTitleDraft={copperCaseTitleDraft}
+                onActiveCaseNameChange={(name) => {
+                  setHasActiveCopperCase(Boolean(name))
+                  setCopperCaseTitleDraft(name ?? '')
+                }}
+              />
+            </ErrorBoundary>
+          )}
+          {!isCopper && activeSheet === 'raw_material' && (
             <ErrorBoundary>
               <div className="flex flex-col gap-6">
-                <RawMaterialPhaseOxygen darkMode={darkMode} language={language} />
+                {isLeadFlash ? (
+                  <LeadFlashBlendOptimizer darkMode={darkMode} language={language} />
+                ) : (
+                  <RawMaterialPhaseOxygen darkMode={darkMode} language={language} />
+                )}
               </div>
             </ErrorBoundary>
           )}
-          {activeSheet === 'product' && (
+          {!isCopper && activeSheet === 'product' && (
             <ErrorBoundary>
-              <ProductDisplay darkMode={darkMode} language={language} />
+              {isLeadFlash ? (
+                <div className={`${cardBase(darkMode)} mb-6`}>
+                  <p className={descText(darkMode)}>
+                    {isEn
+                      ? 'Phase calculation for lead flash smelting will use the optimized blend from the blending page and calculate sulfide/oxide phase assumptions.'
+                      : '物相计算将读取配矿计算得到的优化混料，并进一步计算硫化物、氧化物与返料物相假设。当前先完成约束配矿工作流。'}
+                  </p>
+                  <div className={`p-6 rounded-lg border-2 border-dashed ${darkMode ? 'border-gray-600 bg-gray-800/40 text-gray-400' : 'border-gray-300 bg-gray-50 text-gray-500'}`}>
+                    {isEn ? 'Lead flash phase calculation is under development.' : '闪速炼铅物相计算开发中。'}
+                  </div>
+                </div>
+              ) : (
+                <ProductDisplay darkMode={darkMode} language={language} />
+              )}
             </ErrorBoundary>
           )}
-          {activeSheet === 'heat_balance' && (
+          {!isCopper && activeSheet === 'heat_balance' && (
             <>
               <div className={`${cardBase(darkMode)} mb-6`}>
                 <p className={descText(darkMode)}>{sheetDescriptions.heat_balance}</p>
@@ -145,7 +204,7 @@ export default function MainContent({
               <ElementDistributionFab darkMode={darkMode} />
             </>
           )}
-          {activeSheet === 'furnace' && (
+          {!isCopper && activeSheet === 'furnace' && (
             <>
               <div className={`${cardBase(darkMode)} mb-6`}>
                 <p className={descText(darkMode)}>{sheetDescriptions.furnace}</p>

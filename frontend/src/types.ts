@@ -1,7 +1,15 @@
 // 配料软件 - 冶炼类型、冶炼方法、Sheet 定义
 
 /** Sheet ID（主内容区标签页） */
-export type SheetId = 'raw_material' | 'product' | 'heat_balance' | 'furnace'
+export type SheetId =
+  | 'raw_material'
+  | 'product'
+  | 'heat_balance'
+  | 'furnace'
+  | 'cu_smelting'
+  | 'cu_converting'
+  | 'cu_refining'
+  | 'cu_equipment'
 
 /** 冶炼方法 */
 export interface SmeltMethod {
@@ -34,7 +42,7 @@ export const SMELT_TYPES: SmeltType[] = [
     id: 'cu',
     name: '铜冶炼',
     methods: [
-      { id: 'oxy-side-blast', name: '富氧侧吹法', smeltTypeId: 'cu' },
+      { id: 'copper', name: '铜冶炼', smeltTypeId: 'cu' },
     ],
   },
   {
@@ -67,4 +75,11 @@ export const SHEETS: { id: SheetId; name: string }[] = [
   { id: 'product', name: '产出计算' },
   { id: 'heat_balance', name: '热平衡计算' },
   { id: 'furnace', name: '炉型计算' },
+]
+
+export const COPPER_SHEETS: { id: SheetId; name: string }[] = [
+  { id: 'cu_smelting', name: '熔炼' },
+  { id: 'cu_converting', name: '吹炼' },
+  { id: 'cu_refining', name: '精炼' },
+  { id: 'cu_equipment', name: '设备选型' },
 ]

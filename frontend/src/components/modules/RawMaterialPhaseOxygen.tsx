@@ -1902,26 +1902,32 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
             ? 'The oxygen-enriched air calculation uses the phase-analysis sulfide inventory as the reaction basis. Sb₂S₃ is oxidized to Sb₂O₃, while FeS and FeS₂ oxygen coefficients follow the selected iron oxidation product, then the result is corrected by the oxygen supply coefficient and oxygen concentration.'
             : '富氧空气计算以物相分析得到的硫化物量作为反应基础。Sb₂S₃ 按氧化生成 Sb₂O₃ 计，FeS 与 FeS₂ 的耗氧系数随所选铁氧化终产物联动，再结合供氧系数与富氧空气氧浓度折算供氧量、空气体积和成本。'}
         </p>
-        <div className="flex flex-wrap items-end gap-4 w-full">
-          <div className="flex-1 min-w-[7rem]">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:items-start">
+          <div className="min-w-0">
             <label className={labelBase(dark)}>{isEn ? 'Oxygen concentration (%)' : '氧气浓度 (%)'}</label>
             <input type="text" value={oxyPurity} onChange={(e) => setOxyPurity(e.target.value)}
               className={`${inputBase(dark)} w-full`} />
+            <p className={`${hintText(dark)} mt-2 min-h-[2.75rem] leading-relaxed`}>
+              {isEn ? 'O₂ volume fraction in oxygen-enriched air.' : '富氧空气中的 O₂ 体积分数，用于由实际需氧量折算空气体积。'}
+            </p>
           </div>
-          <div className="flex-1 min-w-[7rem]">
+          <div className="min-w-0">
             <label className={labelBase(dark)}>{isEn ? 'Oxygen supply coefficient' : '供氧系数'}</label>
             <input type="text" value={oxygenCoefficient} onChange={(e) => setOxygenCoefficient(e.target.value)}
               className={`${inputBase(dark)} w-full`} />
-            <p className={`${hintText(dark)} mt-1`}>
+            <p className={`${hintText(dark)} mt-2 min-h-[2.75rem] leading-relaxed`}>
               {isEn ? 'actual O₂ / theoretical O₂; 1 = theoretical, >1 = excess, <1 = partial supply' : '实际供氧/理论需氧；=1 为理论供氧，>1 为过量供氧，<1 为不足或部分氧化。'}
             </p>
           </div>
-          <div className="flex-1 min-w-[7rem]">
+          <div className="min-w-0">
             <label className={labelBase(dark)}>{isEn ? 'Unit price (CNY/Nm³)' : '单价 (元/Nm³)'}</label>
             <input type="text" value={oxyUnitPrice} onChange={(e) => setOxyUnitPrice(e.target.value)}
               className={`${inputBase(dark)} w-full`} placeholder="0.45" />
+            <p className={`${hintText(dark)} mt-2 min-h-[2.75rem] leading-relaxed`}>
+              {isEn ? 'Cost basis for oxygen-enriched air volume.' : '按富氧空气体积计价，用于汇总供氧成本。'}
+            </p>
           </div>
-          <div className="basis-full">
+          <div className="min-w-0 lg:col-span-2">
             <label className={labelBase(dark)}>{isEn ? 'Iron oxidation product for FeS/FeS₂' : 'FeS/FeS₂ 铁氧化终产物'}</label>
             <div className="mt-2 flex flex-wrap gap-2">
               {ironProductOptions.map((option) => (
@@ -1954,7 +1960,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
             </p>
           </div>
           {ironOxidationProduct === 'custom' && (
-            <div className="basis-full grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:col-span-2">
               <div>
                 <label className={labelBase(dark)}>{isEn ? 'FeS O₂ coefficient' : 'FeS 耗氧系数 (mol O₂/mol FeS)'}</label>
                 <input
@@ -1982,7 +1988,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
             </div>
           )}
           <button onClick={handleCalcOxygen} disabled={!phaseData}
-            className={phaseData ? btnPrimary(dark) : btnPrimaryDisabled(dark)}>
+            className={`${phaseData ? btnPrimary(dark) : btnPrimaryDisabled(dark)} w-full lg:w-auto lg:self-end lg:justify-self-end`}>
             {isEn ? 'Calculate O₂ demand and update materials' : '计算耗氧量并更新物料'}
           </button>
         </div>

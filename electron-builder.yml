@@ -65,7 +65,8 @@ nsis:
   displayLanguageSelector: false
   include: electron/build/installer.nsh
   warningsAsErrors: false
-  runAfterFinish: false
+  # 与 Flow 安装器一致：完成页显示「运行应用」复选框（默认勾选）
+  runAfterFinish: true
   # 不请求管理员权限；installer.nsh 中通过 customInstallMode 强制仅当前用户并跳过选择页，避免 UAC 导致安装程序重启、许可证页出现两次
   allowElevation: false
   perMachine: false

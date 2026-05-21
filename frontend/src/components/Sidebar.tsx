@@ -35,6 +35,7 @@ export default function Sidebar({
     sb: 'Antimony Smelting',
   }
   const methodNameEn: Record<string, string> = {
+    copper: 'Copper Smelting',
     'oxy-side-blast': 'Oxygen-Enriched Side-Blown',
     flash: 'Flash Smelting',
   }
@@ -43,6 +44,41 @@ export default function Sidebar({
     product: 'Product Calculation',
     heat_balance: 'Heat Balance',
     furnace: 'Furnace Design',
+    cu_smelting: 'Smelting',
+    cu_converting: 'Converting',
+    cu_refining: 'Refining',
+    cu_equipment: 'Equipment Selection',
+  }
+  const isLeadFlash = (method?: SelectedMethod | null) =>
+    method?.smeltTypeId === 'pb' && method?.smeltMethodId === 'flash'
+  const isCopper = (method?: SelectedMethod | null) => method?.smeltTypeId === 'cu'
+  const sheetLabel = (sheet: { id: SheetId; name: string }) => {
+    if (isCopper(selectedMethod)) {
+      if (language === 'en') {
+        if (sheet.id === 'raw_material') return 'Workflow'
+        if (sheet.id === 'cu_smelting') return 'Smelting'
+        if (sheet.id === 'cu_converting') return 'Converting'
+        if (sheet.id === 'cu_refining') return 'Refining'
+        if (sheet.id === 'cu_equipment') return 'Equipment Selection'
+      }
+      return sheet.name
+    }
+    if (isLeadFlash(selectedMethod)) {
+      if (language === 'en') {
+        if (sheet.id === 'raw_material') return 'Blend Calculation'
+        if (sheet.id === 'product') return 'Phase Calculation'
+        if (sheet.id === 'heat_balance') return 'Heat Balance'
+      } else {
+        if (sheet.id === 'raw_material') return '配矿计算'
+        if (sheet.id === 'product') return '物相计算'
+        if (sheet.id === 'heat_balance') return '热平衡计算'
+      }
+    }
+    return language === 'en' ? (sheetNameEn[sheet.id] ?? sheet.name) : sheet.name
+  }
+  const visibleSheets = () => {
+    if (isLeadFlash(selectedMethod)) return SHEETS.filter((sheet) => sheet.id !== 'furnace')
+    return SHEETS
   }
   const t = ABOUT_NAV[language]
 
@@ -93,9 +129,38 @@ export default function Sidebar({
         </div>
       </div>
 
-      {/* 冶炼类型 → 冶炼方法（可展开显示计算模块） */}
+      {/* 冶炼类型 → 冶炼方法 */}
       <div className="sidebar-scroll flex-1 overflow-y-auto p-3 min-h-0">
-        {SMELT_TYPES.map((smeltType) => (
+        {SMELT_TYPES.map((smeltType) => {
+          if (smeltType.id === 'cu') {
+            const active = selectedMethod?.smeltTypeId === 'cu'
+            const copperMethod = smeltType.methods[0]
+            return (
+              <div key={smeltType.id} className="mb-3">
+                <button
+                  onClick={() => {
+                    onMethodSelect({
+                      smeltTypeId: smeltType.id,
+                      smeltTypeName: language === 'en' ? (smeltTypeNameEn[smeltType.id] ?? smeltType.name) : smeltType.name,
+                      smeltMethodId: copperMethod?.id ?? 'copper',
+                      smeltMethodName: language === 'en' ? 'Copper Smelting' : '铜冶炼',
+                      description: copperMethod?.description,
+                    })
+                  }}
+                  className={`w-full text-left px-2 py-2 rounded-lg text-base font-bold transition-colors ${
+                    active
+                      ? 'bg-blue-600 text-white'
+                      : darkMode
+                      ? 'text-gray-300 hover:bg-gray-800 hover:text-gray-100'
+                      : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+                  }`}
+                >
+                  {language === 'en' ? (smeltTypeNameEn[smeltType.id] ?? smeltType.name) : smeltType.name}
+                </button>
+              </div>
+            )
+          }
+          return (
           <div key={smeltType.id} className="mb-3">
             <div
               className={`w-full text-left text-base font-bold mb-1 px-2 py-1.5 ${
@@ -137,7 +202,7 @@ export default function Sidebar({
                     </button>
                     {expanded && active && (
                       <div className="pl-4 mt-1 space-y-0.5">
-                        {SHEETS.map((sheet) => {
+                        {visibleSheets().map((sheet) => {
                           const sheetActive = activeSheet === sheet.id
                           return (
                             <button
@@ -154,7 +219,7 @@ export default function Sidebar({
                                   : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
                               }`}
                             >
-                              {language === 'en' ? (sheetNameEn[sheet.id] ?? sheet.name) : sheet.name}
+                              {sheetLabel(sheet)}
                             </button>
                           )
                         })}
@@ -165,7 +230,7 @@ export default function Sidebar({
               })}
             </div>
           </div>
-        ))}
+        )})}
       </div>
 
       {/* 了解我们、设置 */}
