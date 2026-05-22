@@ -78,6 +78,46 @@ const O_IN_SIO2 = 32 / 60.084
 const SI_IN_SIO2 = 28.085 / 60.084
 const O_IN_CAO = 16 / 56.077
 const CA_IN_CAO = 40.078 / 56.077
+const CU_IN_CU2O = (2 * 63.546) / 143.09
+const CU_IN_CU2S = (2 * 63.546) / 159.16
+const FE_IN_FEO = 55.845 / 71.844
+const FE_IN_FE2O3 = (2 * 55.845) / 159.688
+const FE_IN_FE3O4 = (3 * 55.845) / 231.533
+const FE_IN_FES = 55.845 / 87.91
+const AL_IN_AL2O3 = (2 * 26.982) / 101.961
+const S_IN_CU2S = 32.066 / 159.16
+const S_IN_FES = 32.066 / 87.91
+
+export const COPPER_PHASE_ASSIGNMENT_KEYS = [
+  'Cu2S',
+  'FeS',
+  'S',
+  'Cu2O',
+  'FeO',
+  'Fe2O3',
+  'Fe3O4',
+  'SiO2',
+  'CaO',
+  'Al2O3',
+  'C',
+] as const
+export type CopperPhaseAssignmentKey = (typeof COPPER_PHASE_ASSIGNMENT_KEYS)[number]
+
+export const COPPER_PHASE_OXYGEN_FACTORS: Partial<Record<CopperPhaseAssignmentKey, number>> = {
+  Cu2O: 16 / 143.09,
+  FeO: 16 / 71.844,
+  Fe2O3: 48 / 159.688,
+  Fe3O4: 64 / 231.533,
+  SiO2: O_IN_SIO2,
+  CaO: O_IN_CAO,
+  Al2O3: 48 / 101.961,
+}
+
+export const COPPER_PHASE_SULFUR_FACTORS: Partial<Record<CopperPhaseAssignmentKey, number>> = {
+  Cu2S: S_IN_CU2S,
+  FeS: S_IN_FES,
+  S: 1,
+}
 
 export const DEFAULT_COPPER_SOLVENTS: CopperSolvent[] = [
   {
@@ -406,36 +446,182 @@ export function createDefaultSolventColumns(weights: Record<string, number> = {}
   }))
 }
 
+function parsePhaseNumeric(value: string | number | undefined, fallback = 0) {
+  const n = typeof value === 'number' ? value : parseFloat(String(value ?? '').replace(',', '.'))
+  return Number.isFinite(n) ? Math.max(0, n) : fallback
+}
+
+export function parsePhaseActivityFactor(
+  phases: Record<string, CopperPhaseInput>,
+  phaseKey: string,
+  fallback = 1
+) {
+  const value = phases[phaseKey]
+  if (value && typeof value === 'object') {
+    const factor = parsePhaseNumeric(value.factor ?? value.coefficient, fallback)
+    return factor > 0 ? factor : fallback
+  }
+  return fallback
+}
+
+function phaseContentFromElement(elementAmount: number, elementFractionInPhase: number, activity: number) {
+  if (elementAmount <= 0 || elementFractionInPhase <= 0 || activity <= 0) return 0
+  return elementAmount / (elementFractionInPhase * activity)
+}
+
+function assignCoupledPhase(
+  phaseKey: CopperPhaseAssignmentKey,
+  pairs: Array<{ element: CopperElementKey; fraction: number }>,
+  remaining: Partial<Record<CopperElementKey, number>>,
+  phaseInputs: Record<string, CopperPhaseInput>,
+  contents: Record<CopperPhaseAssignmentKey, number>
+) {
+  const activity = parsePhaseActivityFactor(phaseInputs, phaseKey)
+  let limitingContent = Infinity
+  for (const { element, fraction } of pairs) {
+    const amount = remaining[element] ?? 0
+    if (amount <= 0 || fraction <= 0) return
+    limitingContent = Math.min(limitingContent, amount / (fraction * activity))
+  }
+  if (!Number.isFinite(limitingContent) || limitingContent <= 0) return
+  contents[phaseKey] = limitingContent
+  const effective = limitingContent * activity
+  for (const { element, fraction } of pairs) {
+    remaining[element] = Math.max(0, (remaining[element] ?? 0) - effective * fraction)
+  }
+}
+
+export function derivePhaseContentsFromElements(
+  ratios: CopperRatios,
+  phaseInputs: Record<string, CopperPhaseInput>
+): Record<CopperPhaseAssignmentKey, number> {
+  const remaining: Partial<Record<CopperElementKey, number>> = {}
+  for (const element of COPPER_ELEMENT_KEYS) {
+    if (element === 'O (氧)' || element === 'C (碳)' || element === 'Other(其他)') continue
+    const amount = ratios[element]
+    if (Number.isFinite(amount) && amount > 0) remaining[element] = amount
+  }
+
+  const contents = Object.fromEntries(COPPER_PHASE_ASSIGNMENT_KEYS.map((key) => [key, 0])) as Record<
+    CopperPhaseAssignmentKey,
+    number
+  >
+
+  const assignSingle = (phaseKey: CopperPhaseAssignmentKey, element: CopperElementKey, fraction: number) => {
+    const amount = remaining[element] ?? 0
+    if (amount <= 0) return
+    contents[phaseKey] = phaseContentFromElement(amount, fraction, parsePhaseActivityFactor(phaseInputs, phaseKey))
+    remaining[element] = 0
+  }
+
+  assignCoupledPhase(
+    'Cu2S',
+    [
+      { element: 'Cu(铜)', fraction: CU_IN_CU2S },
+      { element: 'S (硫)', fraction: S_IN_CU2S },
+    ],
+    remaining,
+    phaseInputs,
+    contents
+  )
+  assignCoupledPhase(
+    'FeS',
+    [
+      { element: 'Fe(铁)', fraction: FE_IN_FES },
+      { element: 'S (硫)', fraction: S_IN_FES },
+    ],
+    remaining,
+    phaseInputs,
+    contents
+  )
+  assignSingle('S', 'S (硫)', 1)
+  assignSingle('Cu2O', 'Cu(铜)', CU_IN_CU2O)
+
+  const feRemaining = remaining['Fe(铁)'] ?? 0
+  if (feRemaining > 0) {
+    const ironPhases: Array<{ key: CopperPhaseAssignmentKey; fraction: number }> = [
+      { key: 'FeO', fraction: FE_IN_FEO },
+      { key: 'Fe2O3', fraction: FE_IN_FE2O3 },
+      { key: 'Fe3O4', fraction: FE_IN_FE3O4 },
+    ]
+    const weights = ironPhases.map(({ key }) => {
+      const value = phaseInputs[key]
+      if (value && typeof value === 'object') {
+        const weight = parsePhaseNumeric(value.factor ?? value.coefficient, 0)
+        return weight > 0 ? weight : 0
+      }
+      return 1
+    })
+    const weightSum = weights.reduce((sum, weight) => sum + weight, 0)
+    const normalizedWeights = weightSum > 0 ? weights : ironPhases.map(() => 1)
+    const normalizedSum = normalizedWeights.reduce((sum, weight) => sum + weight, 0)
+    ironPhases.forEach(({ key, fraction }, index) => {
+      const feShare = feRemaining * (normalizedWeights[index] / normalizedSum)
+      if (feShare > 0) {
+        contents[key] = phaseContentFromElement(feShare, fraction, parsePhaseActivityFactor(phaseInputs, key))
+      }
+    })
+    remaining['Fe(铁)'] = 0
+  }
+
+  assignSingle('SiO2', 'Si(硅)', SI_IN_SIO2)
+  assignSingle('CaO', 'Ca(钙)', CA_IN_CAO)
+  assignSingle('Al2O3', 'Al(铝)', AL_IN_AL2O3)
+
+  const carbonKnown = ratios['C (碳)'] ?? 0
+  contents.C = carbonKnown > 0
+    ? phaseContentFromElement(carbonKnown, 1, parsePhaseActivityFactor(phaseInputs, 'C'))
+    : 0
+
+  return contents
+}
+
+export function calculatePhaseElementCompletion(
+  ratios: CopperRatios,
+  phaseInputs: Record<string, CopperPhaseInput>
+) {
+  const phaseContents = derivePhaseContentsFromElements(ratios, phaseInputs)
+  const phasesForCalc = Object.fromEntries(
+    Object.entries(phaseContents).map(([key, content]) => [
+      key,
+      { value: content, factor: parsePhaseActivityFactor(phaseInputs, key) },
+    ])
+  )
+  return {
+    phaseContents,
+    unknowns: calculateUnknownsFromPhases(phasesForCalc, ratios),
+  }
+}
+
 export function calculateUnknownsFromPhases(
   phases: Record<string, CopperPhaseInput>,
   currentRatios: CopperRatios
 ): Pick<Record<CopperElementKey, number>, 'O (氧)' | 'C (碳)' | 'Other(其他)'> {
-  const parsed = (value: string | number | undefined, fallback = 0) => {
-    const n = typeof value === 'number' ? value : parseFloat(String(value ?? '').replace(',', '.'))
-    return Number.isFinite(n) ? Math.max(0, n) : fallback
-  }
   const phase = (name: string) => {
     const value = phases[name]
     if (value && typeof value === 'object') {
-      return parsed(value.value ?? value.x) * parsed(value.factor ?? value.coefficient, 1)
+      return parsePhaseNumeric(value.value ?? value.x) * parsePhaseActivityFactor(phases, name)
     }
-    return parsed(value)
+    return parsePhaseNumeric(value)
   }
-  const oxygen =
-    phase('Cu2O') * (16 / 143.09) +
-    phase('FeO') * (16 / 71.844) +
-    phase('Fe2O3') * (48 / 159.688) +
-    phase('Fe3O4') * (64 / 231.533) +
-    phase('SiO2') * O_IN_SIO2 +
-    phase('CaO') * O_IN_CAO +
-    phase('Al2O3') * (48 / 101.961)
+  const oxygenRaw =
+    phase('Cu2O') * (COPPER_PHASE_OXYGEN_FACTORS.Cu2O ?? 0) +
+    phase('FeO') * (COPPER_PHASE_OXYGEN_FACTORS.FeO ?? 0) +
+    phase('Fe2O3') * (COPPER_PHASE_OXYGEN_FACTORS.Fe2O3 ?? 0) +
+    phase('Fe3O4') * (COPPER_PHASE_OXYGEN_FACTORS.Fe3O4 ?? 0) +
+    phase('SiO2') * (COPPER_PHASE_OXYGEN_FACTORS.SiO2 ?? 0) +
+    phase('CaO') * (COPPER_PHASE_OXYGEN_FACTORS.CaO ?? 0) +
+    phase('Al2O3') * (COPPER_PHASE_OXYGEN_FACTORS.Al2O3 ?? 0)
   const carbon = phase('C')
-  const knownWithoutUnknowns = calculateKnownTotal({
+  const assayExclusiveOfOC = calculateKnownTotal({
     ...currentRatios,
     'O (氧)': 0,
     'C (碳)': 0,
   })
-  const other = Math.max(0, 100 - knownWithoutUnknowns - oxygen - carbon)
+  // 物相氧加总可能超出化验元素为 100% 时剩余空间；若仅用 Other=0 截断，合计会超过 100%。将 O 限制在闭包预算内。
+  const oxygenBudget = Math.max(0, 100 - assayExclusiveOfOC - carbon)
+  const oxygen = Math.min(oxygenRaw, oxygenBudget)
+  const other = Math.max(0, 100 - assayExclusiveOfOC - oxygen - carbon)
   return { 'O (氧)': oxygen, 'C (碳)': carbon, 'Other(其他)': other }
 }
 

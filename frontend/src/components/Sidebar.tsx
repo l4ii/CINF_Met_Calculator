@@ -105,7 +105,7 @@ export default function Sidebar({
 
   return (
     <div
-      className={`w-[270px] shrink-0 border-r flex flex-col ${
+      className={`h-full min-h-0 w-[270px] shrink-0 border-r flex flex-col ${
         darkMode ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'
       }`}
     >
@@ -130,7 +130,7 @@ export default function Sidebar({
       </div>
 
       {/* 冶炼类型 → 冶炼方法 */}
-      <div className="sidebar-scroll flex-1 overflow-y-auto p-3 min-h-0">
+      <div className="sidebar-scroll flex-1 min-h-0 overflow-y-auto p-3">
         {SMELT_TYPES.map((smeltType) => {
           if (smeltType.id === 'cu') {
             const active = selectedMethod?.smeltTypeId === 'cu'

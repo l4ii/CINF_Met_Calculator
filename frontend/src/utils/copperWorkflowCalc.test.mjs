@@ -2,11 +2,14 @@ import assert from 'node:assert/strict'
 
 const {
   COPPER_ELEMENT_KEYS,
+  COPPER_MATERIAL_LIBRARY,
   DEFAULT_COPPER_SOLVENTS,
   calculateKnownTotal,
+  calculatePhaseElementCompletion,
   calculateUnknownsFromPhases,
   calculateWeightedComposition,
   createDefaultCopperMaterials,
+  derivePhaseContentsFromElements,
   parseCopperLibraryCsv,
   solveCopperSolvents,
   elementRatiosToSolventComposition,
@@ -110,6 +113,98 @@ assert.equal(correctedPhaseUnknowns['C (碳)'], 2.5)
 assert.equal(
   correctedPhaseUnknowns['Other(其他)'].toFixed(3),
   (100 - expectedCorrectedOxygen - 2.5).toFixed(3)
+)
+
+const derivedPhases = derivePhaseContentsFromElements(rawMaterials[0].ratios, {
+  Cu2S: { factor: 1 },
+  FeS: { factor: 1 },
+  S: { factor: 1 },
+  SiO2: { factor: 1 },
+  CaO: { factor: 1 },
+  Al2O3: { factor: 1 },
+  Cu2O: { factor: 1 },
+  FeO: { factor: 1 },
+  Fe2O3: { factor: 0 },
+  Fe3O4: { factor: 0 },
+  C: { factor: 1 },
+})
+assert(derivedPhases.Cu2S > 0)
+assert(derivedPhases.FeS > 0)
+assert(derivedPhases.SiO2 > 0)
+assert.equal(derivedPhases.Fe2O3, 0)
+assert.equal(derivedPhases.Fe3O4, 0)
+
+const concentrateCompletion = calculatePhaseElementCompletion(rawMaterials[0].ratios, {
+  Cu2S: { factor: 1 },
+  FeS: { factor: 1 },
+  S: { factor: 1 },
+  SiO2: { factor: 1 },
+  CaO: { factor: 1 },
+  Al2O3: { factor: 1 },
+  Cu2O: { factor: 1 },
+  FeO: { factor: 1 },
+  Fe2O3: { factor: 1 },
+  Fe3O4: { factor: 1 },
+  C: { factor: 1 },
+})
+assert.equal(
+  Math.round(
+    (calculateKnownTotal({ ...rawMaterials[0].ratios, ...concentrateCompletion.unknowns }) +
+      concentrateCompletion.unknowns['Other(其他)']) *
+      1000
+  ) / 1000,
+  100
+)
+
+const completion = calculatePhaseElementCompletion(
+  { 'Si(硅)': 10 },
+  {
+    Cu2S: { factor: 1 },
+    FeS: { factor: 1 },
+    S: { factor: 1 },
+    SiO2: { factor: 1 },
+    CaO: { factor: 1 },
+    Al2O3: { factor: 1 },
+    Cu2O: { factor: 1 },
+    FeO: { factor: 1 },
+    Fe2O3: { factor: 1 },
+    Fe3O4: { factor: 1 },
+    C: { factor: 1 },
+  },
+)
+assert.equal(
+  Math.round((calculateKnownTotal({ 'Si(硅)': 10, ...completion.unknowns }) + completion.unknowns['Other(其他)']) * 1000) / 1000,
+  100
+)
+
+const standardPhaseFactors = {
+  Cu2S: { factor: 1 },
+  FeS: { factor: 1 },
+  S: { factor: 1 },
+  SiO2: { factor: 1 },
+  CaO: { factor: 1 },
+  Al2O3: { factor: 1 },
+  Cu2O: { factor: 1 },
+  FeO: { factor: 1 },
+  Fe2O3: { factor: 1 },
+  Fe3O4: { factor: 1 },
+  C: { factor: 1 },
+}
+const complexConc = COPPER_MATERIAL_LIBRARY.find((m) => m.id === 'cu-conc-complex')
+assert(complexConc)
+const complexCompletion = calculatePhaseElementCompletion(complexConc.ratios, standardPhaseFactors)
+assert.equal(
+  Math.round(
+    (calculateKnownTotal({ ...complexConc.ratios, ...complexCompletion.unknowns }) +
+      complexCompletion.unknowns['Other(其他)']) *
+      1000
+  ) / 1000,
+  100,
+  'phase completion must close to 100% even when stoichiometric oxide O exceeds assay headroom (e.g. 复杂铜精矿)'
+)
+assert.ok(
+  complexCompletion.unknowns['O (氧)'] < 8,
+  'oxygen should be capped-down from raw phase sum so total does not exceed 100%'
 )
 
 const ironOreElements = solventOxidesToElements(DEFAULT_COPPER_SOLVENTS[1].composition)

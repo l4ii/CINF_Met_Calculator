@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
+﻿import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type ReactNode, type RefObject } from 'react'
 import type { SheetId } from '../../types'
 import { APP_NAME_ZH } from '../../constants/appCopy'
-import { btnPrimary, btnSecondary, cardBase, hintText, inputBase, inputSm, resultBox, sectionTitle } from '../../theme/uiTheme'
+import { btnPrimary, btnSecondary, cardBase, hintText, inputBase, inputSm, sectionTitle } from '../../theme/uiTheme'
 import {
   buildCopperBatchExportFilename,
   buildCopperBatchExportHtml,
@@ -16,14 +16,18 @@ import {
   COPPER_MATERIAL_LIBRARY,
   DEFAULT_COPPER_SOLVENTS,
   calculateKnownTotal,
-  calculateUnknownsFromPhases,
+  calculatePhaseElementCompletion,
   calculateWeightedComposition,
+  COPPER_PHASE_OXYGEN_FACTORS,
+  COPPER_PHASE_SULFUR_FACTORS,
   createDefaultCopperMaterials,
   createDefaultSolventColumns,
+  emptyCopperRatios,
   elementRatiosToSolventComposition,
   parseCopperLibraryCsv,
   solveCopperSolvents,
   type CopperElementKey,
+  type CopperPhaseAssignmentKey,
   type CopperLibraryMaterial,
   type CopperMaterialColumn,
   type CopperRatios,
@@ -34,6 +38,8 @@ import {
   calculateCopperHeatBalance,
   calculateCopperProducts,
   type CopperFuelMaterial,
+  type CopperProductKey,
+  type CopperProductResult,
 } from '../../utils/copperProcessCalc'
 
 interface CopperWorkflowProps {
@@ -47,6 +53,10 @@ interface CopperWorkflowProps {
 
 type PhaseDraftEntry = { value: string; factor: string }
 type PhaseDraft = Record<string, PhaseDraftEntry>
+type PhaseUnknowns = Pick<Record<CopperElementKey, number>, 'O (氧)' | 'C (碳)' | 'Other(其他)'>
+type PhasePreviewUnknowns = { materialId: string; phaseContents: Record<string, number>; values: PhaseUnknowns }
+type SingleLibraryRow = { id: string; libraryMaterialId?: string; name: string; ratios: CopperRatios }
+type LibraryMaterialDialogMode = 'add' | 'edit'
 type EquipmentStageId = 'smelting' | 'converting' | 'refining'
 type SolveInputStatus = 'none' | 'pending' | 'resolved'
 type CopperCaseStageId = Extract<SheetId, 'cu_smelting' | 'cu_converting' | 'cu_refining' | 'cu_equipment'>
@@ -68,6 +78,11 @@ interface CopperCaseRecord {
   targetCaOSiO2: string
   solventSolution: CopperSolventSolution | null
   phaseDrafts: Record<string, PhaseDraft>
+  phaseCompletedMaterials: Record<string, boolean>
+  phasePreviewUnknowns: PhasePreviewUnknowns | null
+  solventPreviewSolution: CopperSolventSolution | null
+  productPreviewReady: boolean
+  heatPreviewReady: boolean
   manualPhaseCells: Record<string, boolean>
   manualSolventWeights: Record<string, boolean>
   manualFuelWeightValid: boolean
@@ -142,6 +157,9 @@ const STAGES: { id: SheetId; name: string; description: ReactNode }[] = [
 const PRODUCT_DISPLAY_ELEMENTS: CopperElementKey[] = ['Cu(铜)', 'Fe(铁)', 'S (硫)', 'Si(硅)', 'Ca(钙)', 'C (碳)', 'O (氧)', 'Other(其他)']
 
 const PHASE_FIELDS = [
+  { key: 'Cu2S', label: 'Cu₂S' },
+  { key: 'FeS', label: 'FeS' },
+  { key: 'S', label: 'S' },
   { key: 'Cu2O', label: 'Cu₂O' },
   { key: 'FeO', label: 'FeO' },
   { key: 'Fe2O3', label: 'Fe₂O₃' },
@@ -152,20 +170,14 @@ const PHASE_FIELDS = [
   { key: 'C', label: 'C' },
 ]
 
-const PHASE_OXYGEN_FACTORS: Record<string, number> = {
-  Cu2O: 16 / 143.09,
-  FeO: 16 / 71.844,
-  Fe2O3: 48 / 159.688,
-  Fe3O4: 64 / 231.533,
-  SiO2: 32 / 60.084,
-  CaO: 16 / 56.077,
-  Al2O3: 48 / 101.961,
-}
+const PHASE_OXYGEN_FACTORS = COPPER_PHASE_OXYGEN_FACTORS
+const PHASE_SULFUR_FACTORS = COPPER_PHASE_SULFUR_FACTORS
 
 const DEFAULT_PHASE_DRAFT: PhaseDraft = Object.fromEntries(
-  PHASE_FIELDS.map((field) => [field.key, { value: '0', factor: '1' }])
+  PHASE_FIELDS.map((field) => [field.key, { value: '', factor: '1' }])
 ) as PhaseDraft
 const PHASE_UNKNOWN_ELEMENTS = new Set<CopperElementKey>(['O (氧)', 'C (碳)', 'Other(其他)'])
+const PHASE_UNKNOWN_KEYS: Array<keyof PhaseUnknowns> = ['O (氧)', 'C (碳)', 'Other(其他)']
 
 function readCopperCaseRecords(): CopperCaseRecord[] {
   if (typeof window === 'undefined') return []
@@ -196,6 +208,26 @@ function sortCopperCaseRecords(records: CopperCaseRecord[]) {
 
 function padDatePart(value: number) {
   return String(value).padStart(2, '0')
+}
+
+function formatPhaseCell(value: number | null, digits = 3) {
+  return value == null ? '—' : format(value, digits)
+}
+
+const COPPER_PRODUCT_SUMMARY_KEYS: CopperProductKey[] = ['matte', 'slag', 'gas', 'dust', 'loss']
+
+function assistAlertPanelClassName(darkMode: boolean, tone: 'success' | 'warning') {
+  const base = 'rounded-lg border p-3 text-sm'
+  return tone === 'success'
+    ? `${base} ${darkMode ? 'border-emerald-700 bg-emerald-950/30 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`
+    : `${base} ${darkMode ? 'border-amber-700 bg-amber-950/30 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-900'}`
+}
+
+function formatCopperProductMassSummary(productResult: CopperProductResult) {
+  return COPPER_PRODUCT_SUMMARY_KEYS.map((key) => {
+    const p = productResult.products[key]
+    return `${p.name} ${format(p.mass)} t/h`
+  }).join('；')
 }
 
 function formatCopperCaseTimestamp(date: Date) {
@@ -325,6 +357,11 @@ function normalizeImportedCopperCase(payload: unknown): CopperCaseRecord | null 
     targetCaOSiO2: candidate.targetCaOSiO2 ?? '0.45',
     solventSolution: cloneSolventSolution(candidate.solventSolution ?? null),
     phaseDrafts: candidate.phaseDrafts ?? {},
+    phaseCompletedMaterials: candidate.phaseCompletedMaterials ?? {},
+    phasePreviewUnknowns: candidate.phasePreviewUnknowns ?? null,
+    solventPreviewSolution: cloneSolventSolution(candidate.solventPreviewSolution ?? null),
+    productPreviewReady: candidate.productPreviewReady ?? false,
+    heatPreviewReady: candidate.heatPreviewReady ?? false,
     manualPhaseCells: candidate.manualPhaseCells ?? {},
     manualSolventWeights: candidate.manualSolventWeights ?? {},
     manualFuelWeightValid: candidate.manualFuelWeightValid ?? false,
@@ -363,6 +400,15 @@ function format(v: number, digits = 3) {
 
 function displaySolventName(name: string) {
   return name === '石灰' ? '石灰石' : name
+}
+
+function createSingleLibraryRow(suffix = 0): SingleLibraryRow {
+  const timestamp = Date.now()
+  return {
+    id: `library-row-${timestamp}-${suffix}`,
+    name: '',
+    ratios: emptyCopperRatios(),
+  }
 }
 
 function nextStage(activeSheet: SheetId) {
@@ -446,8 +492,14 @@ export default function CopperWorkflow({
   const [materialLibrary, setMaterialLibrary] = useState<CopperLibraryMaterial[]>(() => [...COPPER_MATERIAL_LIBRARY])
   const [showLibrary, setShowLibrary] = useState(false)
   const [importFeedback, setImportFeedback] = useState<string | null>(null)
+  const [showSingleLibraryAddDialog, setShowSingleLibraryAddDialog] = useState(false)
+  const [libraryMaterialDialogMode, setLibraryMaterialDialogMode] = useState<LibraryMaterialDialogMode>('add')
+  const [libraryDialogMessage, setLibraryDialogMessage] = useState<string | null>(null)
+  const [singleLibraryRows, setSingleLibraryRows] = useState<SingleLibraryRow[]>(() => [createSingleLibraryRow()])
   const [phaseMaterialId, setPhaseMaterialId] = useState<string | null>(null)
   const [phaseDrafts, setPhaseDrafts] = useState<Record<string, PhaseDraft>>({})
+  const [phaseCompletedMaterials, setPhaseCompletedMaterials] = useState<Record<string, boolean>>({})
+  const [phasePreviewUnknowns, setPhasePreviewUnknowns] = useState<PhasePreviewUnknowns | null>(null)
   const [manualPhaseCells, setManualPhaseCells] = useState<Record<string, boolean>>({})
   const [manualSolventWeights, setManualSolventWeights] = useState<Record<string, boolean>>({})
   const [manualFuelWeightValid, setManualFuelWeightValid] = useState(false)
@@ -466,6 +518,8 @@ export default function CopperWorkflow({
   const [targetFeSiO2, setTargetFeSiO2] = useState('2.8')
   const [targetCaOSiO2, setTargetCaOSiO2] = useState('0.45')
   const [solventSolution, setSolventSolution] = useState<CopperSolventSolution | null>(null)
+  const [solventPreviewSolution, setSolventPreviewSolution] = useState<CopperSolventSolution | null>(null)
+  const [productPreviewReady, setProductPreviewReady] = useState(false)
   const [fuelColumn, setFuelColumn] = useState<CopperFuelMaterial>(() => ({
     ...DEFAULT_COPPER_FUEL,
     ratios: { ...DEFAULT_COPPER_FUEL.ratios },
@@ -479,6 +533,7 @@ export default function CopperWorkflow({
   const [dustTemperature, setDustTemperature] = useState('450')
   const [heatLossMJh, setHeatLossMJh] = useState('1500')
   const [otherHeatMJh, setOtherHeatMJh] = useState('0')
+  const [heatPreviewReady, setHeatPreviewReady] = useState(false)
   const [heatBalanced, setHeatBalanced] = useState(false)
   const [annualHours, setAnnualHours] = useState('7200')
   const [equipmentIntensity, setEquipmentIntensity] = useState('32')
@@ -550,7 +605,7 @@ export default function CopperWorkflow({
   const phaseCellKey = (materialId: string, element: CopperElementKey) => `${materialId}:${element}`
   const phaseCellStatus = (material: CopperMaterialColumn, element: CopperElementKey): SolveInputStatus => {
     if (!PHASE_UNKNOWN_ELEMENTS.has(element)) return 'none'
-    return phaseCompleted || manualPhaseCells[phaseCellKey(material.id, element)] ? 'resolved' : 'pending'
+    return phaseCompletedMaterials[material.id] || manualPhaseCells[phaseCellKey(material.id, element)] ? 'resolved' : 'pending'
   }
 
   const solventWeightStatus = (materialId: string): SolveInputStatus =>
@@ -578,7 +633,13 @@ export default function CopperWorkflow({
   const activeCase = activeCaseId ? caseRecords.find((record) => record.id === activeCaseId) ?? null : null
   const isCopperProcessSheet = activeSheet === 'cu_smelting' || activeSheet === 'cu_converting' || activeSheet === 'cu_refining'
   const nextProcessStage = nextStage(activeSheet)
-  const canProceed = isCopperProcessSheet ? solventSolution?.valid === true && heatBalanced : false
+  const allPhaseMaterialsCompleted = rawMaterials.every(
+    (material) =>
+      phaseCompletedMaterials[material.id] ||
+      (['O (氧)', 'C (碳)', 'Other(其他)'] as CopperElementKey[]).every((element) => manualPhaseCells[phaseCellKey(material.id, element)])
+  )
+  const manualSolventsReady = solventColumns.every((material) => material.weight > 0 || manualSolventWeights[material.id])
+  const canProceed = isCopperProcessSheet ? solventSolution?.valid === true && productCalculated && heatBalanced : false
   const calculationTableWidth = Math.max(720, 34 + 76 + rawMaterials.length * 128 + solventColumns.length * 96 + 112 + 112 + 34 + 96 + 96)
   const productOutputRows = useMemo(() => {
     if (!productCalculated) return []
@@ -713,25 +774,37 @@ export default function CopperWorkflow({
     downloadCopperBatchExcel(filename, html)
   }
 
+  const activePhasePreview =
+    selectedPhaseMaterial && phasePreviewUnknowns?.materialId === selectedPhaseMaterial.id ? phasePreviewUnknowns : null
+
   const phaseRows = useMemo(
     () =>
       PHASE_FIELDS.map((field) => {
-        const draft = currentPhaseDraft[field.key] ?? { value: '0', factor: '1' }
-        const effective = toNumber(draft.value) * toNumber(draft.factor, 1)
+        const draft = currentPhaseDraft[field.key] ?? { value: '', factor: '1' }
+        const derivedContent = activePhasePreview?.phaseContents[field.key as CopperPhaseAssignmentKey] ?? null
+        const activity = toNumber(draft.factor, 1)
+        const effective = derivedContent == null ? null : derivedContent * activity
         return {
           ...field,
           draft,
-          oxygen: effective * (PHASE_OXYGEN_FACTORS[field.key] ?? 0),
-          carbon: field.key === 'C' ? effective : 0,
+          derivedContent,
+          oxygen: effective == null ? null : effective * (PHASE_OXYGEN_FACTORS[field.key as CopperPhaseAssignmentKey] ?? 0),
+          sulfur: effective == null ? null : effective * (PHASE_SULFUR_FACTORS[field.key as CopperPhaseAssignmentKey] ?? 0),
+          carbon: field.key === 'C' ? effective : null,
         }
       }),
-    [currentPhaseDraft]
+    [activePhasePreview, currentPhaseDraft]
   )
 
   const updateRawMaterial = (id: string, patch: Partial<CopperMaterialColumn>) => {
     setRawMaterials((prev) => prev.map((material) => (material.id === id ? { ...material, ...patch } : material)))
     setSolventSolution(null)
+    setSolventPreviewSolution(null)
+    setProductPreviewReady(false)
+    setHeatPreviewReady(false)
     setPhaseCompleted(false)
+    setPhaseCompletedMaterials((prev) => ({ ...prev, [id]: false }))
+    setPhasePreviewUnknowns((prev) => (prev?.materialId === id ? null : prev))
     setProductCalculated(false)
     setHeatBalanced(false)
   }
@@ -744,6 +817,9 @@ export default function CopperWorkflow({
   const updateSolventColumn = (id: string, patch: Partial<CopperMaterialColumn>) => {
     setSolventColumns((prev) => prev.map((material) => (material.id === id ? { ...material, ...patch } : material)))
     setSolventSolution(null)
+    setSolventPreviewSolution(null)
+    setProductPreviewReady(false)
+    setHeatPreviewReady(false)
     setProductCalculated(false)
     setHeatBalanced(false)
   }
@@ -756,7 +832,7 @@ export default function CopperWorkflow({
 
   const updateFuelColumn = (patch: Partial<CopperFuelMaterial>) => {
     setFuelColumn((prev) => ({ ...prev, ...patch }))
-    setProductCalculated(false)
+    setHeatPreviewReady(false)
     setHeatBalanced(false)
   }
 
@@ -811,6 +887,9 @@ export default function CopperWorkflow({
     ])
     setRawWeightDrafts((prev) => ({ ...prev, [id]: '' }))
     setSolventSolution(null)
+    setSolventPreviewSolution(null)
+    setProductPreviewReady(false)
+    setHeatPreviewReady(false)
     setPhaseCompleted(false)
     setProductCalculated(false)
     setHeatBalanced(false)
@@ -834,6 +913,119 @@ export default function CopperWorkflow({
     setImportFeedback(`已批量导入 ${imported.length} 种原料到原料库。`)
   }
 
+  const singleLibraryRowTotal = (row: SingleLibraryRow) =>
+    calculateKnownTotal(row.ratios) + (row.ratios['Other(其他)'] ?? 0)
+
+  const addSingleLibraryRow = () => {
+    setLibraryDialogMessage(null)
+    setSingleLibraryRows((prev) => [...prev, createSingleLibraryRow(prev.length)])
+  }
+
+  const removeSingleLibraryRow = (id: string) => {
+    setLibraryDialogMessage(null)
+    setSingleLibraryRows((prev) => (prev.length <= 1 ? prev : prev.filter((row) => row.id !== id)))
+  }
+
+  const updateSingleLibraryRowName = (id: string, value: string) => {
+    setLibraryDialogMessage(null)
+    setSingleLibraryRows((prev) => prev.map((row) => (row.id === id ? { ...row, name: value } : row)))
+  }
+
+  const updateSingleLibraryRowRatio = (id: string, element: CopperElementKey, value: string) => {
+    setLibraryDialogMessage(null)
+    setSingleLibraryRows((prev) =>
+      prev.map((row) =>
+        row.id === id
+          ? { ...row, ratios: { ...row.ratios, [element]: isValidNumberText(value) ? toNumber(value, 0) : 0 } }
+          : row
+      )
+    )
+  }
+
+  const closeLibraryMaterialDialog = () => {
+    setLibraryDialogMessage(null)
+    setShowSingleLibraryAddDialog(false)
+    setLibraryMaterialDialogMode('add')
+    setSingleLibraryRows([createSingleLibraryRow()])
+  }
+
+  const openLibraryMaterialAddDialog = () => {
+    setLibraryMaterialDialogMode('add')
+    setLibraryDialogMessage(null)
+    setSingleLibraryRows([createSingleLibraryRow()])
+    setShowSingleLibraryAddDialog(true)
+  }
+
+  const openLibraryMaterialEditDialog = (material: CopperLibraryMaterial) => {
+    setLibraryMaterialDialogMode('edit')
+    setLibraryDialogMessage(null)
+    setSingleLibraryRows([
+      {
+        id: createSingleLibraryRow().id,
+        libraryMaterialId: material.id,
+        name: material.name,
+        ratios: { ...emptyCopperRatios(), ...material.ratios },
+      },
+    ])
+    setShowSingleLibraryAddDialog(true)
+  }
+
+  const submitLibraryMaterialDialog = () => {
+    if (libraryMaterialDialogMode === 'edit') {
+      const row = singleLibraryRows[0]
+      const editId = row?.libraryMaterialId
+      if (!row || !editId) {
+        setLibraryDialogMessage('无法保存：未找到原料记录。')
+        return
+      }
+      const trimmed = row.name.trim()
+      if (trimmed.length === 0) {
+        setLibraryDialogMessage('请输入原料名称后再保存。')
+        return
+      }
+      const total = singleLibraryRowTotal(row)
+      if (total > 100) {
+        setLibraryDialogMessage(`${trimmed} 的成分合计不能超过 100%。当前合计为 ${format(total)}%。`)
+        return
+      }
+      setLibraryDialogMessage(null)
+      setMaterialLibrary((prev) =>
+        prev.map((m) =>
+          m.id === editId ? { ...m, name: trimmed, ratios: { ...row.ratios } } : m
+        )
+      )
+      setImportFeedback(`已更新原料库：${trimmed}`)
+      closeLibraryMaterialDialog()
+      setShowLibrary(true)
+      return
+    }
+
+    const rowsToAdd = singleLibraryRows.filter((row) => row.name.trim().length > 0)
+    if (rowsToAdd.length === 0) {
+      setLibraryDialogMessage('请输入原料名称后再添加到原料库。')
+      return
+    }
+    const invalidRow = rowsToAdd.find((row) => singleLibraryRowTotal(row) > 100)
+    if (invalidRow) {
+      setLibraryDialogMessage(
+        `${invalidRow.name.trim()} 的成分合计不能超过 100%。当前合计为 ${format(singleLibraryRowTotal(invalidRow))}%。`
+      )
+      return
+    }
+    setLibraryDialogMessage(null)
+    const materials = rowsToAdd.map((row, index): CopperLibraryMaterial => ({
+      id: `cu-library-custom-${Date.now()}-${index}`,
+      name: row.name.trim(),
+      category: 'concentrate',
+      ratios: { ...row.ratios },
+      unitPrice: 0,
+    }))
+    setMaterialLibrary((prev) => [...prev, ...materials])
+    setImportFeedback(`已添加 ${materials.length} 种原料到原料库。`)
+    closeLibraryMaterialDialog()
+    setShowLibrary(true)
+  }
+
   const removeLibraryMaterial = (id: string) => {
     const target = materialLibrary.find((material) => material.id === id)
     setMaterialLibrary((prev) => prev.filter((material) => material.id !== id))
@@ -850,6 +1042,15 @@ export default function CopperWorkflow({
       return next
     })
     setSolventSolution(null)
+    setSolventPreviewSolution(null)
+    setProductPreviewReady(false)
+    setHeatPreviewReady(false)
+    setPhaseCompletedMaterials((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+    setPhasePreviewUnknowns((prev) => (prev?.materialId === id ? null : prev))
     setPhaseCompleted(false)
     setProductCalculated(false)
     setHeatBalanced(false)
@@ -867,6 +1068,7 @@ export default function CopperWorkflow({
 
   const openElementAssist = (materialId: string) => {
     setPhaseMaterialId(materialId)
+    setPhasePreviewUnknowns((prev) => (prev?.materialId === materialId ? prev : null))
     setShowElementAssist(true)
     scrollToAssist(elementAssistRef)
   }
@@ -888,6 +1090,7 @@ export default function CopperWorkflow({
 
   const updateHeatField = (setter: (value: string) => void, value: string) => {
     setter(value)
+    setHeatPreviewReady(false)
     setHeatBalanced(false)
   }
 
@@ -895,10 +1098,27 @@ export default function CopperWorkflow({
     setEquipmentAdjustments((prev) => ({ ...prev, [id]: value }))
   }
 
+  const calculateHeatBalancePreview = () => {
+    if (!productCalculated) {
+      setWorkflowMessage('请先完成产出计算并回填产出，再进行热平衡计算。')
+      openProductAssist()
+      return
+    }
+    setHeatPreviewReady(true)
+    setHeatBalanced(false)
+    setWorkflowMessage(
+      `热平衡已计算：热缺口 ${format(Math.max(0, heatBalance.heatDeficitMJh), 0)} MJ/h，推荐燃料煤 ${format(heatBalance.requiredFuelWeight)} t/h（表中当前 ${format(fuelColumn.weight)} t/h），请确认后点击「回填燃料煤并复算」。`
+    )
+  }
+
   const applyFuelFromHeatBalance = () => {
     if (!productCalculated) {
-      setWorkflowMessage('请先完成产出计算，再进行热平衡燃料煤回填。')
+      setWorkflowMessage('请先完成产出计算并回填产出，再进行热平衡燃料煤回填。')
       openProductAssist()
+      return
+    }
+    if (!heatPreviewReady) {
+      setWorkflowMessage('请先点击计算热平衡，确认结果后再回填燃料煤。')
       return
     }
     setFuelColumn((prev) => ({
@@ -909,13 +1129,15 @@ export default function CopperWorkflow({
     }))
     setProductCalculated(true)
     setHeatBalanced(true)
-    setWorkflowMessage('已回填燃料煤并复算混料与产物。')
+    setWorkflowMessage(
+      `已回填燃料煤 ${format(heatBalance.requiredFuelWeight)} t/h；热平衡残差约 ${format(heatBalance.balanceAfterFuelMJh, 0)} MJ/h，已复算混料与产物并写回配料总表。`
+    )
     scrollToCalculationTable()
   }
 
   const solveSolvents = () => {
-    if (!phaseCompleted) {
-      setWorkflowMessage('请先完成物相折算与元素补全，再计算熔剂投料量。')
+    if (!allPhaseMaterialsCompleted) {
+      setWorkflowMessage('请先逐一完成所有原料的物相折算与元素补全，再计算熔剂投料量。')
       setShowElementAssist(true)
       scrollToAssist(elementAssistRef)
       return
@@ -935,30 +1157,61 @@ export default function CopperWorkflow({
       targetCaOSiO2: toNumber(targetCaOSiO2, 0.45),
       solvents,
     })
+    setSolventPreviewSolution(solution)
+    setWorkflowMessage(solution.valid ? '熔剂投料量已计算，请确认结果后回填到配料总表。' : solution.message ?? '熔剂投料量未能求解。')
+  }
+
+  const applySolventSolution = () => {
+    const solution = solventPreviewSolution
+    if (!solution?.valid) {
+      setWorkflowMessage('请先计算出有效的熔剂投料量，再回填到配料总表。')
+      return
+    }
     setSolventSolution(solution)
-    setWorkflowMessage(solution.valid ? null : solution.message ?? '熔剂投料量未能求解。')
-    if (!solution.valid) return
     setSolventColumns((prev) =>
       prev.map((column) => ({
         ...column,
         weight: solution.solventWeights[column.name] ?? 0,
       }))
     )
+    setManualSolventWeights(() =>
+      Object.fromEntries(solventColumns.map((column) => [column.id, true])) as Record<string, boolean>
+    )
+    setProductPreviewReady(false)
     setProductCalculated(false)
+    setHeatPreviewReady(false)
     setHeatBalanced(false)
+    setWorkflowMessage(`已回填：石灰 ${format(solution.solventWeights['石灰'] ?? 0)} t/h，铁矿石 ${format(solution.solventWeights['铁矿石'] ?? 0)} t/h。`)
     scrollToCalculationTable()
   }
 
-  const calculateProductsAndRefill = () => {
-    if (!solventSolution?.valid) {
-      setWorkflowMessage('请先完成熔剂投料量计算，再进行产出计算。')
+  const calculateProductsPreview = () => {
+    if (!solventSolution?.valid && !manualSolventsReady) {
+      setWorkflowMessage('请先完成熔剂投料量计算并回填，或手动输入有效熔剂投料量，再进行产出计算。')
       setShowSolventAssist(true)
       scrollToAssist(solventAssistRef)
       return
     }
-    setProductCalculated(true)
+    setProductPreviewReady(true)
+    setProductCalculated(false)
+    setHeatPreviewReady(false)
     setHeatBalanced(false)
-    setWorkflowMessage('产出计算已完成，并回填到配料总表右侧产物栏。')
+    setWorkflowMessage(
+      `产出已计算：产物总量 ${format(productResult.totalProductMass)} t/h（${formatCopperProductMassSummary(productResult)}），请确认后点击「回填产出」。`
+    )
+  }
+
+  const refillProductsToTable = () => {
+    if (!productPreviewReady) {
+      setWorkflowMessage('请先点击计算产出，确认结果后再回填。')
+      return
+    }
+    setProductCalculated(true)
+    setHeatPreviewReady(false)
+    setHeatBalanced(false)
+    setWorkflowMessage(
+      `产出已回填：配料总表右侧产出栏数据已写入；产物总量 ${format(productResult.totalProductMass)} t/h（${formatCopperProductMassSummary(productResult)}）。`
+    )
     scrollToCalculationTable()
   }
 
@@ -968,24 +1221,47 @@ export default function CopperWorkflow({
       [materialId]: {
         ...(prev[materialId] ?? DEFAULT_PHASE_DRAFT),
         [key]: {
-          ...((prev[materialId] ?? DEFAULT_PHASE_DRAFT)[key] ?? { value: '0', factor: '1' }),
+          ...((prev[materialId] ?? DEFAULT_PHASE_DRAFT)[key] ?? { value: '', factor: '1' }),
           [field]: value,
         },
       },
     }))
+    setPhasePreviewUnknowns((prev) => (prev?.materialId === materialId ? null : prev))
+  }
+
+  const calculatePhaseUnknownsPreview = () => {
+    if (!selectedPhaseMaterial) return
+    const result = calculatePhaseElementCompletion(selectedPhaseMaterial.ratios, currentPhaseDraft)
+    setPhasePreviewUnknowns({
+      materialId: selectedPhaseMaterial.id,
+      phaseContents: result.phaseContents,
+      values: result.unknowns,
+    })
+    const u = result.unknowns
+    setWorkflowMessage(
+      `已计算 ${selectedPhaseMaterial.name}：O ${format(u['O (氧)'])}%、C ${format(u['C (碳)'])}%、Other ${format(u['Other(其他)'])}%，待回填配料总表。`
+    )
   }
 
   const applyPhaseUnknowns = () => {
     if (!selectedPhaseMaterial) return
-    const unknowns = calculateUnknownsFromPhases(currentPhaseDraft, selectedPhaseMaterial.ratios)
+    const preview = activePhasePreview?.values ?? null
+    if (!preview) {
+      setWorkflowMessage('请先计算元素补全结果，再回填到配料总表。')
+      return
+    }
     updateRawMaterial(selectedPhaseMaterial.id, {
       ratios: {
         ...selectedPhaseMaterial.ratios,
-        ...unknowns,
+        ...preview,
       },
     })
-    setPhaseCompleted(true)
-    setWorkflowMessage('物相折算已回填，可继续计算熔剂投料量。')
+    const nextCompleted = { ...phaseCompletedMaterials, [selectedPhaseMaterial.id]: true }
+    setPhaseCompletedMaterials(nextCompleted)
+    setPhaseCompleted(rawMaterials.every((material) => nextCompleted[material.id] === true))
+    setWorkflowMessage(
+      `已回填 ${selectedPhaseMaterial.name}：O ${format(preview['O (氧)'])}%、C ${format(preview['C (碳)'])}%、Other ${format(preview['Other(其他)'])}% 写入配料总表，可继续计算熔剂投料量。`
+    )
     scrollToCalculationTable()
   }
 
@@ -1011,6 +1287,17 @@ export default function CopperWorkflow({
       targetCaOSiO2,
       solventSolution: cloneSolventSolution(solventSolution),
       phaseDrafts: { ...phaseDrafts },
+      phaseCompletedMaterials: { ...phaseCompletedMaterials },
+      phasePreviewUnknowns: phasePreviewUnknowns
+        ? {
+            materialId: phasePreviewUnknowns.materialId,
+            phaseContents: { ...phasePreviewUnknowns.phaseContents },
+            values: { ...phasePreviewUnknowns.values },
+          }
+        : null,
+      solventPreviewSolution: cloneSolventSolution(solventPreviewSolution),
+      productPreviewReady,
+      heatPreviewReady,
       manualPhaseCells: { ...manualPhaseCells },
       manualSolventWeights: { ...manualSolventWeights },
       manualFuelWeightValid,
@@ -1078,6 +1365,11 @@ export default function CopperWorkflow({
     setTargetCaOSiO2(record.targetCaOSiO2 ?? '0.45')
     setSolventSolution(cloneSolventSolution(record.solventSolution ?? null))
     setPhaseDrafts(record.phaseDrafts ?? {})
+    setPhaseCompletedMaterials(record.phaseCompletedMaterials ?? {})
+    setPhasePreviewUnknowns(record.phasePreviewUnknowns ?? null)
+    setSolventPreviewSolution(cloneSolventSolution(record.solventPreviewSolution ?? null))
+    setProductPreviewReady(record.productPreviewReady ?? false)
+    setHeatPreviewReady(record.heatPreviewReady ?? false)
     setManualPhaseCells(record.manualPhaseCells ?? {})
     setManualSolventWeights(record.manualSolventWeights ?? {})
     setManualFuelWeightValid(record.manualFuelWeightValid ?? false)
@@ -1169,6 +1461,17 @@ export default function CopperWorkflow({
     }
   }
 
+  const handleCaseDrop = (event: ReactDragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const file = event.dataTransfer.files?.[0] ?? null
+    if (!file) return
+    if (!file.name.endsWith('.metcal-copper-case.json') && !file.name.endsWith('.json')) {
+      setCaseMessage('请拖入 .metcal-copper-case.json 案例文件。')
+      return
+    }
+    void importCopperCaseFile(file)
+  }
+
   const confirmSaveBeforeCaseNavigation = (sheet: SheetId) => {
     if (sheet === activeSheet) return
     if (activeCaseId && activeSheet !== 'raw_material' && activeCase) {
@@ -1228,13 +1531,13 @@ export default function CopperWorkflow({
 
   if (activeSheet === 'raw_material') {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6" onDrop={handleCaseDrop} onDragOver={(event) => event.preventDefault()}>
         <div className={cardBase(darkMode)}>
           <div className={`flex flex-wrap items-start justify-between gap-4 border-b pb-4 ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
             <div>
               <h3 className={sectionTitle(darkMode)}>{isEn ? 'Copper Project Workspace' : '铜冶炼项目工作区'}</h3>
               <p className={`${hintText(darkMode)} max-w-5xl leading-relaxed`}>
-                用于建立、管理和追溯铜冶炼计算案例。新建案例后进入熔炼工作表，后续可在同一案例内完成吹炼、精炼和设备选型计算。
+                用于建立、管理和追溯铜冶炼计算案例。新建案例后进入熔炼工作表，后续可在同一案例内完成吹炼、精炼和设备选型计算；也可拖入 .metcal-copper-case.json 案例文件导入。
               </p>
             </div>
           </div>
@@ -1434,10 +1737,13 @@ export default function CopperWorkflow({
           <div>
             <h3 className={`${sectionTitle(darkMode)} mb-1`}>原料库</h3>
             <p className={`${hintText(darkMode)} leading-relaxed`}>
-              原料库用于维护铜冶炼可选原料的元素含量。可展开查看内置样例，也可从 Excel 另存的 CSV/制表符文本中批量导入原料。
+            原料库用于管理铜冶炼的所有原料数据。您可以在此修改现有原料的成分，或通过新增、导入来扩充原料库。
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <button className={btnSecondary(darkMode)} onClick={openLibraryMaterialAddDialog}>
+              添加
+            </button>
             <label className={btnPrimary(darkMode)}>
               导入
               <input
@@ -1456,6 +1762,21 @@ export default function CopperWorkflow({
           </div>
         </div>
 
+        <AddLibraryMaterialDialog
+          darkMode={darkMode}
+          mode={libraryMaterialDialogMode}
+          open={showSingleLibraryAddDialog}
+          message={libraryDialogMessage}
+          rows={singleLibraryRows}
+          rowTotal={singleLibraryRowTotal}
+          onAddRow={addSingleLibraryRow}
+          onRemoveRow={removeSingleLibraryRow}
+          onNameChange={updateSingleLibraryRowName}
+          onRatioChange={updateSingleLibraryRowRatio}
+          onCancel={closeLibraryMaterialDialog}
+          onSubmit={submitLibraryMaterialDialog}
+        />
+
         {importFeedback && (
           <div className={`mt-3 rounded-lg border px-3 py-2 text-sm ${darkMode ? 'border-blue-700 bg-blue-950/30 text-blue-100' : 'border-blue-200 bg-blue-50 text-blue-800'}`}>
             {importFeedback}
@@ -1464,34 +1785,66 @@ export default function CopperWorkflow({
 
         {showLibrary && (
           <div className={`mt-4 overflow-auto rounded-lg border ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
-            <table className="w-full min-w-[1220px] table-fixed text-sm">
+            <table className="w-full min-w-[1020px] table-fixed text-sm">
+              <colgroup>
+                <col className="w-[6.75rem]" />
+                {COPPER_ELEMENT_KEYS.map((element) => (
+                  <col key={element} className="w-[2.875rem]" />
+                ))}
+                <col className="w-[7rem]" />
+              </colgroup>
               <thead className={darkMode ? 'bg-gray-800 text-gray-300' : 'bg-gray-50 text-gray-600'}>
                 <tr>
-                  <th className="w-32 px-2 py-2 text-left">原料</th>
+                  <th className="px-1 py-2 text-left text-sm font-semibold">原料</th>
                   {COPPER_ELEMENT_KEYS.map((element) => (
-                    <th key={element} className="w-16 px-1.5 py-2 text-right">{element.replace(/\(.+\)/, '')}</th>
+                    <th key={element} className="px-0.5 py-2 text-right text-sm font-semibold leading-tight">
+                      {element.replace(/\(.+\)/, '')}
+                    </th>
                   ))}
-                  <th className="w-20 px-2 py-2 text-center">操作</th>
+                  <th className="px-0.5 py-2 text-center text-sm font-semibold">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {materialLibrary.map((material) => (
                   <tr key={material.id} className={`border-t ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
-                    <td className="px-2 py-1.5 font-medium">{material.name}</td>
+                    <td
+                      className="truncate px-1 py-1.5 align-middle font-medium"
+                      title={material.name}
+                    >
+                      <span className="block truncate">{material.name}</span>
+                    </td>
                     {COPPER_ELEMENT_KEYS.map((element) => (
-                      <td key={element} className="px-1.5 py-1.5 text-right font-mono">{format(material.ratios[element] ?? 0, 2)}</td>
+                      <td key={element} className="px-0.5 py-1.5 text-right align-middle font-mono text-sm tabular-nums leading-none">
+                        {format(material.ratios[element] ?? 0, 2)}
+                      </td>
                     ))}
-                    <td className="px-2 py-1.5 text-center">
-                      <button
-                        type="button"
-                        className={`rounded border px-2 py-1 text-xs font-medium transition-colors ${
-                          darkMode ? 'border-red-800 text-red-200 hover:bg-red-950/40' : 'border-red-200 text-red-700 hover:bg-red-50'
-                        }`}
-                        title="原料库移除"
-                        onClick={() => removeLibraryMaterial(material.id)}
-                      >
-                        删除
-                      </button>
+                    <td className="px-1 py-1.5 text-center align-middle">
+                      <div className="flex flex-nowrap items-center justify-center gap-0.5">
+                        <button
+                          type="button"
+                          className={`rounded px-2 py-1 text-sm font-medium leading-tight whitespace-nowrap shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-1 ${
+                            darkMode
+                              ? 'bg-blue-600 text-white hover:bg-blue-500 focus-visible:ring-offset-gray-900'
+                              : 'bg-blue-600 text-white hover:bg-blue-700 focus-visible:ring-offset-white'
+                          }`}
+                          title="修改原料库条目"
+                          onClick={() => openLibraryMaterialEditDialog(material)}
+                        >
+                          修改
+                        </button>
+                        <button
+                          type="button"
+                          className={`rounded px-2 py-1 text-sm font-medium leading-tight whitespace-nowrap shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-1 ${
+                            darkMode
+                              ? 'bg-red-600 text-white hover:bg-red-500 focus-visible:ring-offset-gray-900'
+                              : 'bg-red-600 text-white hover:bg-red-700 focus-visible:ring-offset-white'
+                          }`}
+                          title="原料库移除"
+                          onClick={() => removeLibraryMaterial(material.id)}
+                        >
+                          删除
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1772,17 +2125,22 @@ export default function CopperWorkflow({
                 <button className={btnSecondary(darkMode)} onClick={() => setPhaseMaterialId(null)}>清除选择</button>
               )}
             </div>
+            <div className={`rounded-lg border px-3 py-2 text-sm ${darkMode ? 'border-gray-600 bg-gray-800/30 text-gray-200' : 'border-gray-200 bg-gray-50 text-gray-800'}`}>
+              软件严格遵循冶金热力学中的质量守恒定律，通过物相的化学计量关系进行顺序反推。
+            </div>
             {selectedPhaseMaterial && (
               <>
                 <div className={`overflow-auto rounded-lg border ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
-                  <table className="w-full min-w-[720px] table-fixed text-sm">
+                  <table className="w-full min-w-[1040px] table-fixed text-sm">
                     <thead className={darkMode ? 'bg-gray-800 text-gray-300' : 'bg-gray-50 text-gray-600'}>
                       <tr>
                         <th className="w-28 px-2 py-2 text-center">物相/产物</th>
-                        <th className="w-28 px-2 py-2 text-center">含量 x(%)</th>
-                        <th className="w-36 px-2 py-2 text-center">折算/活度修正系数</th>
-                        <th className="w-28 px-2 py-2 text-center">O贡献</th>
-                        <th className="w-28 px-2 py-2 text-center">C贡献</th>
+                        <th className="w-32 px-2 py-2 text-center">活度修正系数</th>
+                        <th className="w-28 px-2 py-2 text-center">含量(%)</th>
+                        <th className="w-24 px-2 py-2 text-center">S贡献</th>
+                        <th className="w-24 px-2 py-2 text-center">O贡献</th>
+                        <th className="w-24 px-2 py-2 text-center">C贡献</th>
+                        <th className="w-24 px-2 py-2 text-center">Other</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1792,28 +2150,52 @@ export default function CopperWorkflow({
                           <td className="px-2 py-1.5">
                             <input
                               className={`${inputSm(darkMode)} w-full text-center font-mono text-sm`}
-                              value={row.draft.value}
-                              onChange={(event) => updatePhaseDraft(selectedPhaseMaterial.id, row.key, 'value', event.target.value)}
-                            />
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <input
-                              className={`${inputSm(darkMode)} w-full text-center font-mono text-sm`}
                               value={row.draft.factor}
                               onChange={(event) => updatePhaseDraft(selectedPhaseMaterial.id, row.key, 'factor', event.target.value)}
                             />
                           </td>
-                          <td className="px-2 py-1.5 text-center font-mono">{format(row.oxygen)}</td>
-                          <td className="px-2 py-1.5 text-center font-mono">{format(row.carbon)}</td>
+                          <td className="px-2 py-1.5 text-center font-mono">{formatPhaseCell(row.derivedContent)}</td>
+                          <td className="px-2 py-1.5 text-center font-mono">{formatPhaseCell(row.sulfur)}</td>
+                          <td className="px-2 py-1.5 text-center font-mono">{formatPhaseCell(row.oxygen)}</td>
+                          <td className="px-2 py-1.5 text-center font-mono">{formatPhaseCell(row.carbon)}</td>
+                          <td className="px-2 py-1.5 text-center font-mono">{formatPhaseCell(null)}</td>
                         </tr>
                       ))}
                     </tbody>
+                    {activePhasePreview && (
+                      <tfoot className={darkMode ? 'border-t border-gray-600 bg-emerald-950/20 text-emerald-100' : 'border-t border-gray-200 bg-emerald-50 text-emerald-900'}>
+                        <tr>
+                          <td className="px-2 py-2 text-center font-semibold">元素补全</td>
+                          <td className="px-2 py-2 text-center font-mono">{formatPhaseCell(null)}</td>
+                          <td className="px-2 py-2 text-center font-mono">{formatPhaseCell(null)}</td>
+                          <td className="px-2 py-2 text-center font-mono">{formatPhaseCell(null)}</td>
+                          {PHASE_UNKNOWN_KEYS.map((element) => (
+                            <td key={element} className="px-2 py-2 text-center font-mono font-semibold">
+                              {format(activePhasePreview.values[element] ?? 0)}
+                            </td>
+                          ))}
+                        </tr>
+                      </tfoot>
+                    )}
                   </table>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className={hintText(darkMode)}>O = Σ(x × 系数 × 物相含氧质量分数)，C = x × 系数，Other = 100 - 已知元素 - O - C。</div>
-                  <button className={btnPrimary(darkMode)} onClick={applyPhaseUnknowns}>回填元素补全结果</button>
+                  <div className={hintText(darkMode)}>
+                    在配料总表双击 O / C / Other 进入本步骤；调整活度后开始<strong>计算</strong>再<strong>回填</strong>。
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button className={btnSecondary(darkMode)} onClick={calculatePhaseUnknownsPreview}>计算元素补全结果</button>
+                    <button className={btnPrimary(darkMode)} onClick={applyPhaseUnknowns}>回填到配料总表</button>
+                  </div>
                 </div>
+                {selectedPhaseMaterial &&
+                  (activePhasePreview?.materialId === selectedPhaseMaterial.id || phaseCompletedMaterials[selectedPhaseMaterial.id]) && (
+                    <div className={assistAlertPanelClassName(darkMode, 'success')}>
+                      {activePhasePreview?.materialId === selectedPhaseMaterial.id && !phaseCompletedMaterials[selectedPhaseMaterial.id]
+                        ? `已计算，待回填：O ${format(activePhasePreview.values['O (氧)'])}%、C ${format(activePhasePreview.values['C (碳)'])}%、Other ${format(activePhasePreview.values['Other(其他)'])}%，请点击「回填到配料总表」。`
+                        : `已回填：${selectedPhaseMaterial.name} 的 O / C / Other 已写入配料总表${phaseCompleted ? '（全部原料已完成）' : '（可切换其他未完成原料继续）'}。`}
+                    </div>
+                  )}
               </>
             )}
           </div>
@@ -1854,9 +2236,13 @@ export default function CopperWorkflow({
                       {solventColumns.map((column) => (
                         <tr key={`solvent-result-${column.id}`} className={`border-t ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
                           <td className="px-2 py-1.5 text-center font-medium">{displaySolventName(column.name)}</td>
-                          <td className="px-2 py-1.5 text-center font-mono">{format(column.weight)}</td>
+                          <td className="px-2 py-1.5 text-center font-mono">{format(solventPreviewSolution?.valid ? solventPreviewSolution.solventWeights[column.name] ?? column.weight : column.weight)}</td>
                           <td className="px-2 py-1.5 text-center">
-                            {solventWeightStatus(column.id) === 'resolved' ? '已回填/手动输入' : '待计算或输入'}
+                            {solventWeightStatus(column.id) === 'resolved'
+                              ? '已回填/手动输入'
+                              : solventPreviewSolution?.valid
+                              ? '待回填'
+                              : '待计算或输入'}
                           </td>
                         </tr>
                       ))}
@@ -1866,13 +2252,16 @@ export default function CopperWorkflow({
               </div>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <button className={btnPrimary(darkMode)} onClick={solveSolvents}>计算并回填熔剂</button>
+              <button className={btnSecondary(darkMode)} onClick={solveSolvents}>计算熔剂投料量</button>
+              <button className={btnPrimary(darkMode)} onClick={applySolventSolution}>回填熔剂投料量</button>
             </div>
-            {solventSolution && (
-              <div className={`rounded-lg border p-3 text-sm ${solventSolution.valid ? (darkMode ? 'border-emerald-700 bg-emerald-950/30 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-900') : (darkMode ? 'border-amber-700 bg-amber-950/30 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-900')}`}>
-                {solventSolution.valid
+            {(solventPreviewSolution || solventSolution) && (
+              <div className={assistAlertPanelClassName(darkMode, solventPreviewSolution?.valid || solventSolution?.valid ? 'success' : 'warning')}>
+                {solventPreviewSolution?.valid
+                  ? `已计算，待回填：石灰 ${format(solventPreviewSolution.solventWeights['石灰'] ?? 0)} t/h，铁矿石 ${format(solventPreviewSolution.solventWeights['铁矿石'] ?? 0)} t/h。`
+                  : solventSolution?.valid
                   ? `已回填：石灰 ${format(solventSolution.solventWeights['石灰'] ?? 0)} t/h，铁矿石 ${format(solventSolution.solventWeights['铁矿石'] ?? 0)} t/h。`
-                  : solventSolution.message}
+                  : solventPreviewSolution?.message ?? solventSolution?.message}
               </div>
             )}
           </div>
@@ -1905,7 +2294,7 @@ export default function CopperWorkflow({
                   </tr>
                 </thead>
                 <tbody>
-                  {productCalculated ? (
+                  {(productPreviewReady || productCalculated) ? (
                     Object.values(productResult.products).map((product) => (
                       <tr key={product.key} className={`border-t ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
                         <td className="px-2 py-1.5 text-center font-medium">{product.name}</td>
@@ -1925,9 +2314,17 @@ export default function CopperWorkflow({
                 </tbody>
               </table>
             </div>
-            <div className="flex justify-end">
-              <button className={btnPrimary(darkMode)} onClick={calculateProductsAndRefill}>计算并回填产出</button>
+            <div className="flex justify-end gap-2">
+              <button className={btnSecondary(darkMode)} onClick={calculateProductsPreview}>计算产出</button>
+              <button className={btnPrimary(darkMode)} onClick={refillProductsToTable}>回填产出</button>
             </div>
+            {(productPreviewReady || productCalculated) && (
+              <div className={assistAlertPanelClassName(darkMode, 'success')}>
+                {productCalculated
+                  ? `已回填：配料总表右侧产出栏已与当前计算对齐；产物总量 ${format(productResult.totalProductMass)} t/h（${formatCopperProductMassSummary(productResult)}）。如需重算请先再次点击「计算产出」。`
+                  : `已计算，待回填：产物总量 ${format(productResult.totalProductMass)} t/h（${formatCopperProductMassSummary(productResult)}），请点击「回填产出」。`}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1994,10 +2391,20 @@ export default function CopperWorkflow({
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className={hintText(darkMode)}>
-                当前配料总表燃料煤：{format(fuelColumn.weight)} t/h；热平衡残差：{format(heatBalanced ? heatBalance.balanceAfterFuelMJh : heatBalance.heatDeficitMJh, 0)} MJ/h。
+                当前配料总表燃料煤：{format(fuelColumn.weight)} t/h；{heatPreviewReady || heatBalanced ? `热平衡残差：${format(heatBalanced ? heatBalance.balanceAfterFuelMJh : heatBalance.heatDeficitMJh, 0)} MJ/h。` : '请先计算热平衡，确认推荐燃料煤后回填。'}
               </div>
-              <button className={btnPrimary(darkMode)} onClick={applyFuelFromHeatBalance}>回填燃料煤并复算</button>
+              <div className="flex flex-wrap gap-2">
+                <button className={btnSecondary(darkMode)} onClick={calculateHeatBalancePreview}>计算热平衡</button>
+                <button className={btnPrimary(darkMode)} onClick={applyFuelFromHeatBalance}>回填燃料煤并复算</button>
+              </div>
             </div>
+            {(heatPreviewReady || heatBalanced) && (
+              <div className={assistAlertPanelClassName(darkMode, 'success')}>
+                {heatBalanced
+                  ? `已回填燃料煤：配料总表燃料煤已为 ${format(fuelColumn.weight)} t/h；热平衡残差约 ${format(heatBalance.balanceAfterFuelMJh, 0)} MJ/h（复算产物与混料已更新）。`
+                  : `已计算热平衡，待回填：热缺口 ${format(Math.max(0, heatBalance.heatDeficitMJh), 0)} MJ/h，推荐燃料煤 ${format(heatBalance.requiredFuelWeight)} t/h（表中当前 ${format(fuelColumn.weight)} t/h），请点击「回填燃料煤并复算」。`}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -2016,6 +2423,136 @@ export default function CopperWorkflow({
         onExportCase={() => exportCopperCaseFile()}
         onReturnCasePage={() => confirmSaveBeforeCaseNavigation('raw_material')}
       />
+    </div>
+  )
+}
+
+function AddLibraryMaterialDialog({
+  darkMode,
+  mode,
+  open,
+  message,
+  rows,
+  rowTotal,
+  onAddRow,
+  onRemoveRow,
+  onNameChange,
+  onRatioChange,
+  onCancel,
+  onSubmit,
+}: {
+  darkMode: boolean
+  mode: LibraryMaterialDialogMode
+  open: boolean
+  message: string | null
+  rows: SingleLibraryRow[]
+  rowTotal: (row: SingleLibraryRow) => number
+  onAddRow: () => void
+  onRemoveRow: (id: string) => void
+  onNameChange: (id: string, value: string) => void
+  onRatioChange: (id: string, element: CopperElementKey, value: string) => void
+  onCancel: () => void
+  onSubmit: () => void
+}) {
+  if (!open) return null
+
+  const ariaLabel = mode === 'edit' ? '修改原料' : '添加原料'
+  const title = mode === 'edit' ? '修改原料' : '添加原料'
+  const submitLabel = mode === 'edit' ? '保存修改' : '添加到原料库'
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label={ariaLabel}>
+      <div className={`max-h-[88vh] w-[96vw] max-w-7xl overflow-hidden rounded-lg border shadow-xl ${darkMode ? 'border-gray-600 bg-gray-900 text-gray-100' : 'border-gray-200 bg-white text-gray-900'}`}>
+        <div className={`flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3 ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+          <div>
+            <h3 className={sectionTitle(darkMode)}>{title}</h3>
+            <p className={`${hintText(darkMode)} mt-1`}>可修改原料名称和各元素含量，元素含量总和不得超过 100%。</p>
+          </div>
+        </div>
+        {message && (
+          <div
+            className={`border-b px-4 py-2 text-sm ${darkMode ? 'border-amber-800 bg-amber-950/35 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-900'}`}
+            role="status"
+          >
+            {message}
+          </div>
+        )}
+        <div className="max-h-[58vh] overflow-auto px-4 py-3">
+          <table className="min-w-[1040px] table-fixed text-sm">
+            <thead className={darkMode ? 'bg-gray-800 text-gray-300' : 'bg-gray-50 text-gray-600'}>
+              <tr>
+                <th className="w-36 px-2 py-2 text-center">原料名称</th>
+                {COPPER_ELEMENT_KEYS.map((element) => (
+                  <th key={element} className="w-14 px-1 py-2 text-center">{element.replace(/\(.+\)/, '')}</th>
+                ))}
+                <th className="w-16 px-1 py-2 text-center">单行合计</th>
+                <th className="w-20 px-1 py-2 text-center">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                const total = rowTotal(row)
+                const totalClass = total > 100
+                  ? darkMode ? 'text-red-300' : 'text-red-700'
+                  : darkMode ? 'text-emerald-300' : 'text-emerald-700'
+                return (
+                  <tr key={row.id} className={`border-t ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+                    <td className="px-1 py-1.5">
+                      <input
+                        className={`${inputSm(darkMode)} h-8 w-full text-center`}
+                        value={row.name}
+                        placeholder="例如：高品位铜精矿"
+                        onChange={(event) => onNameChange(row.id, event.target.value)}
+                      />
+                    </td>
+                    {COPPER_ELEMENT_KEYS.map((element) => (
+                      <td key={element} className="px-1 py-1.5">
+                        <input
+                          className={`${inputSm(darkMode)} h-8 w-full px-1 text-center font-mono text-sm`}
+                          value={row.ratios[element] || ''}
+                          onChange={(event) => onRatioChange(row.id, element, event.target.value)}
+                        />
+                      </td>
+                    ))}
+                    <td className={`px-1 py-1.5 text-center font-mono ${totalClass}`}>{format(total)}</td>
+                    <td className="px-1 py-1.5 text-center">
+                      {mode === 'add' ? (
+                        <button
+                          type="button"
+                          className={`rounded border px-2 py-1 text-xs font-medium transition-colors ${
+                            darkMode ? 'border-red-800 text-red-200 hover:bg-red-950/40 disabled:text-gray-500' : 'border-red-200 text-red-700 hover:bg-red-50 disabled:text-gray-400'
+                          }`}
+                          disabled={rows.length <= 1}
+                          onClick={() => onRemoveRow(row.id)}
+                        >
+                          删除行
+                        </button>
+                      ) : (
+                        <span className={`text-xs ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>—</span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className={`flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+          <div className="min-w-[4rem]">
+            {mode === 'add'
+              ? (
+                  <button type="button" className={btnSecondary(darkMode)} onClick={onAddRow}>增行</button>
+                )
+              : (
+                  <span aria-hidden="true" className="inline-block w-px" />
+                )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={btnSecondary(darkMode)} onClick={onCancel}>取消</button>
+            <button type="button" className={btnPrimary(darkMode)} onClick={onSubmit}>{submitLabel}</button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -2200,11 +2737,3 @@ function BlendMetric({ darkMode, label, value }: { darkMode: boolean; label: str
   )
 }
 
-function Metric({ darkMode, label, value }: { darkMode: boolean; label: string; value: string }) {
-  return (
-    <div className={resultBox(darkMode)}>
-      <div className={hintText(darkMode)}>{label}</div>
-      <div className="mt-1 font-mono text-lg">{value}</div>
-    </div>
-  )
-}
