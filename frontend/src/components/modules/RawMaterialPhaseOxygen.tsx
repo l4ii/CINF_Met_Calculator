@@ -1,7 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import {
   BASE_ELEMENTS,
-  TWO_MATERIALS,
   RAW_MATERIAL_DEFAULT_PRICES,
   SOLVENT_DEFAULT_PRICES,
   type ElementRatios,
@@ -30,10 +29,8 @@ import {
   labelBase,
   cardBase,
   sectionTitle,
-  descText,
   hintText,
   resultBox,
-  INPUT_WIDTHS,
 } from '../../theme/uiTheme'
 
 /** 鼠标进入视口顶部此高度(px)时显示浮动总表 */
@@ -42,32 +39,6 @@ const FLOATING_TRIGGER_TOP = 120
 interface RawMaterialPhaseOxygenProps {
   darkMode: boolean
   language?: 'zh' | 'en'
-}
-
-const OXIDE_TO_ELEMENT: Record<string, { elem: string; ratio: number }[]> = {
-  'SiO₂(二氧化硅)': [
-    { elem: 'Si(硅)', ratio: 28.085 / 60.084 },
-    { elem: 'O (氧)', ratio: 32 / 60.084 },
-  ],
-  'CaO(氧化钙)': [
-    { elem: 'Ca(钙)', ratio: 40.078 / 56.077 },
-    { elem: 'O (氧)', ratio: 16 / 56.077 },
-  ],
-  'Fe(铁)': [{ elem: 'Fe(铁)', ratio: 1 }],
-}
-
-/** 熔剂氧化物 → 元素百分比（输出 0–100，与 BASE_ELEMENTS 一致） */
-function solventToElementRatios(ratios: ElementRatios): ElementRatios {
-  const out: ElementRatios = {}
-  for (const [comp, val] of Object.entries(ratios)) {
-    const conv = OXIDE_TO_ELEMENT[comp]
-    if (conv && typeof val === 'number') {
-      for (const { elem, ratio } of conv) {
-        out[elem] = (out[elem] ?? 0) + val * ratio
-      }
-    }
-  }
-  return out
 }
 
 type PhaseInputBasis = {
@@ -483,7 +454,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
   const currentSolventParams = solventType === '石灰' ? limeParams : ironOreParams
   const setCurrentSolventParams = solventType === '石灰' ? setLimeParams : setIronOreParams
 
-  /** 解析并校验熔剂三参数，返回归一后的成分；总>100 返回 null 并弹窗，总<100 自动补 Other */
+  /** 解析并校验熔剂三参数；总>100 返回 null 并弹窗，总<100 时 Other 由 buildSolventRatios 补全 */
   const getValidatedSolventComposition = (
     type: '石灰' | '铁矿石'
   ): { 'Fe(铁)': number; 'SiO₂(二氧化硅)': number; 'CaO(氧化钙)': number } | null => {
@@ -497,10 +468,6 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
     if (total > 100.1) {
       setSolventRatioModal({ type, total, ratios: { 'Fe(铁)': fe, 'SiO₂(二氧化硅)': sio2, 'CaO(氧化钙)': cao } })
       return null
-    }
-    if (total < 99.9) {
-      const other = 100 - total
-      return { 'Fe(铁)': fe, 'SiO₂(二氧化硅)': sio2, 'CaO(氧化钙)': cao }
     }
     return { 'Fe(铁)': fe, 'SiO₂(二氧化硅)': sio2, 'CaO(氧化钙)': cao }
   }
@@ -548,21 +515,6 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
       isEn
         ? `${displayMaterialName(solventType)} parameters added to summary table.`
         : `已添加${solventType}参数至总表，用量待渣型计算`
-    )
-  }
-
-  const handleUpdateMaterialWeight = (id: string, newWeight: number) => {
-    setMaterials((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, weight: Math.max(0, newWeight) } : m))
-    )
-    setPhaseData(null)
-    setPhaseBasis(null)
-    setOxygenResult(null)
-  }
-
-  const handleUpdateMaterialUnitPrice = (id: string, unitPrice: number) => {
-    setMaterials((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, unitPrice: Math.max(0, unitPrice) } : m))
     )
   }
 
@@ -1320,7 +1272,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
               <div className={`mt-4 p-4 rounded-lg border ${dark ? 'border-gray-600 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
                 <div className={`text-sm font-medium mb-2 ${dark ? 'text-gray-300' : 'text-gray-700'}`}>{isEn ? 'Element composition (%)' : '元素含量（%）'}</div>
                 <div className="flex flex-wrap gap-4">
-                  {Object.entries(editingRatios ?? selectedMaterial.ratios).map(([elem, val]) => (
+                  {Object.entries(editingRatios ?? selectedMaterial.ratios).map(([elem]) => (
                     <div key={elem} className="flex items-center gap-2 min-w-[7rem]">
                       <span className={`text-sm w-24 truncate ${dark ? 'text-gray-400' : 'text-gray-600'}`}>{displayElementLabel(elem)}</span>
                       <input type="text" value={String((editingRatios ?? selectedMaterial.ratios)[elem] ?? 0)}

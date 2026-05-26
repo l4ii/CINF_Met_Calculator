@@ -60,6 +60,14 @@ const PRODUCT_NAMES: Record<CopperProductKey, string> = {
   loss: '损失',
 }
 
+export const COPPER_PRODUCT_FORMULAS: Record<CopperProductKey, string> = {
+  matte: 'Cu₂S + FeS',
+  slag: 'FeO + SiO₂ + CaO + Al₂O₃',
+  gas: 'SO₂ + CO₂ + N₂',
+  dust: 'As₂O₃ / PbO / Sb₂O₃ / ZnO',
+  loss: '机械损失/未归集',
+}
+
 const PRODUCT_KEYS: CopperProductKey[] = ['matte', 'slag', 'gas', 'dust', 'loss']
 
 export const DEFAULT_COPPER_PRODUCT_DISTRIBUTION: Partial<Record<CopperElementKey, Record<CopperProductKey, number>>> = {

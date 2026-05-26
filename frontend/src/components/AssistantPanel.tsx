@@ -32,6 +32,10 @@ function flattenCatalog(language: 'zh' | 'en'): { id: string; name: string; grou
     product: 'Product output',
     heat_balance: 'Heat balance',
     furnace: 'Furnace design',
+    cu_smelting: 'Smelting',
+    cu_converting: 'Converting',
+    cu_refining: 'Refining',
+    cu_equipment: 'Equipment Selection',
   }
   const group = language === 'en' ? 'Sheets' : '页签'
   return SHEETS.map((s) => ({

@@ -10,8 +10,7 @@
       body {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "PingFang SC",
           "Microsoft YaHei", sans-serif;
-        background: radial-gradient(1200px 400px at 50% -150px, rgba(37, 99, 235, 0.20), transparent 60%),
-          linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+        background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -19,14 +18,13 @@
         -webkit-user-select: none;
       }
       .card {
-        width: 462px;
-        padding: 22px 24px 18px;
+        width: 424px;
+        min-height: 196px;
+        padding: 30px 24px 13px;
         border-radius: 14px;
-        background: rgba(255, 255, 255, 0.86);
-        box-shadow: 0 18px 60px rgba(2, 6, 23, 0.12);
-        border: 1px solid rgba(148, 163, 184, 0.35);
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
+        background: rgba(255, 255, 255, 0.92);
+        border: 1px solid #d5dde8;
+        box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
       }
       .logo {
         width: 76px;
@@ -35,8 +33,9 @@
         margin: 0 auto 14px;
         display: grid;
         place-items: center;
-        background: #2563eb;
-        box-shadow: 0 10px 30px rgba(37, 99, 235, 0.25);
+        background: #f8fbff;
+        border: 1px solid #dbeafe;
+        box-shadow: 0 12px 30px rgba(37, 99, 235, 0.20);
       }
       .logo img {
         width: 100%;
@@ -46,39 +45,36 @@
         border-radius: 18px;
       }
       .title {
-        font-size: 22px;
-        font-weight: 800;
+        font-size: 16px;
+        font-weight: 700;
         color: #0f172a;
         letter-spacing: 0.2px;
-        margin: 0 0 10px;
+        margin: 0 0 6px;
         text-align: center;
       }
       .subtitle {
         font-size: 13px;
-        line-height: 1.7;
-        color: #475569;
-        margin: 0 0 18px;
+        line-height: 1.55;
+        color: #334155;
+        margin: 0 auto 13px;
+        max-width: 390px;
         text-align: center;
       }
       .row {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        border-top: 1px solid #e2e8f0;
-        padding-top: 12px;
+        justify-content: center;
       }
       .spinner {
-        width: 16px;
-        height: 16px;
+        width: 17px;
+        height: 17px;
         border: 2px solid rgba(37, 99, 235, 0.25);
-        border-top-color: rgba(37, 99, 235, 0.95);
+        border-top-color: #4f7cff;
         border-radius: 999px;
         animation: spin 1s linear infinite;
       }
       .hint { font-size: 12px; color: #64748b; }
-      .status { display: flex; align-items: center; gap: 9px; }
-      .org { font-size: 11px; color: #94a3b8; }
+      .status { display: flex; align-items: center; gap: 10px; }
       @keyframes spin { to { transform: rotate(360deg); } }
     </style>
   </head>
@@ -87,20 +83,19 @@
       <div class="logo" aria-hidden="true">
         <img id="appIcon" alt="" />
         <svg id="fallbackMark" width="42" height="42" viewBox="0 0 44 44" fill="none">
-          <path d="M16.3 29V15.1H24.9V17.7H19.4V20.8H24.3V23.3H19.4V29H16.3Z" fill="white"/>
-          <path d="M26.4 29V15.1H29.5V26.4H34.9V29H26.4Z" fill="white"/>
+          <path d="M16.3 29V15.1H24.9V17.7H19.4V20.8H24.3V23.3H19.4V29H16.3Z" fill="#2563eb"/>
+          <path d="M26.4 29V15.1H29.5V26.4H34.9V29H26.4Z" fill="#475569"/>
         </svg>
       </div>
       <p class="title" id="appName">长沙院冶金智能配料软件</p>
       <p class="subtitle" id="appSubtitle">
-        面向有色冶炼配料计算、渣型控制和物料平衡的专业工程工具。支持原料、熔剂、物相和阶段流程的本地化计算与复核。
+        面向有色冶炼配料计算、渣型控制和物料平衡的专业工程工具。支持原料配比、过程核算与工程分析，提升冶炼计算效率。
       </p>
       <div class="row">
         <div class="status">
           <div class="spinner" aria-hidden="true"></div>
-          <div class="hint">正在加载计算模块与本地服务…</div>
+          <div class="hint">启动中</div>
         </div>
-        <div class="org">CINF</div>
       </div>
     </div>
     <script>
