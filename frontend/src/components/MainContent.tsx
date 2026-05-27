@@ -122,6 +122,13 @@ export default function MainContent({
   const isLeadFlash = selectedMethod.smeltTypeId === 'pb' && selectedMethod.smeltMethodId === 'flash'
   const isCopper = selectedMethod.smeltTypeId === 'cu'
   const copperHeaderTitle = copperCaseTitleDraft || selectedMethodDisplayName
+  const requestCopperWorkspaceBack = () => {
+    if (typeof window === 'undefined') {
+      onSheetSelect?.('raw_material')
+      return
+    }
+    window.dispatchEvent(new CustomEvent('metcal:copper-back-workspace'))
+  }
 
   return (
     <div className={`flex-[4] min-h-0 flex flex-col overflow-hidden ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
@@ -129,16 +136,31 @@ export default function MainContent({
         <h1 className={`text-2xl font-bold mb-1 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{appTitle}</h1>
         <p className={`text-sm mb-4 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{appSubtitle}</p>
         {isCopper && hasActiveCopperCase ? (
-          <input
-            aria-label="案例名"
-            className={`mb-1 w-full max-w-xl rounded border bg-transparent px-2 py-1 text-lg font-semibold outline-none transition-colors ${
-              darkMode
-                ? 'border-gray-700 text-gray-100 focus:border-blue-500'
-                : 'border-transparent text-gray-900 hover:border-gray-300 focus:border-blue-500'
-            }`}
-            value={copperHeaderTitle}
-            onChange={(event) => setCopperCaseTitleDraft(event.target.value)}
-          />
+          <div className="mb-1 flex items-center gap-2">
+            <button
+              type="button"
+              aria-label="返回工作区"
+              title="返回工作区"
+              className={`flex h-8 w-8 items-center justify-center rounded border text-lg font-semibold leading-none transition-colors ${
+                darkMode
+                  ? 'border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700'
+                  : 'border-gray-300 bg-white text-gray-800 hover:bg-gray-100'
+              }`}
+              onClick={requestCopperWorkspaceBack}
+            >
+              ‹
+            </button>
+            <input
+              aria-label="案例名"
+              className={`ml-2 w-full max-w-xl rounded border bg-transparent px-2 py-1 text-lg font-semibold outline-none transition-colors ${
+                darkMode
+                  ? 'border-gray-700 text-gray-100 focus:border-blue-500'
+                  : 'border-transparent text-gray-900 hover:border-gray-300 focus:border-blue-500'
+              }`}
+              value={copperHeaderTitle}
+              onChange={(event) => setCopperCaseTitleDraft(event.target.value)}
+            />
+          </div>
         ) : (
           <h2 className={`text-lg font-semibold mb-1 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{selectedMethodDisplayName}</h2>
         )}

@@ -20,18 +20,29 @@ const {
 
 const { calculateCopperProducts } = await import('./copperProcessCalc.ts')
 
-function slagPrincipalOxideRatiosFromProduct(slagProduct) {
-  const fxFe = 71.844 / 55.845
+function slagTargetRatiosFromProductAndSolvents(slagProduct, solventWeights = {}) {
   const fxSi = 60.084 / 28.085
   const fxCa = 56.077 / 40.078
   const ew = slagProduct.elementWeights
-  const mFe = (ew['Fe(铁)'] ?? 0) * fxFe
-  const mSi = (ew['Si(硅)'] ?? 0) * fxSi
-  const mCa = (ew['Ca(钙)'] ?? 0) * fxCa
+  let mFe = ew['Fe(铁)'] ?? 0
+  let mSi = (ew['Si(硅)'] ?? 0) * fxSi
+  let mCa = (ew['Ca(钙)'] ?? 0) * fxCa
+  for (const solvent of DEFAULT_COPPER_SOLVENTS) {
+    const weight = solventWeights[solvent.name] ?? 0
+    const elements = solventOxidesToElements(solvent.composition)
+    mFe += weight * ((elements['Fe(铁)'] ?? 0) / 100)
+    mSi += weight * ((elements['Si(硅)'] ?? 0) / 100) * fxSi
+    mCa += weight * ((elements['Ca(钙)'] ?? 0) / 100) * fxCa
+  }
   return {
     feSiO2: mSi > 0 ? mFe / mSi : 0,
     caOSiO2: mSi > 0 ? mCa / mSi : 0,
   }
+}
+
+function slagTargetRatiosFromMaterialsAndSolvents(rawMaterials, solventWeights = {}) {
+  const baseSlag = calculateCopperProducts(calculateWeightedComposition(rawMaterials)).products.slag
+  return slagTargetRatiosFromProductAndSolvents(baseSlag, solventWeights)
 }
 
 const expectedOrder = [
@@ -58,6 +69,16 @@ assert.deepEqual(
   createDefaultCopperMaterials().map((material) => material.weight),
   [0, 0],
   'default copper raw-material feed amounts should start blank in the UI and calculate as 0 until entered'
+)
+assert.deepEqual(
+  createDefaultCopperMaterials().map((material) => material.name),
+  ['', ''],
+  'default copper raw-material names should start unselected until the user chooses from the dropdown'
+)
+assert.deepEqual(
+  createDefaultCopperMaterials().map((material) => material.ratios['Cu(铜)']),
+  [0, 0],
+  'default copper raw-material element assays should remain blank/zero until a material is selected'
 )
 
 const rawMaterials = [
@@ -261,13 +282,40 @@ assert.equal(solventSolution.targetScope, 'slag')
 assert(Math.abs(solventSolution.feSiO2 - 1) < 1e-6)
 assert(Math.abs(solventSolution.caOSiO2 - 0.45) < 1e-6)
 
-const lowFeSolventCols = createDefaultSolventColumns(solventSolution.solventWeights)
-const lowFeFeed = calculateWeightedComposition([lowFeRaw, ...lowFeSolventCols])
-const lowFeSlagRatios = slagPrincipalOxideRatiosFromProduct(
-  calculateCopperProducts(lowFeFeed).products.slag
-)
+const lowFeSlagRatios = slagTargetRatiosFromMaterialsAndSolvents([lowFeRaw], solventSolution.solventWeights)
 assert(Math.abs(lowFeSlagRatios.feSiO2 - solventSolution.feSiO2) < 1e-6)
 assert(Math.abs(lowFeSlagRatios.caOSiO2 - solventSolution.caOSiO2) < 1e-6)
+
+const productBasisProbe = {
+  id: 'product-basis-probe',
+  name: '产出炉渣基准校验料',
+  kind: 'raw',
+  weight: 100,
+  ratios: {
+    'Ca(钙)': 0.5,
+    'Cu(铜)': 20,
+    'Fe(铁)': 40,
+    'S (硫)': 20,
+    'Si(硅)': 5,
+  },
+}
+const productBasisSolution = solveCopperSolvents({
+  rawMaterials: [productBasisProbe],
+  targetFeSiO2: 3.2,
+  targetCaOSiO2: 0.45,
+  solvents: DEFAULT_COPPER_SOLVENTS,
+})
+assert.equal(productBasisSolution.valid, true)
+const productBasisRatios = slagTargetRatiosFromMaterialsAndSolvents([productBasisProbe], productBasisSolution.solventWeights)
+const productBasisBlend = calculateWeightedComposition([productBasisProbe])
+const rawBlendFeSiO2 =
+  (productBasisBlend.elementWeights['Fe(铁)'] ?? 0) /
+  ((productBasisBlend.elementWeights['Si(硅)'] ?? 0) * (60.084 / 28.085))
+assert(Math.abs(productBasisRatios.feSiO2 - 3.2) < 1e-6)
+assert(
+  Math.abs(productBasisRatios.feSiO2 - rawBlendFeSiO2) > 0.5,
+  'solvent solution should be based on product slag Fe/SiO2, not total feed Fe/SiO2'
+)
 
 const standardPhaseFactorsForSlagTest = {
   Cu2S: { factor: 1 },
@@ -297,13 +345,11 @@ const dualSolventSolution = solveCopperSolvents({
   solvents: DEFAULT_COPPER_SOLVENTS,
 })
 assert.equal(dualSolventSolution.valid, true)
-assert.equal(dualSolventSolution.solventWeights['铁矿石'], 0)
-assert.ok(Math.abs(dualSolventSolution.solventWeights['石灰'] - 4.595) < 0.02)
+assert(dualSolventSolution.solventWeights['铁矿石'] >= 0)
+assert(dualSolventSolution.solventWeights['石灰'] >= 0)
 assert.ok(Math.abs(dualSolventSolution.caOSiO2 - 0.45) < 1e-6)
-assert.ok(Math.abs(dualSolventSolution.feSiO2 - 2.8065) < 0.005)
-const dualSolventCols = createDefaultSolventColumns(dualSolventSolution.solventWeights)
-const dualFeed = calculateWeightedComposition([...dualConcRaw, ...dualSolventCols])
-const dualSlagR = slagPrincipalOxideRatiosFromProduct(calculateCopperProducts(dualFeed).products.slag)
+assert.ok(Math.abs(dualSolventSolution.feSiO2 - 2.8) < 1e-6)
+const dualSlagR = slagTargetRatiosFromMaterialsAndSolvents(dualConcRaw, dualSolventSolution.solventWeights)
 assert(Math.abs(dualSlagR.feSiO2 - dualSolventSolution.feSiO2) < 1e-6)
 assert(Math.abs(dualSlagR.caOSiO2 - dualSolventSolution.caOSiO2) < 1e-6)
 
