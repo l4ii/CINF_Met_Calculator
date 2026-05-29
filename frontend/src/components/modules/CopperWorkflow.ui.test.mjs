@@ -12,6 +12,10 @@ assert(component.includes('导出Excel'), 'calculation table should expose an Ex
 assert(component.includes('APP_NAME_ZH'), 'Excel export filename should use the software Chinese name')
 assert(component.includes('buildCopperBatchExportFilename'), 'Excel export should build the requested software_stage_date filename')
 assert(component.includes('downloadCopperBatchExcel'), 'Excel export should trigger a workbook download from the calculation table')
+assert(component.includes('BatchTableViewTabs') && component.includes('元素总表') && component.includes('物相总表'), 'calculation table should expose element/phase workbook tabs')
+assert(component.includes('CopperBatchPhaseTables') && component.includes('tableWidth={phaseTableWidth}') && component.includes('rawColumnWidths={phaseTableRawColumnWidths}'), 'phase view should be one horizontal table aligned with the element table layout')
+assert(component.includes('buildCopperBatchWorkbookHtml') && component.includes('buildPhaseExportTable'), 'Excel export should include element and phase sheets')
+assert(component.includes('batchTableView') && component.includes('phaseRatioOverrides') && component.includes('productPhaseManual'), 'case snapshot should persist phase view state')
 const workflowMessageIndex = component.indexOf('{workflowMessage &&')
 assert(
   component.indexOf('原料库') < workflowMessageIndex && workflowMessageIndex < component.indexOf('ref={calculationTableRef}'),
@@ -141,19 +145,39 @@ assert(component.includes('迭代轨迹'), 'iterative calculation should show tr
 assert(component.includes('出炉渣型'), 'iterative calculation entry should ask for the tapped/final slag type target')
 assert(component.includes('联动预览已开启') && component.includes('首次迭代后生成联动预览'), 'iteration entry should show linked preview status')
 assert(component.includes('iterationAutoLinked') && component.includes('iterationInputSignature'), 'workflow should auto-refresh linked results after the first iteration')
-assert(component.includes('迭代结果：熔剂投料量'), 'solvent detail view should be retained as an iteration result panel')
-const solventAssistSection = component.slice(component.indexOf('迭代结果：熔剂投料量'), component.indexOf('迭代结果：富氧空气'))
+assert(component.includes('IterationSubstepCard') && component.includes('title="熔剂渣型求解"') && component.includes('title="产物分配计算"') && component.includes('title="热平衡配煤"'), 'iteration input should distinguish detailed substeps from the overall calculation')
+assert(component.includes('IterationFlowStrip') && component.includes('联动求解流程'), 'iteration input should show the coupled solve flow strip')
+assert(component.includes('长沙有色冶金设计研究院有限公司'), 'product allocation step should cite CINF design institute experience')
+assert(component.includes('processStageCopy.solventStep') && component.includes('processStageCopy.oxygenStep'), 'iteration substeps should use stage-specific step copy')
+assert(component.includes('温度设置') && component.includes('热支出与燃料参数'), 'heat balance inputs should be grouped by temperature and heat/fuel parameters')
+assert(component.includes('迭代结果复核') && component.includes('按步骤 ①–④ 顺序展开核对'), 'iteration results should be grouped under a review section with step order guidance')
+assert(component.includes('① 熔剂投料量'), 'solvent detail view should align with step ①')
+const solventAssistSection = component.slice(component.indexOf('① 熔剂投料量'), component.indexOf('② 产物分配'))
 assert(solventAssistSection.includes('熔剂投料量预览') && !solventAssistSection.includes('回填熔剂投料量'), 'solvent result panel should be a read-only detail view without its own refill action')
 assert(solventAssistSection.includes('<table className="w-full table-fixed text-sm">'), 'solvent assist result display should use a compact table instead of mismatched metric cards')
 assert(component.includes('solventPreviewSolution') && !component.includes('applySolventIterationResult'), 'solvent panel should display iterative preview while refill stays in the main iteration action')
 assert(!component.includes('计算熔剂投料量'), 'solvent panel should no longer expose single-step solvent calculation')
-assert(component.includes('迭代结果：产出计算'), 'product detail view should be retained as an iteration result panel')
-assert(component.includes('迭代结果：富氧空气') && component.includes('4 富氧空气参数设置'), 'oxygen-enriched air should have its own iteration setting and result panels')
-assert(component.includes('COPPER_PRODUCT_FORMULAS') && component.includes('主要成分'), 'product result panel should show product main components in the product column headers')
+assert(component.includes('② 产物分配'), 'product detail view should align with step ②')
+assert(component.includes('④ 富氧空气') && component.includes('title="富氧空气参数设置"'), 'oxygen-enriched air should have its own iteration setting and result panels')
+assert(!component.includes('>计算并回填熔剂<'), 'solvent section should no longer calculate and refill in one action')
+assert(!component.includes('>计算并回填产出<'), 'product section should no longer calculate and refill in one action')
+const productAssistSection = component.slice(component.indexOf('② 产物分配'), component.indexOf('③ 热平衡与燃料煤'))
+assert(
+  productAssistSection.includes('resultProductPhaseReviewBlocks') &&
+    productAssistSection.includes('质量 t/h') &&
+    productAssistSection.includes('productOutputCellClass(darkMode, productPreviewReady'),
+  'product result panel should show unified phase table with mass and w%'
+)
+assert(!productAssistSection.includes('PRODUCT_CALCULATION_BASIS'), 'product result panel should not show calculation basis callout')
+assert(!productAssistSection.includes('COPPER_ELEMENT_KEYS.map((element) =>'), 'product result panel should not use element rows')
+assert(!productAssistSection.includes('button className={btnPrimary') && !component.includes('计算产出'), 'product detail panel should be read-only with no standalone calculate/refill action')
 assert(workflowCalc.includes("'N (氮)'") && component.includes('COPPER_ELEMENT_KEYS.map((element) =>'), 'product and feed element displays should include nitrogen through the shared element list')
 assert(component.includes('混料总质量 × 元素含量 × 静态分配系数 × 化合物折算系数') || component.includes('静态分配系数'), 'product result panel should explain static coefficient calculation')
 assert(!component.includes('calculateProductsPreview') && !component.includes('refillProductsToTable'), 'product panel should not use standalone calculate/refill handlers')
-assert(component.includes('迭代结果：热平衡与燃料煤'), 'heat detail view should be retained as an iteration result panel')
+assert(!component.includes('canProceed'), 'process pages should not duplicate next-step navigation with a separate enter-stage banner')
+assert(component.includes('stagePageTopRef') && component.includes('stageEnterHighlight'), 'stage navigation should scroll to the page top with a visible highlight cue')
+assert(component.includes('scrollIntoView({ behavior: \'smooth\', block: \'start\' })'), 'stage navigation should smoothly scroll the next page into view')
+assert(component.includes('③ 热平衡与燃料煤'), 'heat detail view should align with step ③')
 assert(component.includes('heatPreviewReady') && !component.includes('calculateHeatBalancePreview'), 'heat panel should display iterative heat result without a standalone preview handler')
 assert(!component.includes('计算热平衡') && !component.includes('回填热平衡与燃料煤'), 'heat detail panel should be read-only with no standalone calculate/refill action')
 assert(component.includes('applyIterationResultToSummaryTable') && component.includes('回填到配料总表'), 'iteration input area should provide the single refill action for all coupled results')
@@ -161,32 +185,21 @@ assert(component.includes('燃料煤'), 'calculation table should include a fuel
 assert(!component.includes("'待联动'"), 'product output cells should stay blank before iteration')
 assert(component.includes('步骤1：请在名称下拉框中选择原料') && component.includes('步骤1：请输入「') && component.includes('步骤2：请双击'), 'calculation table should show prominent step-by-step guidance')
 assert(component.includes('IteratingOverlay') && component.includes('迭代计算中，请稍候') && component.includes('window.setTimeout(resolve, 1000)'), 'first iterative calculation should show a perceptible one-second progress animation')
-assert(component.includes('IterationSubstepCard') && component.includes('1 熔剂渣型求解') && component.includes('2 产物分配计算') && component.includes('3 热平衡配煤'), 'iteration input should distinguish detailed substeps from the overall calculation')
-assert(!component.includes('>计算并回填熔剂<'), 'solvent section should no longer calculate and refill in one action')
-assert(!component.includes('>计算并回填产出<'), 'product section should no longer calculate and refill in one action')
-const productAssistSection = component.slice(component.indexOf('迭代结果：产出计算'), component.indexOf('迭代结果：热平衡'))
-assert(!productAssistSection.includes('button className={btnPrimary') && !component.includes('计算产出'), 'product detail panel should be read-only with no standalone calculate/refill action')
+assert(component.includes('核对产物分配结果'), 'product result panel should use a general step-level hint')
 assert(
-  productAssistSection.includes('<table className="w-full table-fixed text-sm">') &&
-    productAssistSection.includes('COPPER_ELEMENT_KEYS.map((element) =>') &&
-    productAssistSection.includes('product-detail-head') &&
-    productAssistSection.includes('productOutputCellClass(darkMode, productPreviewReady'),
-  'product result panel should reuse the summary-table vertical product columns, all element rows, and matching cell typography'
-)
-assert(
-  productAssistSection.includes('whitespace-normal break-words') &&
-    !productAssistSection.includes('productDetailTableWidth') &&
-    !productAssistSection.includes('w-32" />'),
-  'fixed product outputs should distribute across the full result table and show component text without truncation'
+  productAssistSection.includes('min-w-[960px]') &&
+    !productAssistSection.includes('grid-cols-1 gap-4'),
+  'product result panel should use one unified table instead of split cards'
 )
 assert(!productAssistSection.includes('PRODUCT_DISPLAY_ELEMENTS'), 'product result panel should not use a separate short element list')
+assert(productAssistSection.includes('resultProductPhaseComposition'), 'product result panel should derive phase composition for review')
 assert(
   productAssistSection.includes('assistAlertPanelClassName') && productAssistSection.includes('联动迭代结果'),
   'product result panel should show an iteration result summary beside the merged flow'
 )
 const heatAssistSection = component.slice(
-  component.indexOf('迭代结果：热平衡与燃料煤'),
-  component.indexOf('{canProceed && nextProcessStage')
+  component.indexOf('③ 热平衡与燃料煤'),
+  component.indexOf('<CaseFooterActions', component.indexOf('③ 热平衡与燃料煤'))
 )
 assert(
   heatAssistSection.includes('联动迭代结果') && heatAssistSection.includes('assistAlertPanelClassName'),
@@ -249,7 +262,8 @@ assert(component.includes('saveCurrentCaseAndGoNext'), 'process pages should aut
 assert(component.includes('METCAL_COPPER_CASE_FILE_TYPE') && component.includes('.metcal-copper-case.json'), 'cases should export as a documented JSON case file')
 assert(component.includes('导入案例') && component.includes('importCopperCaseFile'), 'case workspace should import exported case files')
 assert(component.includes('handleCaseDrop') && component.includes('onDrop={handleCaseDrop}'), 'case workspace should allow opening case JSON files by drag and drop')
-assert(component.includes('拖入 .metcal-copper-case.json'), 'case workspace should explain that a portable JSON case file can be dragged in')
+assert(component.includes('将案例文件拖入此处即可导入'), 'case workspace should show a visible drag-and-drop import target')
+assert(component.includes('caseDropActive'), 'case workspace should highlight the drop zone while dragging files over it')
 assert(component.includes('删除案例') && component.includes('deleteCopperCase'), 'case workspace should allow deleting previous cases')
 assert(component.includes('返回工作区') && component.includes('下一步'), 'process pages should expose return-to-workspace and next-step actions')
 const caseWorkspaceSection = component.slice(component.indexOf("if (activeSheet === 'raw_material')"), component.indexOf("if (activeSheet === 'cu_equipment')"))
@@ -260,7 +274,7 @@ assert(!caseWorkspaceSection.includes('当前页面'), 'case history should not 
 assert(caseWorkspaceSection.includes('上次修改时间') && !caseWorkspaceSection.includes('保存时间'), 'case history should label updatedAt as last modified time')
 assert(caseWorkspaceSection.includes('onClick={() => openCopperCase(record)}') && caseWorkspaceSection.includes('hover:text-blue'), 'clicking the case name should open the case with hover affordance')
 assert(!caseWorkspaceSection.includes('打开案例'), 'case history action area should not keep a separate open button')
-assert(caseWorkspaceSection.includes('导出案例') && component.includes('saveCopperCaseToDesktop'), 'case history should allow exporting a portable case file')
+assert(caseWorkspaceSection.includes('导出案例') && component.includes('exportCopperCaseWithSaveDialog'), 'case history should allow exporting a portable case file via a save dialog')
 assert(caseWorkspaceSection.includes('whitespace-nowrap'), 'history actions should keep short action labels on one line')
 assert(component.includes('function CaseFooterActions'), 'case save/export actions should live at the bottom of each process page')
 assert(component.includes('keydown') && component.includes("event.key.toLowerCase() === 's'"), 'Ctrl+S should save the active case')
@@ -268,7 +282,9 @@ assert(component.includes('confirmSaveBeforeCaseNavigation') && component.includ
 assert(component.includes('hasCopperCaseGeneratedData') && component.includes('isCopperCaseContentDirty'), 'stage switching should prompt when generated data or unsaved edits need attention')
 assert(component.includes('function SaveBeforeNavigationDialog'), 'save-before-navigation prompt should be a branded in-app dialog')
 assert(component.includes('src="./icon.png"') && component.includes('APP_NAME_ZH'), 'save prompt should show the software icon and name')
-assert(component.includes('保存并切换') && component.includes('不保存继续') && component.includes('取消切换'), 'save prompt should expose clear branded actions')
+const saveDialogSection = component.slice(component.indexOf('function SaveBeforeNavigationDialog'), component.indexOf('function StageHeader'))
+assert(saveDialogSection.includes('不保存') && saveDialogSection.includes('保存') && saveDialogSection.includes('grid-cols-2'), 'save prompt should offer equal-width save and skip actions')
+assert(!saveDialogSection.includes('取消切换') && !saveDialogSection.includes('保存并切换') && !saveDialogSection.includes('不保存继续'), 'save prompt should not keep the old three-button layout')
 assert(!component.includes('window.confirm'), 'save prompt should not use the browser/native confirm dialog')
 const stageHeaderSection = component.slice(component.indexOf('function StageHeader'), component.indexOf('function CaseFooterActions'))
 assert(!stageHeaderSection.includes('保存当前案例') && !stageHeaderSection.includes('当前案例：'), 'stage header should not keep top save/current-case controls')

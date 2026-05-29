@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 const {
   buildCopperBatchExportFilename,
   buildCopperBatchExportHtml,
+  buildCopperBatchWorkbookHtml,
   getCopperStageExportName,
 } = await import('./copperBatchExport.ts')
 
@@ -42,5 +43,11 @@ assert(html.includes('&lt;script&gt;'), 'export should escape angle brackets')
 assert(html.includes('&amp;'), 'export should escape ampersands')
 assert(html.includes('&quot;quoted&quot;'), 'export should escape quotes')
 assert(html.includes('O&#39;Brien'), 'export should escape apostrophes')
+
+const workbook = buildCopperBatchWorkbookHtml([
+  { title: '元素总表', columns: [{ header: '混料', subHeader: '混料' }], rows: [{ label: 'Cu', values: [21.7] }] },
+  { title: '投入物相', columns: [{ header: '原料1', subHeader: '铜精矿' }], rows: [{ label: 'Cu₂S', values: [40] }] },
+])
+assert(workbook.includes('元素总表') && workbook.includes('投入物相'), 'workbook export should include multiple sheets')
 
 console.log('Copper batch export checks passed')

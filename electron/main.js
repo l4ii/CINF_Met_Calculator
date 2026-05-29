@@ -723,12 +723,43 @@ ipcMain.handle('license:activate', async (_e, token) => {
   return license.activateWithToken(isDev, token)
 })
 
-ipcMain.handle('copper-case:save-desktop', async (_e, payload) => {
+ipcMain.handle('show-save-dialog-export', async (event, defaultFileName) => {
   try {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const rawName = typeof defaultFileName === 'string' ? defaultFileName : 'export'
+    const baseName = path.basename(rawName).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    const result = await dialog.showSaveDialog(win ?? undefined, {
+      title: '另存为',
+      defaultPath: baseName,
+    })
+    if (result.canceled || !result.filePath) return null
+    return result.filePath
+  } catch (error) {
+    return { error: error?.message ?? String(error) }
+  }
+})
+
+ipcMain.handle('copper-case:save-desktop', async (event, payload) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender)
     const rawName = typeof payload?.fileName === 'string' ? payload.fileName : '铜冶炼案例.metcal-copper-case.json'
     const baseName = path.basename(rawName).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
     const fileName = baseName.endsWith('.metcal-copper-case.json') ? baseName : `${baseName}.metcal-copper-case.json`
-    const filePath = path.join(app.getPath('desktop'), fileName)
+    const result = await dialog.showSaveDialog(win ?? undefined, {
+      title: '导出铜冶炼案例',
+      defaultPath: fileName,
+      filters: [
+        { name: '铜冶炼案例', extensions: ['metcal-copper-case.json'] },
+        { name: 'JSON', extensions: ['json'] },
+      ],
+    })
+    if (result.canceled || !result.filePath) {
+      return { ok: false, cancelled: true }
+    }
+    let filePath = result.filePath
+    if (!/\.(metcal-copper-case\.json|json)$/i.test(filePath)) {
+      filePath = `${filePath}.metcal-copper-case.json`
+    }
     fs.writeFileSync(filePath, String(payload?.content ?? ''), 'utf8')
     return { ok: true, filePath }
   } catch (error) {

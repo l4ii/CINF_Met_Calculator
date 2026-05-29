@@ -87,6 +87,21 @@ export interface CopperIterativeHeatSettings {
 export interface CopperOxygenAirSettings {
   oxygenPct: number
   nitrogenPct: number
+  oxygenSupplyCoefficient?: number
+}
+
+export interface CopperOxygenAirCalculation {
+  phaseOxygenKmolh: number
+  fuelOxygenKmolh: number
+  theoreticalOxygenKmolh: number
+  actualOxygenKmolh: number
+  airVolumeNm3h: number
+  oxygenMass: number
+  nitrogenMass: number
+  airWeight: number
+  oxygenMassPct: number
+  nitrogenMassPct: number
+  oxygenSupplyCoefficient: number
 }
 
 export interface CopperIterationTrace {
@@ -110,6 +125,7 @@ export interface CopperIterativeBalanceResult {
   finalSolventColumns: CopperMaterialColumn[]
   finalFuel: CopperFuelMaterial
   finalOxygenAirColumn: CopperMaterialColumn
+  finalOxygenAirCalculation: CopperOxygenAirCalculation
   finalFeedWithoutFuel: WeightedComposition
   finalFeed: WeightedComposition
   finalProducts: CopperProductResult
@@ -142,6 +158,24 @@ const FE_IN_FES = 55.845 / 87.91
 const AL_IN_AL2O3 = (2 * 26.982) / 101.961
 const S_IN_CU2S = 32.066 / 159.16
 const S_IN_FES = 32.066 / 87.91
+const NORMAL_M3_PER_KMOL = 22.4
+const DEFAULT_OXYGEN_SUPPLY_COEFFICIENT = 1.15
+const MOLAR_MASS_KG_PER_KMOL = {
+  C: 12.011,
+  S: 32.06,
+  O: 15.999,
+  O2: 32,
+  N2: 28.02,
+  Cu2S: 159.16,
+  FeS: 87.91,
+}
+const OXYGEN_DEMAND_COEFFICIENTS = {
+  // Cu2S + 1.5O2 -> Cu2O + SO2; FeS + 1.5O2 -> FeO + SO2.
+  Cu2S: 1.5,
+  FeS: 1.5,
+  S: 1,
+  C: 1,
+}
 
 export const COPPER_PHASE_ASSIGNMENT_KEYS = [
   'Cu2S',
@@ -651,6 +685,221 @@ export function derivePhaseContentsFromElements(
   return contents
 }
 
+export type PhaseAssistRowSpec = {
+  id: string
+  kind: 'builtin' | 'custom'
+  builtinKey?: CopperPhaseAssignmentKey
+  fractions?: Partial<Record<CopperElementKey, number>>
+}
+
+function assignCustomPhaseFromFractions(
+  row: PhaseAssistRowSpec,
+  ratios: CopperRatios,
+  remaining: Partial<Record<CopperElementKey, number>>,
+  phaseInputs: Record<string, CopperPhaseInput>,
+  byRowId: Record<string, number>
+) {
+  const fractions = row.fractions ?? {}
+  const activity = parsePhaseActivityFactor(phaseInputs, row.id)
+  const assayPairs = (Object.entries(fractions) as [CopperElementKey, number][]).filter(
+    ([element, fraction]) =>
+      element !== 'O (氧)' && element !== 'C (碳)' && element !== 'Other(其他)' && fraction > 0
+  )
+
+  if (assayPairs.length === 0) {
+    const carbonFraction = fractions['C (碳)'] ?? 0
+    if (carbonFraction > 0) {
+      const carbonKnown = ratios['C (碳)'] ?? 0
+      byRowId[row.id] =
+        carbonKnown > 0 ? phaseContentFromElement(carbonKnown, carbonFraction, activity) : 0
+      return
+    }
+    byRowId[row.id] = 0
+    return
+  }
+
+  if (assayPairs.length === 1) {
+    const [element, fraction] = assayPairs[0]!
+    const amount = remaining[element] ?? 0
+    const content = phaseContentFromElement(amount, fraction, activity)
+    byRowId[row.id] = content
+    remaining[element] = Math.max(0, amount - content * activity * fraction)
+    return
+  }
+
+  let limitingContent = Infinity
+  for (const [element, fraction] of assayPairs) {
+    const amount = remaining[element] ?? 0
+    if (amount <= 0 || fraction <= 0) {
+      byRowId[row.id] = 0
+      return
+    }
+    limitingContent = Math.min(limitingContent, amount / (fraction * activity))
+  }
+  if (!Number.isFinite(limitingContent) || limitingContent <= 0) {
+    byRowId[row.id] = 0
+    return
+  }
+  byRowId[row.id] = limitingContent
+  const effective = limitingContent * activity
+  for (const [element, fraction] of assayPairs) {
+    remaining[element] = Math.max(0, (remaining[element] ?? 0) - effective * fraction)
+  }
+}
+
+export function deriveOrderedPhaseContents(
+  ratios: CopperRatios,
+  rows: PhaseAssistRowSpec[],
+  phaseInputs: Record<string, CopperPhaseInput>
+): { byRowId: Record<string, number>; byBuiltinKey: Record<CopperPhaseAssignmentKey, number> } {
+  const remaining: Partial<Record<CopperElementKey, number>> = {}
+  for (const element of COPPER_ELEMENT_KEYS) {
+    if (element === 'O (氧)' || element === 'C (碳)' || element === 'Other(其他)') continue
+    const amount = ratios[element]
+    if (Number.isFinite(amount) && amount > 0) remaining[element] = amount
+  }
+
+  const byBuiltinKey = Object.fromEntries(COPPER_PHASE_ASSIGNMENT_KEYS.map((key) => [key, 0])) as Record<
+    CopperPhaseAssignmentKey,
+    number
+  >
+  const byRowId: Record<string, number> = {}
+
+  const activityFor = (row: PhaseAssistRowSpec, fallbackKey?: string) => {
+    const fromRow = parsePhaseActivityFactor(phaseInputs, row.id)
+    if (fromRow !== 1 || phaseInputs[row.id] != null) return fromRow
+    if (fallbackKey) return parsePhaseActivityFactor(phaseInputs, fallbackKey)
+    return 1
+  }
+
+  const assignSingle = (
+    phaseKey: CopperPhaseAssignmentKey,
+    element: CopperElementKey,
+    fraction: number,
+    row: PhaseAssistRowSpec
+  ) => {
+    const amount = remaining[element] ?? 0
+    if (amount <= 0) {
+      byRowId[row.id] = 0
+      return
+    }
+    const content = phaseContentFromElement(amount, fraction, activityFor(row, phaseKey))
+    byBuiltinKey[phaseKey] = content
+    byRowId[row.id] = content
+    remaining[element] = 0
+  }
+
+  for (const row of rows) {
+    if (row.kind === 'custom') {
+      assignCustomPhaseFromFractions(row, ratios, remaining, phaseInputs, byRowId)
+      continue
+    }
+
+    const key = row.builtinKey
+    if (!key) continue
+    const scopedInputs = { ...phaseInputs, [key]: phaseInputs[row.id] ?? phaseInputs[key] }
+
+    if (key === 'Cu2S') {
+      assignCoupledPhase(
+        'Cu2S',
+        [
+          { element: 'Cu(铜)', fraction: CU_IN_CU2S },
+          { element: 'S (硫)', fraction: S_IN_CU2S },
+        ],
+        remaining,
+        scopedInputs,
+        byBuiltinKey
+      )
+      byRowId[row.id] = byBuiltinKey.Cu2S
+    } else if (key === 'FeS') {
+      assignCoupledPhase(
+        'FeS',
+        [
+          { element: 'Fe(铁)', fraction: FE_IN_FES },
+          { element: 'S (硫)', fraction: S_IN_FES },
+        ],
+        remaining,
+        scopedInputs,
+        byBuiltinKey
+      )
+      byRowId[row.id] = byBuiltinKey.FeS
+    } else if (key === 'S') {
+      assignSingle('S', 'S (硫)', 1, row)
+    } else if (key === 'Cu2O') {
+      assignSingle('Cu2O', 'Cu(铜)', CU_IN_CU2O, row)
+    } else if (key === 'FeO') {
+      assignSingle('FeO', 'Fe(铁)', FE_IN_FEO, row)
+    } else if (key === 'Fe2O3') {
+      assignSingle('Fe2O3', 'Fe(铁)', FE_IN_FE2O3, row)
+    } else if (key === 'Fe3O4') {
+      assignSingle('Fe3O4', 'Fe(铁)', FE_IN_FE3O4, row)
+    } else if (key === 'SiO2') {
+      assignSingle('SiO2', 'Si(硅)', SI_IN_SIO2, row)
+    } else if (key === 'CaO') {
+      assignSingle('CaO', 'Ca(钙)', CA_IN_CAO, row)
+    } else if (key === 'Al2O3') {
+      assignSingle('Al2O3', 'Al(铝)', AL_IN_AL2O3, row)
+    } else if (key === 'C') {
+      const carbonKnown = ratios['C (碳)'] ?? 0
+      const content =
+        carbonKnown > 0 ? phaseContentFromElement(carbonKnown, 1, activityFor(row, 'C')) : 0
+      byBuiltinKey.C = content
+      byRowId[row.id] = content
+    }
+  }
+
+  return { byRowId, byBuiltinKey }
+}
+
+export function calculateOrderedPhaseElementCompletion(
+  ratios: CopperRatios,
+  rows: PhaseAssistRowSpec[],
+  phaseInputs: Record<string, CopperPhaseInput>
+) {
+  const calcRows = rows.filter((row) => row.kind === 'builtin' || row.kind === 'custom')
+  const { byRowId, byBuiltinKey } = deriveOrderedPhaseContents(ratios, calcRows, phaseInputs)
+  const phasesForCalc = Object.fromEntries(
+    COPPER_PHASE_ASSIGNMENT_KEYS.map((key) => [
+      key,
+      { value: byBuiltinKey[key] ?? 0, factor: parsePhaseActivityFactor(phaseInputs, key) },
+    ])
+  ) as Record<string, CopperPhaseInput>
+  const baseUnknowns = calculateUnknownsFromPhases(phasesForCalc, ratios)
+
+  let extraOxygen = 0
+  let extraCarbon = 0
+  let extraKnownMass = 0
+
+  for (const row of calcRows) {
+    if (row.kind !== 'custom') continue
+    const content = byRowId[row.id] ?? 0
+    const w = content * parsePhaseActivityFactor(phaseInputs, row.id)
+    if (w <= 0 || !row.fractions) continue
+    extraOxygen += w * (row.fractions['O (氧)'] ?? 0)
+    extraCarbon += w * (row.fractions['C (碳)'] ?? 0)
+    for (const [element, fraction] of Object.entries(row.fractions) as [CopperElementKey, number][]) {
+      if (element === 'O (氧)' || element === 'C (碳)' || element === 'Other(其他)') continue
+      extraKnownMass += w * fraction
+    }
+  }
+
+  if (extraOxygen <= 0 && extraCarbon <= 0 && extraKnownMass <= 0) {
+    return { phaseContents: byRowId, unknowns: baseUnknowns }
+  }
+
+  const carbon = (baseUnknowns['C (碳)'] ?? 0) + extraCarbon
+  const assayExclusive = calculateKnownTotal({ ...ratios, 'O (氧)': 0, 'C (碳)': 0 }) + extraKnownMass
+  const oxygenRaw = (baseUnknowns['O (氧)'] ?? 0) + extraOxygen
+  const oxygenBudget = Math.max(0, 100 - assayExclusive - carbon)
+  const oxygen = Math.min(oxygenRaw, oxygenBudget)
+  const other = Math.max(0, 100 - assayExclusive - oxygen - carbon)
+
+  return {
+    phaseContents: byRowId,
+    unknowns: { 'O (氧)': oxygen, 'C (碳)': carbon, 'Other(其他)': other },
+  }
+}
+
 export function calculatePhaseElementCompletion(
   ratios: CopperRatios,
   phaseInputs: Record<string, CopperPhaseInput>
@@ -665,6 +914,50 @@ export function calculatePhaseElementCompletion(
   return {
     phaseContents,
     unknowns: calculateUnknownsFromPhases(phasesForCalc, ratios),
+  }
+}
+
+export function calculatePhaseElementCompletionWithCustom(
+  ratios: CopperRatios,
+  phaseInputs: Record<string, CopperPhaseInput>,
+  customRows: Array<{ id: string; fractions: Partial<Record<CopperElementKey, number>> }>,
+  customPhaseInputs: Record<string, CopperPhaseInput>
+) {
+  const base = calculatePhaseElementCompletion(ratios, phaseInputs)
+  if (customRows.length === 0) return base
+
+  let extraOxygen = 0
+  let extraCarbon = 0
+  let extraKnownMass = 0
+
+  for (const row of customRows) {
+    const key = `custom:${row.id}`
+    const input = customPhaseInputs[key]
+    const w =
+      parsePhaseNumeric(input && typeof input === 'object' ? input.value : input, 0) *
+      parsePhaseActivityFactor(customPhaseInputs, key)
+    if (w <= 0) continue
+    extraOxygen += w * (row.fractions['O (氧)'] ?? 0)
+    extraCarbon += w * (row.fractions['C (碳)'] ?? 0)
+    for (const [element, fraction] of Object.entries(row.fractions) as [CopperElementKey, number][]) {
+      if (element === 'O (氧)' || element === 'C (碳)' || element === 'Other(其他)') continue
+      extraKnownMass += w * fraction
+    }
+  }
+
+  if (extraOxygen <= 0 && extraCarbon <= 0 && extraKnownMass <= 0) return base
+
+  const baseUnknowns = base.unknowns
+  const carbon = (baseUnknowns['C (碳)'] ?? 0) + extraCarbon
+  const assayExclusive = calculateKnownTotal({ ...ratios, 'O (氧)': 0, 'C (碳)': 0 }) + extraKnownMass
+  const oxygenRaw = (baseUnknowns['O (氧)'] ?? 0) + extraOxygen
+  const oxygenBudget = Math.max(0, 100 - assayExclusive - carbon)
+  const oxygen = Math.min(oxygenRaw, oxygenBudget)
+  const other = Math.max(0, 100 - assayExclusive - oxygen - carbon)
+
+  return {
+    phaseContents: base.phaseContents,
+    unknowns: { 'O (氧)': oxygen, 'C (碳)': carbon, 'Other(其他)': other },
   }
 }
 
@@ -838,31 +1131,97 @@ function withSolvedSolventWeights(
   }))
 }
 
-function visibleCopperProductMass(products: CopperProductResult) {
-  return products.products.matte.mass + products.products.slag.mass + products.products.gas.mass + products.products.dust.mass
+function emptyOxygenAirCalculation(settings: CopperOxygenAirSettings): CopperOxygenAirCalculation {
+  const oxygenSupplyCoefficient = Math.max(0, settings.oxygenSupplyCoefficient ?? DEFAULT_OXYGEN_SUPPLY_COEFFICIENT)
+  return {
+    phaseOxygenKmolh: 0,
+    fuelOxygenKmolh: 0,
+    theoreticalOxygenKmolh: 0,
+    actualOxygenKmolh: 0,
+    airVolumeNm3h: 0,
+    oxygenMass: 0,
+    nitrogenMass: 0,
+    airWeight: 0,
+    oxygenMassPct: 0,
+    nitrogenMassPct: 0,
+    oxygenSupplyCoefficient,
+  }
 }
 
-function solveOxygenAirWeight({
+function phaseOxygenDemandKmolh(
+  rawMaterials: CopperMaterialColumn[],
+  phaseInputsByMaterialId: Record<string, Record<string, CopperPhaseInput>> = {}
+) {
+  return rawMaterials.reduce((sum, material) => {
+    const phaseContents = derivePhaseContentsFromElements(material.ratios, phaseInputsByMaterialId[material.id] ?? {})
+    const phaseMass = (phaseKey: CopperPhaseAssignmentKey) => material.weight * ((phaseContents[phaseKey] ?? 0) / 100)
+    const cu2s = (phaseMass('Cu2S') * 1000) / MOLAR_MASS_KG_PER_KMOL.Cu2S
+    const fes = (phaseMass('FeS') * 1000) / MOLAR_MASS_KG_PER_KMOL.FeS
+    const sulfur = (phaseMass('S') * 1000) / MOLAR_MASS_KG_PER_KMOL.S
+    const carbon = (phaseMass('C') * 1000) / MOLAR_MASS_KG_PER_KMOL.C
+    return (
+      sum +
+      cu2s * OXYGEN_DEMAND_COEFFICIENTS.Cu2S +
+      fes * OXYGEN_DEMAND_COEFFICIENTS.FeS +
+      sulfur * OXYGEN_DEMAND_COEFFICIENTS.S +
+      carbon * OXYGEN_DEMAND_COEFFICIENTS.C
+    )
+  }, 0)
+}
+
+function fuelOxygenDemandKmolh(fuel: CopperFuelMaterial) {
+  const fuelWeight = Math.max(0, fuel.weight)
+  const carbon = fuelWeight * ((fuel.ratios['C (碳)'] ?? 0) / 100)
+  const sulfur = fuelWeight * ((fuel.ratios['S (硫)'] ?? 0) / 100)
+  const oxygen = fuelWeight * ((fuel.ratios['O (氧)'] ?? 0) / 100)
+  const carbonDemand = (carbon * 1000) / MOLAR_MASS_KG_PER_KMOL.C
+  const sulfurDemand = (sulfur * 1000) / MOLAR_MASS_KG_PER_KMOL.S
+  const oxygenCredit = (oxygen * 1000) / MOLAR_MASS_KG_PER_KMOL.O / 2
+  return Math.max(0, carbonDemand + sulfurDemand - oxygenCredit)
+}
+
+function solveOxygenAirCalculation({
   rawMaterials,
-  solventColumns,
   fuel,
   settings,
+  phaseInputsByMaterialId,
 }: {
   rawMaterials: CopperMaterialColumn[]
-  solventColumns: CopperMaterialColumn[]
   fuel: CopperFuelMaterial
   settings: CopperOxygenAirSettings
-}) {
-  const dryFeed = calculateWeightedComposition([...rawMaterials, ...solventColumns, fuel])
-  const baseVisibleProductMass = visibleCopperProductMass(calculateCopperProducts(dryFeed))
-  const airUnit = createOxygenAirColumn(1, settings)
-  const withOneTonAir = calculateWeightedComposition([...rawMaterials, ...solventColumns, fuel, airUnit])
-  const visibleProductMassWithOneTonAir = visibleCopperProductMass(calculateCopperProducts(withOneTonAir))
-  const visibleGainPerTonAir = visibleProductMassWithOneTonAir - baseVisibleProductMass
-  const denominator = 1 - visibleGainPerTonAir
-  if (denominator <= 1e-9) return 0
-  const deficit = baseVisibleProductMass - dryFeed.totalWeight
-  return Math.max(0, deficit / denominator)
+  phaseInputsByMaterialId?: Record<string, Record<string, CopperPhaseInput>>
+}): CopperOxygenAirCalculation {
+  const oxygen = Math.max(0, settings.oxygenPct)
+  const nitrogen = Math.max(0, settings.nitrogenPct)
+  const total = oxygen + nitrogen
+  if (total <= 0) return emptyOxygenAirCalculation(settings)
+
+  const oxygenMoleFraction = oxygen / total
+  if (oxygenMoleFraction <= 0) return emptyOxygenAirCalculation(settings)
+
+  const oxygenSupplyCoefficient = Math.max(0, settings.oxygenSupplyCoefficient ?? DEFAULT_OXYGEN_SUPPLY_COEFFICIENT)
+  const phaseOxygenKmolh = phaseOxygenDemandKmolh(rawMaterials, phaseInputsByMaterialId)
+  const fuelOxygenKmolh = fuelOxygenDemandKmolh(fuel)
+  const theoreticalOxygenKmolh = phaseOxygenKmolh + fuelOxygenKmolh
+  const actualOxygenKmolh = theoreticalOxygenKmolh * oxygenSupplyCoefficient
+  const totalAirKmolh = actualOxygenKmolh / oxygenMoleFraction
+  const nitrogenKmolh = Math.max(0, totalAirKmolh - actualOxygenKmolh)
+  const oxygenMass = (actualOxygenKmolh * MOLAR_MASS_KG_PER_KMOL.O2) / 1000
+  const nitrogenMass = (nitrogenKmolh * MOLAR_MASS_KG_PER_KMOL.N2) / 1000
+  const airWeight = oxygenMass + nitrogenMass
+  return {
+    phaseOxygenKmolh,
+    fuelOxygenKmolh,
+    theoreticalOxygenKmolh,
+    actualOxygenKmolh,
+    airVolumeNm3h: totalAirKmolh * NORMAL_M3_PER_KMOL,
+    oxygenMass,
+    nitrogenMass,
+    airWeight,
+    oxygenMassPct: airWeight > 0 ? (oxygenMass / airWeight) * 100 : 0,
+    nitrogenMassPct: airWeight > 0 ? (nitrogenMass / airWeight) * 100 : 0,
+    oxygenSupplyCoefficient,
+  }
 }
 
 function emptyIterativeBalanceResult(
@@ -872,20 +1231,20 @@ function emptyIterativeBalanceResult(
     fuel: CopperFuelMaterial
     heatSettings: CopperIterativeHeatSettings
     oxygenAirSettings?: CopperOxygenAirSettings
+    phaseInputsByMaterialId?: Record<string, Record<string, CopperPhaseInput>>
   },
   message: string
 ): CopperIterativeBalanceResult {
+  const oxygenAirSettings = input.oxygenAirSettings ?? { oxygenPct: 70, nitrogenPct: 30 }
   const finalSolventColumns = input.solventColumns.map((column) => ({ ...column, ratios: { ...column.ratios } }))
   const finalFuel = { ...input.fuel, ratios: { ...input.fuel.ratios } }
-  const finalOxygenAirColumn = createOxygenAirColumn(
-    solveOxygenAirWeight({
-      rawMaterials: input.rawMaterials,
-      solventColumns: finalSolventColumns,
-      fuel: finalFuel,
-      settings: input.oxygenAirSettings ?? { oxygenPct: 70, nitrogenPct: 30 },
-    }),
-    input.oxygenAirSettings ?? { oxygenPct: 70, nitrogenPct: 30 }
-  )
+  const finalOxygenAirCalculation = solveOxygenAirCalculation({
+    rawMaterials: input.rawMaterials,
+    fuel: finalFuel,
+    settings: oxygenAirSettings,
+    phaseInputsByMaterialId: input.phaseInputsByMaterialId,
+  })
+  const finalOxygenAirColumn = createOxygenAirColumn(finalOxygenAirCalculation.airWeight, oxygenAirSettings)
   const finalFeedWithoutFuel = calculateWeightedComposition([...input.rawMaterials, ...finalSolventColumns, finalOxygenAirColumn])
   const finalProducts = calculateCopperProducts(calculateWeightedComposition([...input.rawMaterials, ...finalSolventColumns, finalFuel, finalOxygenAirColumn]))
   const finalHeatBalance = calculateCopperHeatBalance({
@@ -911,6 +1270,7 @@ function emptyIterativeBalanceResult(
     finalSolventColumns,
     finalFuel,
     finalOxygenAirColumn,
+    finalOxygenAirCalculation,
     finalFeedWithoutFuel,
     finalFeed: calculateWeightedComposition([...input.rawMaterials, ...finalSolventColumns, finalFuel, finalOxygenAirColumn]),
     finalProducts,
@@ -926,6 +1286,7 @@ export function calculateCopperIterativeBalance({
   targetCaOSiO2,
   heatSettings,
   oxygenAirSettings = { oxygenPct: 70, nitrogenPct: 30 },
+  phaseInputsByMaterialId = {},
   maxIterations = 12,
   tolerance = 0.001,
 }: {
@@ -936,11 +1297,12 @@ export function calculateCopperIterativeBalance({
   targetCaOSiO2: number
   heatSettings: CopperIterativeHeatSettings
   oxygenAirSettings?: CopperOxygenAirSettings
+  phaseInputsByMaterialId?: Record<string, Record<string, CopperPhaseInput>>
   maxIterations?: number
   tolerance?: number
 }): CopperIterativeBalanceResult {
   if (rawMaterials.length === 0 || rawMaterials.every((material) => material.weight <= 0)) {
-    return emptyIterativeBalanceResult({ rawMaterials, solventColumns, fuel, heatSettings, oxygenAirSettings }, '请先输入有效的原料投料量。')
+    return emptyIterativeBalanceResult({ rawMaterials, solventColumns, fuel, heatSettings, oxygenAirSettings, phaseInputsByMaterialId }, '请先输入有效的原料投料量。')
   }
 
   const solvents = buildSolventConfigsFromColumns(solventColumns)
@@ -950,6 +1312,7 @@ export function calculateCopperIterativeBalance({
   let finalSolventColumns = previousSolventColumns
   let finalFuel = { ...fuel, weight: previousFuelWeight, ratios: { ...fuel.ratios } }
   let finalOxygenAirColumn = createOxygenAirColumn(0, oxygenAirSettings)
+  let finalOxygenAirCalculation = emptyOxygenAirCalculation(oxygenAirSettings)
   let finalFeedWithoutFuel = calculateWeightedComposition([...rawMaterials, ...finalSolventColumns, finalOxygenAirColumn])
   let finalHeatBalance = calculateCopperHeatBalance({
     feed: finalFeedWithoutFuel,
@@ -987,6 +1350,7 @@ export function calculateCopperIterativeBalance({
         finalSolventColumns,
         finalFuel,
         finalOxygenAirColumn,
+        finalOxygenAirCalculation,
         finalFeedWithoutFuel,
         finalFeed,
         finalProducts,
@@ -1017,15 +1381,13 @@ export function calculateCopperIterativeBalance({
       weight: heatBalance.requiredFuelWeight,
       ratios: { ...fuel.ratios },
     }
-    const nextOxygenAirColumn = createOxygenAirColumn(
-      solveOxygenAirWeight({
-        rawMaterials,
-        solventColumns: nextSolventColumns,
-        fuel: nextFuel,
-        settings: oxygenAirSettings,
-      }),
-      oxygenAirSettings
-    )
+    const nextOxygenAirCalculation = solveOxygenAirCalculation({
+      rawMaterials,
+      fuel: nextFuel,
+      settings: oxygenAirSettings,
+      phaseInputsByMaterialId,
+    })
+    const nextOxygenAirColumn = createOxygenAirColumn(nextOxygenAirCalculation.airWeight, oxygenAirSettings)
     const feed = calculateWeightedComposition([...rawMaterials, ...nextSolventColumns, nextFuel, nextOxygenAirColumn])
     const products = calculateCopperProducts(feed)
     const solventDelta = nextSolventColumns.reduce((max, column) => {
@@ -1052,6 +1414,7 @@ export function calculateCopperIterativeBalance({
     finalSolventColumns = nextSolventColumns
     finalFuel = nextFuel
     finalOxygenAirColumn = nextOxygenAirColumn
+    finalOxygenAirCalculation = nextOxygenAirCalculation
     finalFeedWithoutFuel = calculateWeightedComposition([...rawMaterials, ...nextSolventColumns, nextOxygenAirColumn])
     finalHeatBalance = heatBalance
     finalFeed = feed
@@ -1066,6 +1429,7 @@ export function calculateCopperIterativeBalance({
         finalSolventColumns,
         finalFuel,
         finalOxygenAirColumn,
+        finalOxygenAirCalculation,
         finalFeedWithoutFuel,
         finalFeed,
         finalProducts,
@@ -1086,6 +1450,7 @@ export function calculateCopperIterativeBalance({
     finalSolventColumns,
     finalFuel,
     finalOxygenAirColumn,
+    finalOxygenAirCalculation,
     finalFeedWithoutFuel,
     finalFeed,
     finalProducts,

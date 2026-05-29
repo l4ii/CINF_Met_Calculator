@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { SMELT_TYPES, type SelectedMethod, type SheetId } from '../types'
 import RawMaterialPhaseOxygen from './modules/RawMaterialPhaseOxygen'
 import ProductDisplay from './modules/ProductDisplay'
@@ -45,6 +45,11 @@ export default function MainContent({
   const calcCtx = useCalcOptional()
   const [copperCaseTitleDraft, setCopperCaseTitleDraft] = useState('')
   const [hasActiveCopperCase, setHasActiveCopperCase] = useState(false)
+  const mainScrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    mainScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [activeSheet])
 
   useEffect(() => {
     const mats = calcCtx?.materials ?? []
@@ -169,7 +174,7 @@ export default function MainContent({
         )}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div ref={mainScrollRef} className="flex-1 min-h-0 overflow-y-auto">
         <div className="w-full max-w-[1600px] mx-auto p-6">
           {isCopper && (
             <ErrorBoundary>

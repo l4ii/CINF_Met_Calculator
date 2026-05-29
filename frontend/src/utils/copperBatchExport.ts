@@ -14,6 +14,12 @@ export interface CopperBatchExportHtmlInput {
   rows: CopperBatchExportRow[]
 }
 
+export interface CopperBatchWorkbookSheet {
+  title: string
+  columns: CopperBatchExportColumn[]
+  rows: CopperBatchExportRow[]
+}
+
 export function getCopperStageExportName(stageName: string) {
   const trimmed = stageName.trim()
   if (trimmed.startsWith('铜')) return trimmed
@@ -54,18 +60,26 @@ export function escapeExcelHtml(value: string | number | null | undefined) {
     .replace(/'/g, '&#39;')
 }
 
-export function buildCopperBatchExportHtml({ title, columns, rows }: CopperBatchExportHtmlInput) {
-  const columnCount = columns.length + 1
-  const headerRow = columns.map((column) => `<th>${escapeExcelHtml(column.header)}</th>`).join('')
-  const subHeaderRow = columns.map((column) => `<th>${escapeExcelHtml(column.subHeader ?? '')}</th>`).join('')
-  const bodyRows = rows
-    .map((row) => {
-      const cells = columns
-        .map((_, index) => `<td>${escapeExcelHtml(row.values[index])}</td>`)
+export function buildCopperBatchWorkbookHtml(sheets: CopperBatchWorkbookSheet[]) {
+  const sheetBlocks = sheets
+    .map((sheet) => {
+      const columnCount = sheet.columns.length + 1
+      const headerRow = sheet.columns.map((column) => `<th>${escapeExcelHtml(column.header)}</th>`).join('')
+      const subHeaderRow = sheet.columns.map((column) => `<th>${escapeExcelHtml(column.subHeader ?? '')}</th>`).join('')
+      const bodyRows = sheet.rows
+        .map((row) => {
+          const cells = sheet.columns.map((_, index) => `<td>${escapeExcelHtml(row.values[index])}</td>`).join('')
+          return `<tr><th>${escapeExcelHtml(row.label)}</th>${cells}</tr>`
+        })
         .join('')
-      return `<tr><th>${escapeExcelHtml(row.label)}</th>${cells}</tr>`
+      return `<table>
+    <tr><th class="title" colspan="${columnCount}">${escapeExcelHtml(sheet.title)}</th></tr>
+    <tr><th>项目</th>${headerRow}</tr>
+    <tr><th>名称</th>${subHeaderRow}</tr>
+    ${bodyRows}
+  </table>`
     })
-    .join('')
+    .join('\n')
 
   return `<!doctype html>
 <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
@@ -75,21 +89,20 @@ export function buildCopperBatchExportHtml({ title, columns, rows }: CopperBatch
   <meta name="ProgId" content="Excel.Sheet" />
   <meta name="MimeType" content="application/vnd.ms-excel" />
   <style>
-    table { border-collapse: collapse; font-family: "Microsoft YaHei", Arial, sans-serif; font-size: 11pt; }
+    table { border-collapse: collapse; font-family: "Microsoft YaHei", Arial, sans-serif; font-size: 11pt; margin-bottom: 24px; }
     th, td { border: 1px solid #9ca3af; padding: 6px 8px; text-align: center; mso-number-format:"\\@"; }
     th { background: #f3f4f6; font-weight: 600; }
     .title { font-size: 15pt; text-align: left; background: #ffffff; }
   </style>
 </head>
 <body>
-  <table>
-    <tr><th class="title" colspan="${columnCount}">${escapeExcelHtml(title)}</th></tr>
-    <tr><th>项目</th>${headerRow}</tr>
-    <tr><th>名称</th>${subHeaderRow}</tr>
-    ${bodyRows}
-  </table>
+  ${sheetBlocks}
 </body>
 </html>`
+}
+
+export function buildCopperBatchExportHtml({ title, columns, rows }: CopperBatchExportHtmlInput) {
+  return buildCopperBatchWorkbookHtml([{ title, columns, rows }])
 }
 
 export function downloadCopperBatchExcel(filename: string, html: string) {
