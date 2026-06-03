@@ -119,7 +119,6 @@ export default function MainContent({
     const smeltType = SMELT_TYPES.find((s) => s.id === selectedMethod.smeltTypeId)
     const method = smeltType?.methods.find((m) => m.id === selectedMethod.smeltMethodId)
     if (!method) return selectedMethod.smeltMethodName
-    if (method.id === 'copper') return 'Copper Smelting'
     if (method.id === 'oxy-side-blast') return 'Oxygen-Enriched Side-Blown'
     if (method.id === 'flash') return 'Flash Smelting'
     return method.name
@@ -183,6 +182,8 @@ export default function MainContent({
                 language={language}
                 activeSheet={activeSheet}
                 onStageSelect={onSheetSelect ?? (() => undefined)}
+                smeltMethodId={selectedMethod.smeltMethodId}
+                smeltMethodName={selectedMethod.smeltMethodName}
                 caseTitleDraft={copperCaseTitleDraft}
                 onActiveCaseNameChange={(name) => {
                   setHasActiveCopperCase(Boolean(name))

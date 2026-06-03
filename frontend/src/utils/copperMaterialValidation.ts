@@ -16,8 +16,13 @@ export function validateRatiosSulfurRequirement(ratios: CopperRatios, materialNa
   return null
 }
 
-export function validateMaterialForPhaseCalc(material: Pick<CopperMaterialColumn, 'name' | 'ratios'>): string | null {
+export function validateMaterialForPhaseCalc(
+  material: Pick<CopperMaterialColumn, 'name' | 'weight' | 'ratios'>
+): string | null {
   if (!material.name.trim()) return '请先选择或填写原料名称'
+  if (!Number.isFinite(material.weight) || material.weight <= 0) {
+    return `${material.name.trim()} 须填写投料量 (t/h) 后才能计算物相成分`
+  }
   return validateRatiosSulfurRequirement(material.ratios, material.name.trim())
 }
 

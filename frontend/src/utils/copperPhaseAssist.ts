@@ -1,33 +1,111 @@
 import { validatePhaseFormulaInput } from './chemicalFormula.ts'
 import {
-  COPPER_PHASE_ASSIGNMENT_KEYS,
   COPPER_PHASE_OXYGEN_FACTORS,
   COPPER_PHASE_SULFUR_FACTORS,
   type CopperElementKey,
   type CopperPhaseAssignmentKey,
 } from './copperWorkflowCalc.ts'
+import { COPPER_PHASE_H2O_KEY } from './copperElementDisplay.ts'
 import { INPUT_PHASE_DISPLAY, getBuiltinPhaseFractions } from './copperPhaseTableCalc.ts'
+import {
+  COPPER_BUILTIN_PHASE_DISPLAY_ORDER,
+  materialPhaseRowSortIndex,
+  sortMaterialPhaseRows,
+} from './copperDisplayOrder.ts'
 
 export type MaterialPhaseAssistRow = {
   id: string
-  kind: 'builtin' | 'custom' | 'draft'
+  kind: 'builtin' | 'custom' | 'draft' | 'water' | 'other'
   builtinKey?: CopperPhaseAssignmentKey
   formula: string
   displayLabel: string
   fractions: Partial<Record<CopperElementKey, number>>
 }
 
-export const DEFAULT_BUILTIN_PHASE_ORDER: CopperPhaseAssignmentKey[] = [...COPPER_PHASE_ASSIGNMENT_KEYS]
+export const DEFAULT_BUILTIN_PHASE_ORDER: CopperPhaseAssignmentKey[] = [
+  ...COPPER_BUILTIN_PHASE_DISPLAY_ORDER.filter(
+    (key) => !(['Cu2O', 'FeO', 'Fe2O3', 'Fe3O4'] as CopperPhaseAssignmentKey[]).includes(key)
+  ),
+]
+
+export function createWaterMaterialPhaseRow(): MaterialPhaseAssistRow {
+  return {
+    id: 'H2O',
+    kind: 'water',
+    formula: 'H2O',
+    displayLabel: 'H₂O',
+    fractions: { [COPPER_PHASE_H2O_KEY]: 1 },
+  }
+}
+
+export function createOtherMaterialPhaseRow(): MaterialPhaseAssistRow {
+  return {
+    id: 'Other',
+    kind: 'other',
+    formula: 'Other',
+    displayLabel: 'Other',
+    fractions: { 'Other(其他)': 1 },
+  }
+}
 
 export function createDefaultMaterialPhaseRows(): MaterialPhaseAssistRow[] {
-  return DEFAULT_BUILTIN_PHASE_ORDER.map((key) => ({
-    id: key,
-    kind: 'builtin' as const,
-    builtinKey: key,
-    formula: key,
-    displayLabel: INPUT_PHASE_DISPLAY[key],
-    fractions: getBuiltinPhaseFractions(key),
-  }))
+  return sortMaterialPhaseRows(
+    [
+      ...DEFAULT_BUILTIN_PHASE_ORDER.map((key) => ({
+        id: key,
+        kind: 'builtin' as const,
+        builtinKey: key,
+        formula: key,
+        displayLabel: INPUT_PHASE_DISPLAY[key],
+        fractions: getBuiltinPhaseFractions(key),
+      })),
+      createWaterMaterialPhaseRow(),
+      createOtherMaterialPhaseRow(),
+    ]
+  )
+}
+
+export function createMaterialPhaseRowsFromFormulas(formulas: string[]): MaterialPhaseAssistRow[] {
+  const rows = formulas.flatMap((formula): MaterialPhaseAssistRow[] => {
+    if (formula.trim().toLowerCase() === 'other') return [createOtherMaterialPhaseRow()]
+    const builtinKey = COPPER_BUILTIN_PHASE_DISPLAY_ORDER.find((key) => key.toLowerCase() === formula.trim().toLowerCase())
+    if (builtinKey) {
+      return [
+        {
+          id: builtinKey,
+          kind: 'builtin',
+          builtinKey,
+          formula: builtinKey,
+          displayLabel: INPUT_PHASE_DISPLAY[builtinKey],
+          fractions: getBuiltinPhaseFractions(builtinKey),
+        },
+      ]
+    }
+    const resolved = resolveMaterialPhaseFormula(formula)
+    if (!resolved.ok || !resolved.row) return []
+    return [
+      {
+        id: `custom:${resolved.row.formula}`,
+        kind: 'custom',
+        formula: resolved.row.formula,
+        displayLabel: resolved.row.displayLabel,
+        fractions: resolved.row.fractions,
+      },
+    ]
+  })
+  return ensureMaterialPhaseRows(rows)
+}
+
+export function ensureMaterialPhaseRows(rows: MaterialPhaseAssistRow[] | undefined): MaterialPhaseAssistRow[] {
+  if (!rows || rows.length === 0) return createDefaultMaterialPhaseRows()
+  let next = [...rows]
+  if (!next.some((row) => row.kind === 'water' || row.id === 'H2O')) {
+    next = [...next, createWaterMaterialPhaseRow()]
+  }
+  if (!next.some((row) => row.kind === 'other' || row.id === 'Other')) {
+    next = [...next, createOtherMaterialPhaseRow()]
+  }
+  return sortMaterialPhaseRows(next)
 }
 
 export function createDraftMaterialPhaseRow(): MaterialPhaseAssistRow {
@@ -48,6 +126,7 @@ export function findDuplicateMaterialPhase(
   const normalized = formula.trim().toLowerCase()
   return rows.find((row) => {
     if (row.id === excludeRowId || row.kind === 'draft') return false
+    if (row.kind === 'other' && normalized === 'other') return true
     if (row.formula.trim().toLowerCase() === normalized) return true
     if (row.builtinKey && row.builtinKey.toLowerCase() === normalized) return true
     return false
@@ -83,6 +162,7 @@ export function phaseRowSulfurContribution(
   effectivePercent: number
 ): number {
   if (effectivePercent <= 0) return 0
+  if (row.kind === 'other') return 0
   if (row.kind === 'builtin' && row.builtinKey) {
     return effectivePercent * (COPPER_PHASE_SULFUR_FACTORS[row.builtinKey] ?? 0)
   }
@@ -91,45 +171,30 @@ export function phaseRowSulfurContribution(
 
 export function phaseRowOxygenContribution(row: MaterialPhaseAssistRow, effectivePercent: number): number {
   if (effectivePercent <= 0) return 0
+  if (row.kind === 'other') return 0
   if (row.kind === 'builtin' && row.builtinKey) {
     return effectivePercent * (COPPER_PHASE_OXYGEN_FACTORS[row.builtinKey] ?? 0)
   }
-  return effectivePercent * (row.fractions['O (氧)'] ?? 0)
+  return effectivePercent * (row.fractions['O(氧)'] ?? 0)
 }
 
 export function phaseRowCarbonContribution(row: MaterialPhaseAssistRow, effectivePercent: number): number {
   if (effectivePercent <= 0) return 0
+  if (row.kind === 'other') return 0
   if (row.kind === 'builtin' && row.builtinKey === 'C') return effectivePercent
   return effectivePercent * (row.fractions['C (碳)'] ?? 0)
 }
 
-export function moveMaterialPhaseRow(rows: MaterialPhaseAssistRow[], rowId: string, direction: 'up' | 'down') {
-  const index = rows.findIndex((row) => row.id === rowId)
-  if (index < 0) return rows
-  const target = direction === 'up' ? index - 1 : index + 1
-  if (target < 0 || target >= rows.length) return rows
-  return reorderMaterialPhaseRow(rows, rowId, rows[target]!.id)
+/** 计算用行序：固定 canonical 序，与用户拖拽无关 */
+export function rowsForPhaseCalculation(rows: MaterialPhaseAssistRow[]) {
+  return [...rows]
+    .filter((row) => row.kind !== 'draft')
+    .sort((a, b) => {
+      const diff = materialPhaseRowSortIndex(a) - materialPhaseRowSortIndex(b)
+      if (diff !== 0) return diff
+      return a.id.localeCompare(b.id)
+    })
 }
 
-export function reorderMaterialPhaseRow(
-  rows: MaterialPhaseAssistRow[],
-  draggedId: string,
-  targetId: string,
-  position: 'before' | 'after' = 'before'
-) {
-  if (draggedId === targetId) return rows
-  const fromIndex = rows.findIndex((row) => row.id === draggedId)
-  const targetIndex = rows.findIndex((row) => row.id === targetId)
-  if (fromIndex < 0 || targetIndex < 0) return rows
-  const next = [...rows]
-  const [item] = next.splice(fromIndex, 1)
-  let insertIndex = targetIndex
-  if (fromIndex < targetIndex) insertIndex -= 1
-  if (position === 'after') insertIndex += 1
-  next.splice(insertIndex, 0, item)
-  return next
-}
-
-export function rowsForOrderedCalculation(rows: MaterialPhaseAssistRow[]) {
-  return rows.filter((row) => row.kind !== 'draft')
-}
+/** @deprecated 使用 rowsForPhaseCalculation */
+export const rowsForOrderedCalculation = rowsForPhaseCalculation

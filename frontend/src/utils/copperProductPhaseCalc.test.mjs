@@ -50,4 +50,21 @@ assert(Math.abs(reviewRows.reduce((sum, row) => sum + row.pct, 0) - 100) < 0.05,
 const rows = PRODUCT_PHASE_ROWS.dust
 assert(rows.includes('Other'), 'dust phase rows should include Other')
 
+const { COPPER_BUILTIN_PHASE_FRACTIONS } = await import('./copperPhaseStoichiometry.ts')
+const dustReverse = deriveProductElementsFromPhases(
+  'dust',
+  { As2O3: 25, PbO: 25, Sb2O3: 25, ZnO: 25, Other: 0 },
+  100
+)
+const dustElementMass = Object.values(dustReverse.elementWeights).reduce((sum, value) => sum + value, 0)
+assert(dustElementMass <= 100.000001, 'dust reverse element mass should not exceed product mass')
+for (const phase of ['As2O3', 'PbO', 'Sb2O3', 'ZnO']) {
+  const phaseMass = 25
+  const elementSum = Object.values(COPPER_BUILTIN_PHASE_FRACTIONS[phase] ?? {}).reduce(
+    (sum, fraction) => sum + phaseMass * fraction,
+    0
+  )
+  assert(Math.abs(elementSum - phaseMass) < 1e-9, `${phase} reverse fractions should conserve phase mass`)
+}
+
 console.log('Copper product phase calc checks passed')

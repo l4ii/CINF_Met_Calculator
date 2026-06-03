@@ -18,6 +18,13 @@ assert(missingS?.includes('S'), 'Cu/Fe without S should block phase calc')
 const ratioError = validateRatiosSulfurRequirement({ 'Cu(铜)': 24 }, '测试矿')
 assert(ratioError?.includes('S'), 'ratio validation should mention S')
 
+const missingWeight = validateMaterialForPhaseCalc({
+  ...base,
+  weight: 0,
+  ratios: { 'Cu(铜)': 24, 'S (硫)': 30 },
+})
+assert(missingWeight?.includes('投料量'), 'missing feed rate should block phase calc')
+
 const ok = validateMaterialForPhaseCalc({
   ...base,
   ratios: { 'Cu(铜)': 24, 'S (硫)': 30 },

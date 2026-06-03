@@ -739,6 +739,31 @@ ipcMain.handle('show-save-dialog-export', async (event, defaultFileName) => {
   }
 })
 
+ipcMain.handle('export:save-workbook', async (event, payload) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const rawName = typeof payload?.fileName === 'string' ? payload.fileName : 'export.xls'
+    const baseName = path.basename(rawName).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    const fileName = /\.xls$/i.test(baseName) ? baseName : `${baseName}.xls`
+    const result = await dialog.showSaveDialog(win ?? undefined, {
+      title: '导出 Excel',
+      defaultPath: fileName,
+      filters: [{ name: 'Excel 工作簿', extensions: ['xls'] }],
+    })
+    if (result.canceled || !result.filePath) {
+      return { ok: false, cancelled: true }
+    }
+    let filePath = result.filePath
+    if (!/\.xls$/i.test(filePath)) {
+      filePath = `${filePath}.xls`
+    }
+    fs.writeFileSync(filePath, `\ufeff${String(payload?.content ?? '')}`, 'utf8')
+    return { ok: true, filePath }
+  } catch (error) {
+    return { ok: false, error: error?.message ?? String(error) }
+  }
+})
+
 ipcMain.handle('copper-case:save-desktop', async (event, payload) => {
   try {
     const win = BrowserWindow.fromWebContents(event.sender)

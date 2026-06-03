@@ -11,7 +11,9 @@ const {
   calculateCopperIterativeBalance,
   createDefaultCopperMaterials,
   createDefaultSolventColumns,
+  emptyCopperRatios,
   derivePhaseContentsFromElements,
+  normalizeCopperRatios,
   parseCopperLibraryCsv,
   solveCopperSolvents,
   elementRatiosToSolventComposition,
@@ -21,18 +23,16 @@ const {
 const { calculateCopperProducts } = await import('./copperProcessCalc.ts')
 
 function slagTargetRatiosFromProductAndSolvents(slagProduct, solventWeights = {}) {
-  const fxSi = 60.084 / 28.085
-  const fxCa = 56.077 / 40.078
   const ew = slagProduct.elementWeights
   let mFe = ew['Fe(铁)'] ?? 0
-  let mSi = (ew['Si(硅)'] ?? 0) * fxSi
-  let mCa = (ew['Ca(钙)'] ?? 0) * fxCa
+  let mSi = ew['SiO₂(二氧化硅)'] ?? 0
+  let mCa = ew['CaO(氧化钙)'] ?? 0
   for (const solvent of DEFAULT_COPPER_SOLVENTS) {
     const weight = solventWeights[solvent.name] ?? 0
     const elements = solventOxidesToElements(solvent.composition)
     mFe += weight * ((elements['Fe(铁)'] ?? 0) / 100)
-    mSi += weight * ((elements['Si(硅)'] ?? 0) / 100) * fxSi
-    mCa += weight * ((elements['Ca(钙)'] ?? 0) / 100) * fxCa
+    mSi += weight * ((elements['SiO₂(二氧化硅)'] ?? 0) / 100)
+    mCa += weight * ((elements['CaO(氧化钙)'] ?? 0) / 100)
   }
   return {
     feSiO2: mSi > 0 ? mFe / mSi : 0,
@@ -46,22 +46,22 @@ function slagTargetRatiosFromMaterialsAndSolvents(rawMaterials, solventWeights =
 }
 
 const expectedOrder = [
-  'Ag(银)',
-  'Al(铝)',
-  'As(砷)',
-  'Au(金)',
-  'C (碳)',
-  'Ca(钙)',
   'Cu(铜)',
-  'Fe(铁)',
-  'N (氮)',
-  'O (氧)',
-  'Other(其他)',
-  'Pb(铅)',
   'S (硫)',
-  'Sb(锑)',
-  'Si(硅)',
+  'Fe(铁)',
+  'SiO₂(二氧化硅)',
+  'CaO(氧化钙)',
+  'Ag(银)',
+  'Au(金)',
+  'Pb(铅)',
+  'As(砷)',
   'Zn(锌)',
+  'Al₂O₃(三氧化二铝)',
+  'Sb(锑)',
+  'O(氧)',
+  'N(氮)',
+  'C (碳)',
+  'Other(其他)',
 ]
 assert.deepEqual(COPPER_ELEMENT_KEYS, expectedOrder)
 
@@ -129,109 +129,96 @@ assert.equal(blend.totalWeight, 100)
 assert.equal(blend.ratios['Cu(铜)'].toFixed(3), '22.400')
 assert.equal(blend.ratios['Fe(铁)'].toFixed(3), '29.600')
 assert.equal(blend.ratios['S (硫)'].toFixed(3), '31.800')
-assert.equal(blend.ratios['Other(其他)'].toFixed(3), '6.790')
+assert.equal(blend.ratios['Other(其他)'].toFixed(3), '1.179')
+
+const { COPPER_BUILTIN_PHASE_FRACTIONS } = await import('./copperPhaseStoichiometry.ts')
+
+const phaseFraction = (phase, element) => COPPER_BUILTIN_PHASE_FRACTIONS[phase]?.[element] ?? 0
+
+const normalizedA = normalizeCopperRatios(rawMaterials[0].ratios)
 
 const phaseUnknowns = calculateUnknownsFromPhases(
-  { Cu2S: '35', FeS: '20', SiO2: '8', CaO: '2', C: '1.5' },
-  rawMaterials[0].ratios
+  { Cu2S: '35', FeS: '20', FeO: '5', SiO2: '8', CaO: '2', C: '1.5' },
+  normalizedA
 )
-assert(phaseUnknowns['O (氧)'] > 0)
+assert(phaseUnknowns['O(氧)'] > 0, 'O2 should come from iron/copper oxides, not SiO2/CaO')
 assert.equal(phaseUnknowns['C (碳)'], 1.5)
 assert.equal(
-  Math.round((calculateKnownTotal({ ...rawMaterials[0].ratios, ...phaseUnknowns }) + phaseUnknowns['Other(其他)']) * 1000) / 1000,
+  Math.round((calculateKnownTotal({ ...normalizedA, ...phaseUnknowns }) + phaseUnknowns['Other(其他)']) * 1000) / 1000,
   100
 )
 
-const correctedPhaseUnknowns = calculateUnknownsFromPhases(
-  { SiO2: { value: 10, factor: 0.5 }, C: { value: 2, factor: 1.25 } },
-  {}
-)
-const expectedCorrectedOxygen = 10 * 0.5 * (32 / 60.084)
-assert.equal(correctedPhaseUnknowns['O (氧)'].toFixed(3), expectedCorrectedOxygen.toFixed(3))
-assert.equal(correctedPhaseUnknowns['C (碳)'], 2.5)
+const correctedPhaseUnknowns = calculateUnknownsFromPhases({ SiO2: 10, C: 2 }, {})
+assert.equal(correctedPhaseUnknowns['O(氧)'].toFixed(3), '0.000', 'SiO2 oxygen must not count toward O2 column')
+assert.equal(correctedPhaseUnknowns['C (碳)'], 2)
+assert.equal(correctedPhaseUnknowns['Other(其他)'].toFixed(3), '98.000')
+
+const manualOtherUnknowns = calculateUnknownsFromPhases({ FeO: 50, Other: 30 }, {})
+assert.ok(manualOtherUnknowns['Other(其他)'] >= 30, 'manual Other should be preserved as a minimum closure')
 assert.equal(
-  correctedPhaseUnknowns['Other(其他)'].toFixed(3),
-  (100 - expectedCorrectedOxygen - 2.5).toFixed(3)
+  Math.round((calculateKnownTotal(manualOtherUnknowns) + manualOtherUnknowns['Other(其他)']) * 1000) / 1000,
+  100
 )
 
-const derivedPhases = derivePhaseContentsFromElements(rawMaterials[0].ratios, {
-  Cu2S: { factor: 1 },
-  FeS: { factor: 1 },
-  S: { factor: 1 },
-  SiO2: { factor: 1 },
-  CaO: { factor: 1 },
-  Al2O3: { factor: 1 },
-  Cu2O: { factor: 1 },
-  FeO: { factor: 1 },
-  Fe2O3: { factor: 0 },
-  Fe3O4: { factor: 0 },
-  C: { factor: 1 },
-})
+const derivedPhases = derivePhaseContentsFromElements(rawMaterials[0].ratios)
 assert(derivedPhases.Cu2S > 0)
 assert(derivedPhases.FeS > 0)
 assert(derivedPhases.SiO2 > 0)
-assert.equal(derivedPhases.Fe2O3, 0)
-assert.equal(derivedPhases.Fe3O4, 0)
 
-const concentrateCompletion = calculatePhaseElementCompletion(rawMaterials[0].ratios, {
-  Cu2S: { factor: 1 },
-  FeS: { factor: 1 },
-  S: { factor: 1 },
-  SiO2: { factor: 1 },
-  CaO: { factor: 1 },
-  Al2O3: { factor: 1 },
-  Cu2O: { factor: 1 },
-  FeO: { factor: 1 },
-  Fe2O3: { factor: 1 },
-  Fe3O4: { factor: 1 },
-  C: { factor: 1 },
+const cuFrac = phaseFraction('Cu2S', 'Cu(铜)')
+const sFracCu2S = phaseFraction('Cu2S', 'S (硫)')
+const sFracFeS = phaseFraction('FeS', 'S (硫)')
+const cuFromPhases =
+  derivedPhases.Cu2S * cuFrac +
+  derivedPhases.Cu2O * phaseFraction('Cu2O', 'Cu(铜)')
+const feFromPhases =
+  derivedPhases.FeS * phaseFraction('FeS', 'Fe(铁)') +
+  derivedPhases.FeO * phaseFraction('FeO', 'Fe(铁)') +
+  derivedPhases.Fe2O3 * phaseFraction('Fe2O3', 'Fe(铁)') +
+  derivedPhases.Fe3O4 * phaseFraction('Fe3O4', 'Fe(铁)')
+const sFromPhases =
+  derivedPhases.Cu2S * sFracCu2S + derivedPhases.FeS * sFracFeS + derivedPhases.S
+assert.ok(Math.abs(cuFromPhases - (normalizedA['Cu(铜)'] ?? 0)) < 0.02, 'derived Cu must conserve assay')
+assert.ok(Math.abs(feFromPhases - (normalizedA['Fe(铁)'] ?? 0)) < 0.02, 'derived Fe must conserve assay')
+assert.ok(Math.abs(sFromPhases - (normalizedA['S (硫)'] ?? 0)) < 0.02, 'derived S must conserve assay')
+
+const traceRatios = normalizeCopperRatios({
+  ...emptyCopperRatios(),
+  'Pb(铅)': 5,
+  'As(砷)': 2,
+  'Sb(锑)': 1,
+  'Zn(锌)': 3,
 })
+const tracePhases = derivePhaseContentsFromElements(traceRatios)
+assert.ok(Math.abs(tracePhases.PbO * phaseFraction('PbO', 'Pb(铅)') - 5) < 0.02, 'PbO should conserve Pb')
+assert.ok(Math.abs(tracePhases.As2O3 * phaseFraction('As2O3', 'As(砷)') - 2) < 0.02, 'As2O3 should conserve As')
+assert.ok(Math.abs(tracePhases.Sb2O3 * phaseFraction('Sb2O3', 'Sb(锑)') - 1) < 0.02, 'Sb2O3 should conserve Sb')
+assert.ok(Math.abs(tracePhases.ZnO * phaseFraction('ZnO', 'Zn(锌)') - 3) < 0.02, 'ZnO should conserve Zn')
+
+for (const phase of ['Cu2O', 'FeO', 'Fe2O3', 'Fe3O4', 'PbO', 'As2O3', 'Sb2O3', 'ZnO']) {
+  const fractionTotal = Object.values(COPPER_BUILTIN_PHASE_FRACTIONS[phase] ?? {}).reduce((sum, value) => sum + value, 0)
+  assert.ok(Math.abs(fractionTotal - 1) < 1e-9, `${phase} element fractions should close to 1`)
+}
+
+const concentrateCompletion = calculatePhaseElementCompletion(rawMaterials[0].ratios)
 assert.equal(
   Math.round(
-    (calculateKnownTotal({ ...rawMaterials[0].ratios, ...concentrateCompletion.unknowns }) +
+    (calculateKnownTotal({ ...normalizedA, ...concentrateCompletion.unknowns }) +
       concentrateCompletion.unknowns['Other(其他)']) *
       1000
   ) / 1000,
   100
 )
 
-const completion = calculatePhaseElementCompletion(
-  { 'Si(硅)': 10 },
-  {
-    Cu2S: { factor: 1 },
-    FeS: { factor: 1 },
-    S: { factor: 1 },
-    SiO2: { factor: 1 },
-    CaO: { factor: 1 },
-    Al2O3: { factor: 1 },
-    Cu2O: { factor: 1 },
-    FeO: { factor: 1 },
-    Fe2O3: { factor: 1 },
-    Fe3O4: { factor: 1 },
-    C: { factor: 1 },
-  },
-)
+const completion = calculatePhaseElementCompletion({ 'SiO₂(二氧化硅)': 10 })
 assert.equal(
-  Math.round((calculateKnownTotal({ 'Si(硅)': 10, ...completion.unknowns }) + completion.unknowns['Other(其他)']) * 1000) / 1000,
+  Math.round((calculateKnownTotal({ 'SiO₂(二氧化硅)': 10, ...completion.unknowns }) + completion.unknowns['Other(其他)']) * 1000) / 1000,
   100
 )
 
-const standardPhaseFactors = {
-  Cu2S: { factor: 1 },
-  FeS: { factor: 1 },
-  S: { factor: 1 },
-  SiO2: { factor: 1 },
-  CaO: { factor: 1 },
-  Al2O3: { factor: 1 },
-  Cu2O: { factor: 1 },
-  FeO: { factor: 1 },
-  Fe2O3: { factor: 1 },
-  Fe3O4: { factor: 1 },
-  C: { factor: 1 },
-}
 const complexConc = COPPER_MATERIAL_LIBRARY.find((m) => m.id === 'cu-conc-complex')
 assert(complexConc)
-const complexCompletion = calculatePhaseElementCompletion(complexConc.ratios, standardPhaseFactors)
+const complexCompletion = calculatePhaseElementCompletion(complexConc.ratios)
 assert.equal(
   Math.round(
     (calculateKnownTotal({ ...complexConc.ratios, ...complexCompletion.unknowns }) +
@@ -242,14 +229,31 @@ assert.equal(
   'phase completion must close to 100% even when stoichiometric oxide O exceeds assay headroom (e.g. 复杂铜精矿)'
 )
 assert.ok(
-  complexCompletion.unknowns['O (氧)'] < 8,
-  'oxygen should be capped-down from raw phase sum so total does not exceed 100%'
+  complexCompletion.unknowns['O(氧)'] < 8,
+  'O2 should be capped-down from raw phase sum so total does not exceed 100%'
 )
+
+const { createDefaultMaterialPhaseRows, rowsForPhaseCalculation } = await import('./copperPhaseAssist.ts')
+const { calculateOrderedPhaseElementCompletion } = await import('./copperWorkflowCalc.ts')
+const orderedRows = createDefaultMaterialPhaseRows()
+const orderedCompletion = calculateOrderedPhaseElementCompletion(
+  rawMaterials[0].ratios,
+  rowsForPhaseCalculation(orderedRows)
+)
+assert.equal(orderedCompletion.valid, true, orderedCompletion.message ?? 'ordered path should solve')
+assert.ok(orderedCompletion.phaseContents.Cu2S > 0, 'ordered path should form Cu2S from Cu+S conservation')
+assert.ok(orderedCompletion.phaseContents.FeS > 0, 'ordered path should form FeS from Fe+S conservation')
+assert.equal(orderedCompletion.phaseContents.Cu2O ?? 0, 0, 'Cu should not all go to Cu2O when sulfides form')
+assert.equal(orderedCompletion.phaseContents.Fe2O3 ?? 0, 0, 'remaining Fe should not split into multiple oxides')
+assert.equal(orderedCompletion.phaseContents.Fe3O4 ?? 0, 0, 'remaining Fe should not split into multiple oxides')
+const orderedPhaseSum = Object.values(orderedCompletion.phaseContents).reduce((sum, value) => sum + value, 0)
+assert.ok((orderedCompletion.phaseContents.Other ?? 0) > 0, 'ordered path should expose default Other closure row')
+assert.ok(Math.abs(orderedPhaseSum - 100) < 0.05, 'ordered visible phase rows should close to 100%')
 
 const ironOreElements = solventOxidesToElements(DEFAULT_COPPER_SOLVENTS[1].composition)
 assert.equal(ironOreElements['Fe(铁)'].toFixed(3), '59.940')
-assert.equal(ironOreElements['Si(硅)'].toFixed(3), '2.805')
-assert.equal(ironOreElements['O (氧)'].toFixed(3), '3.196')
+assert.equal(ironOreElements['SiO₂(二氧化硅)'].toFixed(3), '6.000')
+assert.equal(ironOreElements['O(氧)'].toFixed(3), '0.000')
 const ironOreOxides = elementRatiosToSolventComposition(ironOreElements)
 assert.equal(ironOreOxides['Fe(铁)'].toFixed(3), '59.940')
 assert.equal(ironOreOxides['SiO₂(二氧化硅)'].toFixed(3), '6.000')
@@ -310,32 +314,19 @@ const productBasisRatios = slagTargetRatiosFromMaterialsAndSolvents([productBasi
 const productBasisBlend = calculateWeightedComposition([productBasisProbe])
 const rawBlendFeSiO2 =
   (productBasisBlend.elementWeights['Fe(铁)'] ?? 0) /
-  ((productBasisBlend.elementWeights['Si(硅)'] ?? 0) * (60.084 / 28.085))
+  (productBasisBlend.elementWeights['SiO₂(二氧化硅)'] ?? 1)
 assert(Math.abs(productBasisRatios.feSiO2 - 3.2) < 1e-6)
 assert(
   Math.abs(productBasisRatios.feSiO2 - rawBlendFeSiO2) > 0.5,
   'solvent solution should be based on product slag Fe/SiO2, not total feed Fe/SiO2'
 )
 
-const standardPhaseFactorsForSlagTest = {
-  Cu2S: { factor: 1 },
-  FeS: { factor: 1 },
-  S: { factor: 1 },
-  SiO2: { factor: 1 },
-  CaO: { factor: 1 },
-  Al2O3: { factor: 1 },
-  Cu2O: { factor: 1 },
-  FeO: { factor: 1 },
-  Fe2O3: { factor: 1 },
-  Fe3O4: { factor: 1 },
-  C: { factor: 1 },
-}
 const dualConcRaw = rawMaterials.map((m) => ({
   ...m,
   ratios: { ...m.ratios },
 }))
 for (const m of dualConcRaw) {
-  const comp = calculatePhaseElementCompletion(m.ratios, standardPhaseFactorsForSlagTest)
+  const comp = calculatePhaseElementCompletion(m.ratios)
   m.ratios = { ...m.ratios, ...comp.unknowns }
 }
 const dualSolventSolution = solveCopperSolvents({
@@ -367,10 +358,10 @@ const iterativeResult = calculateCopperIterativeBalance({
     ash: 12,
     ratios: {
       'C (碳)': 68,
-      'O (氧)': 8,
-      'N (氮)': 1,
+      'O(氧)': 16,
+      'N(氮)': 2,
       'S (硫)': 0.8,
-      'Other(其他)': 22.2,
+      'Other(其他)': 13.2,
     },
   },
   targetFeSiO2: 2.8,
@@ -400,6 +391,6 @@ assert.equal(importedLibrary[0].name, '进口铜精矿')
 assert.equal(importedLibrary[0].ratios['Cu(铜)'], 25)
 assert.equal(importedLibrary[0].ratios['Ag(银)'], 0.06)
 assert.equal(importedLibrary[0].ratios['Other(其他)'].toFixed(3), '12.940')
-assert.equal(importedLibrary[1].ratios['Si(硅)'], 8)
+assert.equal(importedLibrary[1].ratios['SiO₂(二氧化硅)'], 8)
 
 console.log('copperWorkflowCalc tests passed')

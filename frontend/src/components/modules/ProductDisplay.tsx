@@ -21,9 +21,7 @@ interface ProductDisplayProps {
   language?: 'zh' | 'en'
 }
 
-const SI_TO_SIO2 = 60.084 / 28.085
-const CA_TO_CAO = 56.077 / 40.078
-const FE_TO_FEO = 71.844 / 55.845
+import { CA_TO_CAO, FE_TO_FEO, SI_TO_SIO2 } from '../../utils/atomicMass.ts'
 
 const PRODUCT_NAMES = {
   slag: '熔炼渣',

@@ -1,43 +1,31 @@
+import { ATOMIC_MASS, atomicMass, compoundMolarMass, ELEMENT_SYMBOLS } from './atomicMass.ts'
 import type { CopperElementKey } from './copperWorkflowCalc.ts'
 
-/** 原子量 (g/mol)，覆盖配料模型常用元素 */
-export const ATOMIC_MASS: Record<string, number> = {
-  Ag: 107.868,
-  Al: 26.982,
-  As: 74.922,
-  Au: 196.967,
-  C: 12.011,
-  Ca: 40.078,
-  Cu: 63.546,
-  Fe: 55.845,
-  N: 14.007,
-  O: 15.999,
-  Pb: 207.2,
-  S: 32.066,
-  Sb: 121.76,
-  Si: 28.085,
-  Zn: 65.38,
-}
+export { ATOMIC_MASS, atomicMass, compoundMolarMass }
 
 const SYMBOL_TO_ELEMENT_KEY: Record<string, CopperElementKey> = {
   Ag: 'Ag(银)',
-  Al: 'Al(铝)',
   As: 'As(砷)',
   Au: 'Au(金)',
   C: 'C (碳)',
-  Ca: 'Ca(钙)',
   Cu: 'Cu(铜)',
   Fe: 'Fe(铁)',
-  N: 'N (氮)',
-  O: 'O (氧)',
   Pb: 'Pb(铅)',
   S: 'S (硫)',
   Sb: 'Sb(锑)',
-  Si: 'Si(硅)',
   Zn: 'Zn(锌)',
 }
 
-const ELEMENT_SYMBOLS = Object.keys(ATOMIC_MASS).sort((a, b) => b.length - a.length)
+function symbolToCopperElementMass(symbol: string, atomMass: number): Partial<Record<CopperElementKey, number>> {
+  const direct = SYMBOL_TO_ELEMENT_KEY[symbol]
+  if (direct) return { [direct]: atomMass }
+  if (symbol === 'Si') return { 'SiO₂(二氧化硅)': atomMass * (compoundMolarMass({ Si: 1, O: 2 }) / atomicMass('Si')) }
+  if (symbol === 'Ca') return { 'CaO(氧化钙)': atomMass * (compoundMolarMass({ Ca: 1, O: 1 }) / atomicMass('Ca')) }
+  if (symbol === 'Al') return { 'Al₂O₃(三氧化二铝)': atomMass * (compoundMolarMass({ Al: 2, O: 3 }) / (2 * atomicMass('Al'))) }
+  if (symbol === 'O') return { 'O(氧)': atomMass }
+  if (symbol === 'N') return { 'N(氮)': atomMass }
+  return {}
+}
 
 const SUBSCRIPT_TO_DIGIT: Record<string, string> = {
   '₀': '0',
@@ -146,6 +134,8 @@ export const PHASE_FORMULA_ALIASES: Record<string, string> = {
   al2o3: 'Al2O3',
   caso4: 'CaSO4',
   pbo: 'PbO',
+  as2o3: 'As2O3',
+  sb2o3: 'Sb2O3',
   zno: 'ZnO',
   cu2se: 'Cu2Se',
 }
@@ -254,7 +244,7 @@ export function parseFormulaInput(raw: string): ParsedFormulaResult {
 
   const unsupportedElements = tokens
     .map(({ symbol }) => symbol)
-    .filter((symbol) => !SYMBOL_TO_ELEMENT_KEY[symbol])
+    .filter((symbol) => !SYMBOL_TO_ELEMENT_KEY[symbol] && !['Si', 'Ca', 'Al', 'O', 'N'].includes(symbol))
 
   if (unsupportedElements.length > 0) {
     const unique = [...new Set(unsupportedElements)]
@@ -278,10 +268,12 @@ export function parseFormulaInput(raw: string): ParsedFormulaResult {
   const elementMass: Partial<Record<CopperElementKey, number>> = {}
 
   for (const { symbol, count } of tokens) {
-    const mass = (ATOMIC_MASS[symbol] ?? 0) * count
+    const mass = (atomicMass(symbol) ?? 0) * count
     molarMass += mass
-    const elementKey = SYMBOL_TO_ELEMENT_KEY[symbol]
-    if (elementKey) elementMass[elementKey] = (elementMass[elementKey] ?? 0) + mass
+    const mapped = symbolToCopperElementMass(symbol, mass)
+    for (const [key, value] of Object.entries(mapped) as [CopperElementKey, number][]) {
+      elementMass[key] = (elementMass[key] ?? 0) + value
+    }
   }
 
   const elementFractions: Partial<Record<CopperElementKey, number>> = {}

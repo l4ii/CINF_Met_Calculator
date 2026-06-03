@@ -42,7 +42,8 @@ export const SMELT_TYPES: SmeltType[] = [
     id: 'cu',
     name: '铜冶炼',
     methods: [
-      { id: 'copper', name: '铜冶炼', smeltTypeId: 'cu' },
+      { id: 'oxy-side-blast', name: '富氧侧吹法', smeltTypeId: 'cu' },
+      { id: 'flash', name: '闪速炼铜法', smeltTypeId: 'cu' },
     ],
   },
   {

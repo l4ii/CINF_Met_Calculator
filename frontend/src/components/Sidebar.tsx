@@ -35,7 +35,6 @@ export default function Sidebar({
     sb: 'Antimony Smelting',
   }
   const methodNameEn: Record<string, string> = {
-    copper: 'Copper Smelting',
     'oxy-side-blast': 'Oxygen-Enriched Side-Blown',
     flash: 'Flash Smelting',
   }
@@ -51,18 +50,7 @@ export default function Sidebar({
   }
   const isLeadFlash = (method?: SelectedMethod | null) =>
     method?.smeltTypeId === 'pb' && method?.smeltMethodId === 'flash'
-  const isCopper = (method?: SelectedMethod | null) => method?.smeltTypeId === 'cu'
   const sheetLabel = (sheet: { id: SheetId; name: string }) => {
-    if (isCopper(selectedMethod)) {
-      if (language === 'en') {
-        if (sheet.id === 'raw_material') return 'Workflow'
-        if (sheet.id === 'cu_smelting') return 'Smelting'
-        if (sheet.id === 'cu_converting') return 'Converting'
-        if (sheet.id === 'cu_refining') return 'Refining'
-        if (sheet.id === 'cu_equipment') return 'Equipment Selection'
-      }
-      return sheet.name
-    }
     if (isLeadFlash(selectedMethod)) {
       if (language === 'en') {
         if (sheet.id === 'raw_material') return 'Blend Calculation'
@@ -131,36 +119,7 @@ export default function Sidebar({
 
       {/* 冶炼类型 → 冶炼方法 */}
       <div className="sidebar-scroll flex-1 min-h-0 overflow-y-auto p-3">
-        {SMELT_TYPES.map((smeltType) => {
-          if (smeltType.id === 'cu') {
-            const active = selectedMethod?.smeltTypeId === 'cu'
-            const copperMethod = smeltType.methods[0]
-            return (
-              <div key={smeltType.id} className="mb-3">
-                <button
-                  onClick={() => {
-                    onMethodSelect({
-                      smeltTypeId: smeltType.id,
-                      smeltTypeName: language === 'en' ? (smeltTypeNameEn[smeltType.id] ?? smeltType.name) : smeltType.name,
-                      smeltMethodId: copperMethod?.id ?? 'copper',
-                      smeltMethodName: language === 'en' ? 'Copper Smelting' : '铜冶炼',
-                      description: copperMethod?.description,
-                    })
-                  }}
-                  className={`w-full text-left px-2 py-2 rounded-lg text-base font-bold transition-colors ${
-                    active
-                      ? 'bg-blue-600 text-white'
-                      : darkMode
-                      ? 'text-gray-300 hover:bg-gray-800 hover:text-gray-100'
-                      : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
-                  }`}
-                >
-                  {language === 'en' ? (smeltTypeNameEn[smeltType.id] ?? smeltType.name) : smeltType.name}
-                </button>
-              </div>
-            )
-          }
-          return (
+        {SMELT_TYPES.map((smeltType) => (
           <div key={smeltType.id} className="mb-3">
             <div
               className={`w-full text-left text-base font-bold mb-1 px-2 py-1.5 ${
@@ -174,6 +133,7 @@ export default function Sidebar({
                 const active = isSelected(smeltType.id, method.id)
                 const expanded = isExpanded(smeltType.id, method.id)
                 const methodFullKey = methodKey(smeltType.id, method.id)
+                const isCopperMethod = smeltType.id === 'cu'
                 return (
                   <div key={method.id} className="mb-1">
                     <button
@@ -186,7 +146,10 @@ export default function Sidebar({
                           description: method.description,
                         }
                         onMethodSelect(newMethod)
-                        // 自动展开选中的方法
+                        if (isCopperMethod) {
+                          onSheetSelect('raw_material')
+                          return
+                        }
                         setExpandedMethods((prev) => new Set(prev).add(methodFullKey))
                       }}
                       className={`w-full text-left px-2 py-1.5 rounded-lg text-sm transition-colors flex items-center justify-between ${
@@ -198,9 +161,11 @@ export default function Sidebar({
                       }`}
                     >
                       <span>{language === 'en' ? (methodNameEn[method.id] ?? method.name) : method.name}</span>
-                      <span className={`text-sm transition-transform ${expanded ? 'rotate-90' : ''}`}>▶</span>
+                      {!isCopperMethod && (
+                        <span className={`text-sm transition-transform ${expanded ? 'rotate-90' : ''}`}>▶</span>
+                      )}
                     </button>
-                    {expanded && active && (
+                    {!isCopperMethod && expanded && active && (
                       <div className="pl-4 mt-1 space-y-0.5">
                         {visibleSheets().map((sheet) => {
                           const sheetActive = activeSheet === sheet.id
@@ -230,7 +195,7 @@ export default function Sidebar({
               })}
             </div>
           </div>
-        )})}
+        ))}
       </div>
 
       {/* 了解我们、设置 */}

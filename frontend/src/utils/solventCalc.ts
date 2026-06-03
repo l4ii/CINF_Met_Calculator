@@ -16,8 +16,7 @@ import type { ElementWeights } from './phaseAnalysis'
 import type { MaterialEntry } from '../context/CalcContext'
 import { TWO_MATERIALS } from '../config/rawMaterialConfig'
 
-const SI_TO_SIO2 = 60.084 / 28.085
-const CA_TO_CAO = 56.077 / 40.078
+import { CA_TO_CAO, SI_TO_SIO2 } from './atomicMass.ts'
 
 /** 熔剂三参数：Fe、SiO₂、CaO 百分比 */
 export interface SolventComposition {

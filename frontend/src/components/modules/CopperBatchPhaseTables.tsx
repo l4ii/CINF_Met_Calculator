@@ -1,6 +1,11 @@
 import { inputSm } from '../../theme/uiTheme'
 import {
+  buildUnifiedCopperPhaseRowKeys,
+} from '../../utils/copperDisplayOrder'
+import { waterPhasePercent } from '../../utils/copperPhaseBatchCalc.ts'
+import {
   INPUT_PHASE_DISPLAY,
+  INPUT_PHASE_EXTRA_DISPLAY,
   INPUT_PHASE_ROW_KEYS,
   type InputPhaseRowKey,
   type PhasePercentMap,
@@ -10,6 +15,7 @@ import {
   PRODUCT_PHASE_ROWS,
   type ProductPhasePercentMap,
 } from '../../utils/copperProductPhaseCalc'
+import type { CopperPhaseAssignmentKey } from '../../utils/copperWorkflowCalc'
 import type { CopperProductKey } from '../../utils/copperProcessCalc'
 
 type ColumnKind = 'raw' | 'solvent' | 'fuel' | 'oxygen' | 'blend' | 'product'
@@ -26,35 +32,22 @@ export type PhaseTableColumn = {
   productPhases?: ProductPhasePercentMap
   productGasVolume?: Record<string, number>
   readOnly?: boolean
+  /** 干基水分 %，用于 H₂O 物相行 */
+  moisture?: number
 }
 
-/** 统一物相行：投入侧 + 产出侧并集，顺序与元素总表视觉习惯一致 */
-const UNIFIED_PHASE_ROW_KEYS = [
-  'O2',
-  'N2',
-  'Cu2S',
-  'FeS',
-  'S',
-  'Cu2O',
-  'FeO',
-  'Fe2O3',
-  'Fe3O4',
-  'SiO2',
-  'CaO',
-  'Al2O3',
-  'C',
-  'PbO',
-  'As2O3',
-  'Sb2O3',
-  'ZnO',
-  'SO2',
-  'CO2',
-  'Other',
-] as const
+/** 统一物相行：投入侧 + 产出侧并集，顺序与元素总表一致 */
+const UNIFIED_PHASE_ROW_KEYS = buildUnifiedCopperPhaseRowKeys()
 
 function phaseRowLabel(key: string) {
-  if (key === 'O2' || key === 'N2') return key
-  return INPUT_PHASE_DISPLAY[key as InputPhaseRowKey] ?? PRODUCT_PHASE_DISPLAY[key] ?? key
+  if (key === 'O2') return 'O'
+  if (key === 'N2') return 'N'
+  return (
+    INPUT_PHASE_DISPLAY[key as CopperPhaseAssignmentKey] ??
+    INPUT_PHASE_EXTRA_DISPLAY[key as 'H2O' | 'Other'] ??
+    PRODUCT_PHASE_DISPLAY[key] ??
+    key
+  )
 }
 
 function cellClass(dark: boolean, tone: ColumnKind) {
@@ -84,8 +77,10 @@ function formatCell(value: number) {
 }
 
 function isInputPhaseRow(column: PhaseTableColumn, rowKey: string) {
-  if (column.kind === 'oxygen') return rowKey === 'O2' || rowKey === 'N2'
-  if (column.kind === 'product' || column.kind === 'blend') return false
+  if (column.kind === 'oxygen' || column.kind === 'blend') {
+    return rowKey === 'O2' || rowKey === 'N2' || (column.kind === 'blend' && INPUT_PHASE_ROW_KEYS.includes(rowKey as InputPhaseRowKey))
+  }
+  if (column.kind === 'product') return false
   if (rowKey === 'O2' || rowKey === 'N2') return false
   return INPUT_PHASE_ROW_KEYS.includes(rowKey as InputPhaseRowKey)
 }
@@ -102,54 +97,58 @@ function isPhaseRowApplicable(column: PhaseTableColumn, rowKey: string) {
 }
 
 function getCellValue(column: PhaseTableColumn, rowKey: string): number | null {
-  if (column.kind === 'oxygen') {
+  if (column.kind === 'oxygen' || column.kind === 'blend') {
     if (rowKey === 'O2') return column.oxygenAir?.weightPct.O2 ?? null
     if (rowKey === 'N2') return column.oxygenAir?.weightPct.N2 ?? null
+    if (column.kind === 'blend' && INPUT_PHASE_ROW_KEYS.includes(rowKey as InputPhaseRowKey)) {
+      if (rowKey === 'H2O') {
+        const m = column.moisture ?? 0
+        return waterPhasePercent(column.weight, m)
+      }
+      return column.phases?.[rowKey as InputPhaseRowKey] ?? 0
+    }
     return null
   }
   if (column.kind === 'product') {
     if (!isOutputPhaseRow(column, rowKey)) return null
     return column.productPhases?.[rowKey] ?? 0
   }
+  if (rowKey === 'H2O') {
+    if (!isInputPhaseRow(column, rowKey)) return null
+    const m = column.moisture ?? 0
+    return waterPhasePercent(column.weight, m)
+  }
   if (!isInputPhaseRow(column, rowKey)) return null
   return column.phases?.[rowKey as InputPhaseRowKey] ?? 0
 }
 
 function isCellEditable(column: PhaseTableColumn, rowKey: string) {
+  if (rowKey === 'H2O') return false
   if (column.readOnly || column.kind === 'blend') return false
   if (column.kind === 'product') return isOutputPhaseRow(column, rowKey)
   return isInputPhaseRow(column, rowKey)
 }
 
-function isVolumeRowApplicable(column: PhaseTableColumn) {
-  return column.kind === 'oxygen' || column.productKey === 'gas'
-}
-
 function columnTotal(column: PhaseTableColumn) {
-  if (column.kind === 'oxygen') {
-    return (column.oxygenAir?.weightPct.O2 ?? 0) + (column.oxygenAir?.weightPct.N2 ?? 0)
+  if (column.kind === 'oxygen' || column.kind === 'blend') {
+    const gasTotal = (column.oxygenAir?.weightPct.O2 ?? 0) + (column.oxygenAir?.weightPct.N2 ?? 0)
+    if (column.kind === 'oxygen') return gasTotal
+    const solidTotal = INPUT_PHASE_ROW_KEYS.reduce((sum, key) => {
+      if (key === 'H2O') {
+        const m = column.moisture ?? 0
+        return sum + waterPhasePercent(column.weight, m)
+      }
+      return sum + (column.phases?.[key] ?? 0)
+    }, 0)
+    return solidTotal + gasTotal
   }
   if (column.kind === 'product') {
     return Object.values(column.productPhases ?? {}).reduce((sum, value) => sum + (value ?? 0), 0)
   }
-  return INPUT_PHASE_ROW_KEYS.reduce((sum, key) => sum + (column.phases?.[key] ?? 0), 0)
-}
-
-function volumeCellText(column: PhaseTableColumn) {
-  if (column.kind === 'oxygen' && column.oxygenAir) {
-    const { O2, N2 } = column.oxygenAir.volumePct
-    return `O₂ ${formatCell(O2)} / N₂ ${formatCell(N2)}`
-  }
-  if (column.productKey === 'gas' && column.productGasVolume) {
-    const volume = column.productGasVolume
-    return [
-      `SO₂ ${formatCell(volume.SO2 ?? 0)}`,
-      `CO₂ ${formatCell(volume.CO2 ?? 0)}`,
-      `O₂ ${formatCell(volume.O2 ?? 0)}`,
-      `N₂ ${formatCell(volume.N2 ?? 0)}`,
-    ].join(' / ')
-  }
-  return '—'
+  return INPUT_PHASE_ROW_KEYS.reduce((sum, key) => {
+    if (key === 'H2O') return sum
+    return sum + (column.phases?.[key] ?? 0)
+  }, 0)
 }
 
 function phaseBoxClass(dark: boolean, invalid: boolean, muted = false) {
@@ -228,6 +227,7 @@ export function CopperBatchPhaseTables({
   onOutputDraftCommit: (columnId: string) => void
 }) {
   const weightRowSpan = UNIFIED_PHASE_ROW_KEYS.length + 2
+  const showOutput = outputColumns.length > 0
 
   const getDraft = (column: PhaseTableColumn, rowKey: string, fallback: number) => {
     const map = column.kind === 'product' ? outputDrafts : inputDrafts
@@ -288,9 +288,10 @@ export function CopperBatchPhaseTables({
             />
           ))}
           <col className="w-[30px]" />
-          {outputColumns.map((column) => (
-            <col key={`phase-product-col-${column.id}`} className="w-[88px]" />
-          ))}
+          {showOutput &&
+            outputColumns.map((column) => (
+              <col key={`phase-product-col-${column.id}`} className="w-[88px]" />
+            ))}
         </colgroup>
         <thead className={darkMode ? 'bg-gray-800 text-gray-300' : 'bg-gray-50 text-gray-600'}>
           <tr>
@@ -322,21 +323,23 @@ export function CopperBatchPhaseTables({
                 {column.header}
               </th>
             ))}
-            <th
-              colSpan={outputColumns.length + 1}
-              className={`px-0.5 py-1.5 text-center font-semibold ${darkMode ? 'bg-indigo-950/20' : 'bg-indigo-50'}`}
-            >
-              产出
-            </th>
+            {showOutput && (
+              <th
+                colSpan={outputColumns.length + 1}
+                className={`px-0.5 py-1.5 text-center font-semibold ${darkMode ? 'bg-indigo-950/20' : 'bg-indigo-50'}`}
+              >
+                产出
+              </th>
+            )}
           </tr>
           <tr>
-            <th className={`sticky left-[34px] z-30 px-1 py-2 text-center font-semibold ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+            <th className={`sticky left-[34px] z-30 px-1 py-1.5 text-center font-semibold ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
               组分
             </th>
             {inputColumns.map((column) => (
               <th
                 key={`phase-sub-${column.id}`}
-                className={`px-1 py-2 text-center font-semibold ${
+                className={`px-0.5 py-1.5 text-center font-semibold ${
                   column.kind === 'solvent'
                     ? darkMode
                       ? 'bg-emerald-950/20'
@@ -359,15 +362,19 @@ export function CopperBatchPhaseTables({
                 {column.subHeader}
               </th>
             ))}
-            <th className={`px-1 py-2 text-center font-semibold ${darkMode ? 'bg-indigo-950/20' : 'bg-indigo-50'}`} />
-            {outputColumns.map((column) => (
-              <th
-                key={`phase-product-head-${column.id}`}
-                className={`px-0.5 py-1.5 text-center font-semibold ${darkMode ? 'bg-indigo-950/20' : 'bg-indigo-50'}`}
-              >
-                {column.subHeader}
-              </th>
-            ))}
+            {showOutput && (
+              <>
+                <th className={`px-1 py-2 text-center font-semibold ${darkMode ? 'bg-indigo-950/20' : 'bg-indigo-50'}`} />
+                {outputColumns.map((column) => (
+                  <th
+                    key={`phase-product-head-${column.id}`}
+                    className={`px-0.5 py-1.5 text-center font-semibold ${darkMode ? 'bg-indigo-950/20' : 'bg-indigo-50'}`}
+                  >
+                    {column.subHeader}
+                  </th>
+                ))}
+              </>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -381,18 +388,21 @@ export function CopperBatchPhaseTables({
                 <PhaseValueBox darkMode={darkMode} value={formatCell(column.weight)} />
               </td>
             ))}
-            <td className={outputDividerCellClass(darkMode)} rowSpan={weightRowSpan + 1}>
-              <span className="[writing-mode:vertical-rl] mx-auto inline-block whitespace-nowrap font-semibold leading-none">产出</span>
-            </td>
-            {outputColumns.map((column) => (
-              <td key={`phase-product-weight-${column.id}`} className={cellClass(darkMode, 'product')}>
-                <PhaseValueBox
-                  darkMode={darkMode}
-                  applicable={column.weight > 0}
-                  value={column.weight > 0 ? formatCell(column.weight) : '—'}
-                />
+            {showOutput && (
+              <td className={outputDividerCellClass(darkMode)} rowSpan={weightRowSpan}>
+                <span className="[writing-mode:vertical-rl] mx-auto inline-block whitespace-nowrap font-semibold leading-none">产出</span>
               </td>
-            ))}
+            )}
+            {showOutput &&
+              outputColumns.map((column) => (
+                <td key={`phase-product-weight-${column.id}`} className={cellClass(darkMode, 'product')}>
+                  <PhaseValueBox
+                    darkMode={darkMode}
+                    applicable={column.weight > 0}
+                    value={column.weight > 0 ? formatCell(column.weight) : '—'}
+                  />
+                </td>
+              ))}
           </tr>
           {UNIFIED_PHASE_ROW_KEYS.map((rowKey) => (
             <tr key={`phase-row-${rowKey}`}>
@@ -402,44 +412,14 @@ export function CopperBatchPhaseTables({
                   {renderPhaseCell(column, rowKey)}
                 </td>
               ))}
-              {outputColumns.map((column) => (
-                <td key={`phase-product-${column.id}-${rowKey}`} className={cellClass(darkMode, 'product')}>
-                  {renderPhaseCell(column, rowKey)}
-                </td>
-              ))}
+              {showOutput &&
+                outputColumns.map((column) => (
+                  <td key={`phase-product-${column.id}-${rowKey}`} className={cellClass(darkMode, 'product')}>
+                    {renderPhaseCell(column, rowKey)}
+                  </td>
+                ))}
             </tr>
           ))}
-          <tr>
-            <td className={unitCellClass(darkMode)}>
-              <span className="[writing-mode:vertical-rl] mx-auto inline-block whitespace-nowrap font-semibold leading-none">v%</span>
-            </td>
-            <td
-              className={labelCellClass(darkMode)}
-              title="体积分数：气相各组分占混合气体体积的百分比（富氧空气、烟气列有效）"
-            >
-              体积分数
-            </td>
-            {inputColumns.map((column) => (
-              <td key={`phase-vol-${column.id}`} className={cellClass(darkMode, column.kind)}>
-                <PhaseValueBox
-                  darkMode={darkMode}
-                  compact
-                  applicable={isVolumeRowApplicable(column)}
-                  value={volumeCellText(column)}
-                />
-              </td>
-            ))}
-            {outputColumns.map((column) => (
-              <td key={`phase-product-vol-${column.id}`} className={cellClass(darkMode, 'product')}>
-                <PhaseValueBox
-                  darkMode={darkMode}
-                  compact
-                  applicable={isVolumeRowApplicable(column)}
-                  value={volumeCellText(column)}
-                />
-              </td>
-            ))}
-          </tr>
           <tr>
             <td className={labelCellClass(darkMode)}>合计</td>
             {inputColumns.map((column) => (
@@ -447,15 +427,16 @@ export function CopperBatchPhaseTables({
                 <PhaseValueBox darkMode={darkMode} value={formatCell(columnTotal(column))} />
               </td>
             ))}
-            {outputColumns.map((column) => (
-              <td key={`phase-product-total-${column.id}`} className={cellClass(darkMode, 'product')}>
-                <PhaseValueBox
-                  darkMode={darkMode}
-                  applicable={column.weight > 0}
-                  value={column.weight > 0 ? formatCell(columnTotal(column)) : '—'}
-                />
-              </td>
-            ))}
+            {showOutput &&
+              outputColumns.map((column) => (
+                <td key={`phase-product-total-${column.id}`} className={cellClass(darkMode, 'product')}>
+                  <PhaseValueBox
+                    darkMode={darkMode}
+                    applicable={column.weight > 0}
+                    value={column.weight > 0 ? formatCell(columnTotal(column)) : '—'}
+                  />
+                </td>
+              ))}
           </tr>
         </tbody>
       </table>

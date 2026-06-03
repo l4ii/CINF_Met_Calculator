@@ -116,3 +116,19 @@ export function downloadCopperBatchExcel(filename: string, html: string) {
   link.remove()
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
+
+export type ExportWorkbookSaveResult =
+  | { ok: true; filePath?: string }
+  | { ok: false; cancelled?: boolean; error?: string }
+
+export async function saveCopperBatchExcelWorkbook(
+  filename: string,
+  html: string,
+  saveToFile?: (fileName: string, content: string) => Promise<ExportWorkbookSaveResult>
+): Promise<ExportWorkbookSaveResult> {
+  if (saveToFile) {
+    return saveToFile(filename, html)
+  }
+  downloadCopperBatchExcel(filename, html)
+  return { ok: true }
+}

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 
 const {
   buildBlendPhaseColumn,
+  buildFurnaceBlendPhaseColumn,
   buildInputPhaseColumn,
   customPhaseStorageKey,
   deriveElementsFromPhaseContents,
@@ -10,16 +11,16 @@ const {
   parsePhaseDraftMap,
   phaseColumnTotal,
 } = await import('./copperPhaseTableCalc.ts')
-const { emptyCopperRatios, normalizeCopperRatios } = await import('./copperWorkflowCalc.ts')
+const { calculateKnownTotal, emptyCopperRatios, normalizeCopperRatios } = await import('./copperWorkflowCalc.ts')
 
 const sampleRatios = normalizeCopperRatios({
   ...emptyCopperRatios(),
   'Cu(铜)': 24,
   'Fe(铁)': 28,
   'S (硫)': 32,
-  'Si(硅)': 8,
-  'Ca(钙)': 2,
-  'O (氧)': 4,
+  'SiO₂(二氧化硅)': 8,
+  'CaO(氧化钙)': 2,
+  'O(氧)': 4,
   'Other(其他)': 2,
 })
 
@@ -37,9 +38,27 @@ const blend = buildBlendPhaseColumn([
 ])
 assert(isPhaseColumnValid(blend), 'blended phase column should total ~100%')
 
+const furnaceBlend = buildFurnaceBlendPhaseColumn([
+  { weight: 60, phases: forward, moisture: 8 },
+  { weight: 40, phases: { FeO: 80, SiO2: 15, Other: 5 }, moisture: 0 },
+  { weight: 100, oxygenWeightPct: { O2: 70, N2: 30 } },
+])
+assert((furnaceBlend.phases.Cu2S ?? 0) > 0, 'furnace blend should include solid phases from feed columns')
+assert(Math.abs(furnaceBlend.gasWeightPct.O2 - 35) < 0.5, 'furnace blend O2 should weight oxygen column into mix')
+assert(Math.abs(furnaceBlend.moisture - 2.4) < 0.2, 'furnace blend moisture should weight solid columns only')
+
 const parsed = parsePhaseDraftMap({ Cu2S: '40', FeS: '20', FeO: '10', SiO2: '10', Other: '20' })
 const normalized = normalizePhasePercents(parsed)
 assert(Math.abs(Object.values(normalized).reduce((sum, value) => sum + value, 0) - 100) < 0.02, 'normalize should scale to 100%')
+
+const manualOther = { FeO: 70, Other: 30 }
+assert(isPhaseColumnValid(manualOther), 'manual Other should be accepted when the phase column closes')
+const reversedManualOther = deriveElementsFromPhaseContents(manualOther, {})
+assert(Math.abs((reversedManualOther['Other(其他)'] ?? 0) - 30) < 0.05, 'manual Other should be preserved')
+assert(
+  Math.abs(calculateKnownTotal(reversedManualOther) + (reversedManualOther['Other(其他)'] ?? 0) - 100) < 0.05,
+  'manual Other reverse result should close to 100%'
+)
 
 const customRow = {
   id: 'row-cus',

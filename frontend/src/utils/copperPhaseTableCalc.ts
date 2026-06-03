@@ -1,7 +1,6 @@
 import {
   COPPER_ELEMENT_KEYS,
   COPPER_PHASE_ASSIGNMENT_KEYS,
-  COPPER_PHASE_OXYGEN_FACTORS,
   calculateKnownTotal,
   calculateUnknownsFromPhases,
   derivePhaseContentsFromElements,
@@ -11,6 +10,9 @@ import {
   type CopperPhaseInput,
   type CopperRatios,
 } from './copperWorkflowCalc.ts'
+import { COMPOUND_MOLAR_MASS } from './atomicMass.ts'
+import { COPPER_BUILTIN_PHASE_FRACTIONS } from './copperPhaseStoichiometry.ts'
+import { buildInputPhaseRowKeys } from './copperDisplayOrder.ts'
 
 export const INPUT_PHASE_DISPLAY: Record<CopperPhaseAssignmentKey, string> = {
   Cu2S: 'Cu₂S',
@@ -23,11 +25,20 @@ export const INPUT_PHASE_DISPLAY: Record<CopperPhaseAssignmentKey, string> = {
   SiO2: 'SiO₂',
   CaO: 'CaO',
   Al2O3: 'Al₂O₃',
+  PbO: 'PbO',
+  As2O3: 'As₂O₃',
+  Sb2O3: 'Sb₂O₃',
+  ZnO: 'ZnO',
   C: 'C',
 }
 
-export const INPUT_PHASE_ROW_KEYS = [...COPPER_PHASE_ASSIGNMENT_KEYS, 'Other'] as const
-export type InputPhaseRowKey = (typeof INPUT_PHASE_ROW_KEYS)[number]
+export type InputPhaseRowKey = CopperPhaseAssignmentKey | 'H2O' | 'Other'
+
+export const INPUT_PHASE_EXTRA_DISPLAY: Record<'H2O' | 'Other', string> = {
+  H2O: 'H₂O',
+  Other: 'Other',
+}
+export const INPUT_PHASE_ROW_KEYS = buildInputPhaseRowKeys() as readonly InputPhaseRowKey[]
 
 export type PhasePercentMap = Partial<Record<InputPhaseRowKey, number>>
 export type PhasePercentDraftMap = Partial<Record<InputPhaseRowKey, string>>
@@ -71,38 +82,33 @@ export function customPhasePercentsTotal(customPercents: CustomPhasePercentMap) 
   return Object.values(customPercents).reduce((sum, value) => sum + Math.max(0, value), 0)
 }
 
-const CU_IN_CU2S = (2 * 63.546) / 159.16
-const CU_IN_CU2O = (2 * 63.546) / 143.09
-const FE_IN_FEO = 55.845 / 71.844
-const FE_IN_FE2O3 = (2 * 55.845) / 159.688
-const FE_IN_FE3O4 = (3 * 55.845) / 231.533
-const FE_IN_FES = 55.845 / 87.91
-const SI_IN_SIO2 = 28.085 / 60.084
-const CA_IN_CAO = 40.078 / 56.077
-const AL_IN_AL2O3 = (2 * 26.982) / 101.961
-const S_IN_CU2S = 32.066 / 159.16
-const S_IN_FES = 32.066 / 87.91
-
-const PHASE_ELEMENT_FRACTIONS: Record<CopperPhaseAssignmentKey, Partial<Record<CopperElementKey, number>>> = {
-  Cu2S: { 'Cu(铜)': CU_IN_CU2S, 'S (硫)': S_IN_CU2S },
-  FeS: { 'Fe(铁)': FE_IN_FES, 'S (硫)': S_IN_FES },
-  S: { 'S (硫)': 1 },
-  Cu2O: { 'Cu(铜)': CU_IN_CU2O, 'O (氧)': COPPER_PHASE_OXYGEN_FACTORS.Cu2O ?? 0 },
-  FeO: { 'Fe(铁)': FE_IN_FEO, 'O (氧)': COPPER_PHASE_OXYGEN_FACTORS.FeO ?? 0 },
-  Fe2O3: { 'Fe(铁)': FE_IN_FE2O3, 'O (氧)': COPPER_PHASE_OXYGEN_FACTORS.Fe2O3 ?? 0 },
-  Fe3O4: { 'Fe(铁)': FE_IN_FE3O4, 'O (氧)': COPPER_PHASE_OXYGEN_FACTORS.Fe3O4 ?? 0 },
-  SiO2: { 'Si(硅)': SI_IN_SIO2, 'O (氧)': COPPER_PHASE_OXYGEN_FACTORS.SiO2 ?? 0 },
-  CaO: { 'Ca(钙)': CA_IN_CAO, 'O (氧)': COPPER_PHASE_OXYGEN_FACTORS.CaO ?? 0 },
-  Al2O3: { 'Al(铝)': AL_IN_AL2O3, 'O (氧)': COPPER_PHASE_OXYGEN_FACTORS.Al2O3 ?? 0 },
-  C: { 'C (碳)': 1 },
-}
+const PHASE_ELEMENT_FRACTIONS = COPPER_BUILTIN_PHASE_FRACTIONS as Record<
+  CopperPhaseAssignmentKey,
+  Partial<Record<CopperElementKey, number>>
+>
 
 export function getBuiltinPhaseFractions(key: CopperPhaseAssignmentKey) {
   return PHASE_ELEMENT_FRACTIONS[key]
 }
 
 const TRACE_ELEMENTS = COPPER_ELEMENT_KEYS.filter(
-  (key) => !['Cu(铜)', 'Fe(铁)', 'S (硫)', 'Si(硅)', 'Ca(钙)', 'Al(铝)', 'C (碳)', 'O (氧)', 'Other(其他)', 'N (氮)'].includes(key)
+  (key) =>
+    ![
+      'Cu(铜)',
+      'Fe(铁)',
+      'S (硫)',
+      'SiO₂(二氧化硅)',
+      'CaO(氧化钙)',
+      'Al₂O₃(三氧化二铝)',
+      'Pb(铅)',
+      'As(砷)',
+      'Zn(锌)',
+      'Sb(锑)',
+      'C (碳)',
+      'O(氧)',
+      'Other(其他)',
+      'N(氮)',
+    ].includes(key)
 )
 
 export function phaseColumnTotal(phases: PhasePercentMap, customPercents: CustomPhasePercentMap = {}) {
@@ -160,14 +166,59 @@ export function buildBlendPhaseColumn(
   return normalizePhasePercents(blended)
 }
 
+export type FurnaceBlendPhaseColumnInput =
+  | { weight: number; phases: PhasePercentMap; moisture?: number }
+  | { weight: number; oxygenWeightPct: { O2: number; N2: number } }
+
+/** 入炉混料物相：原料 + 熔剂 + 燃料 + 富氧空气按投料量加权（含 O₂/N₂ 行） */
+export function buildFurnaceBlendPhaseColumn(columns: FurnaceBlendPhaseColumnInput[]): {
+  phases: PhasePercentMap
+  gasWeightPct: { O2: number; N2: number }
+  moisture: number
+} {
+  const active = columns.filter((column) => column.weight > 0)
+  const totalWeight = active.reduce((sum, column) => sum + column.weight, 0)
+  if (totalWeight <= 0) {
+    return {
+      phases: Object.fromEntries(INPUT_PHASE_ROW_KEYS.map((key) => [key, 0])) as PhasePercentMap,
+      gasWeightPct: { O2: 0, N2: 0 },
+      moisture: 0,
+    }
+  }
+
+  const solidColumns = active.filter((column): column is Extract<FurnaceBlendPhaseColumnInput, { phases: PhasePercentMap }> => 'phases' in column)
+  const phases =
+    solidColumns.length > 0
+      ? buildBlendPhaseColumn(solidColumns.map((column) => ({ weight: column.weight, phases: column.phases })))
+      : (Object.fromEntries(INPUT_PHASE_ROW_KEYS.map((key) => [key, 0])) as PhasePercentMap)
+
+  let o2Sum = 0
+  let n2Sum = 0
+  let moistureSum = 0
+  for (const column of active) {
+    if ('oxygenWeightPct' in column) {
+      o2Sum += column.weight * Math.max(0, column.oxygenWeightPct.O2)
+      n2Sum += column.weight * Math.max(0, column.oxygenWeightPct.N2)
+    } else {
+      moistureSum += column.weight * Math.max(0, column.moisture ?? 0)
+    }
+  }
+
+  return {
+    phases,
+    gasWeightPct: { O2: o2Sum / totalWeight, N2: n2Sum / totalWeight },
+    moisture: moistureSum / totalWeight,
+  }
+}
+
 export function buildOxygenAirPhaseColumn(ratios: CopperRatios) {
-  const oPct = Math.max(0, ratios['O (氧)'] ?? 0)
-  const nPct = Math.max(0, ratios['N (氮)'] ?? 0)
-  const total = oPct + nPct
-  const o2 = total > 0 ? oPct : 0
-  const n2 = total > 0 ? nPct : 0
-  const oMoles = o2 / 32
-  const nMoles = n2 / 28
+  const o2Pct = Math.max(0, ratios['O(氧)'] ?? 0)
+  const n2Pct = Math.max(0, ratios['N(氮)'] ?? 0)
+  const total = o2Pct + n2Pct
+  const o2 = total > 0 ? o2Pct : 0
+  const n2 = total > 0 ? n2Pct : 0
+  const oMoles = o2 / COMPOUND_MOLAR_MASS.O2
+  const nMoles = n2 / COMPOUND_MOLAR_MASS.N2
   const moleTotal = oMoles + nMoles
   return {
     weightPct: { O2: o2, N2: n2 },
@@ -210,13 +261,14 @@ export function deriveElementsFromPhaseContents(
   }
 
   const phaseDict = Object.fromEntries(
-    COPPER_PHASE_ASSIGNMENT_KEYS.map((key) => [key, { value: normalized[key] ?? 0, factor: 1 }])
+    COPPER_PHASE_ASSIGNMENT_KEYS.map((key) => [key, normalized[key] ?? 0])
   ) as Record<string, CopperPhaseInput>
+  phaseDict.Other = normalized.Other ?? 0
   for (const [key, input] of Object.entries(phaseInputs)) {
     if (phaseDict[key]) phaseDict[key] = input
   }
   const unknowns = calculateUnknownsFromPhases(phaseDict, elements)
-  elements['O (氧)'] = unknowns['O (氧)']
+  elements['O(氧)'] = unknowns['O(氧)']
   elements['C (碳)'] = unknowns['C (碳)']
   elements['Other(其他)'] = unknowns['Other(其他)']
 

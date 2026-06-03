@@ -1,4 +1,5 @@
 import type { CopperElementKey, CopperMaterialColumn, WeightedComposition } from './copperWorkflowCalc'
+import { COMPOUND_MOLAR_MASS, atomicMass } from './atomicMass.ts'
 
 export type CopperProductKey = 'matte' | 'slag' | 'gas' | 'dust' | 'loss'
 
@@ -72,20 +73,20 @@ const PRODUCT_KEYS: CopperProductKey[] = ['matte', 'slag', 'gas', 'dust', 'loss'
 
 export const DEFAULT_COPPER_PRODUCT_DISTRIBUTION: Partial<Record<CopperElementKey, Record<CopperProductKey, number>>> = {
   'Ag(银)': { matte: 0.9, slag: 0.03, gas: 0, dust: 0.02, loss: 0.05 },
-  'Al(铝)': { matte: 0, slag: 0.96, gas: 0, dust: 0, loss: 0.04 },
+  'Al₂O₃(三氧化二铝)': { matte: 0, slag: 0.96, gas: 0, dust: 0, loss: 0.04 },
   'As(砷)': { matte: 0.08, slag: 0.12, gas: 0.55, dust: 0.17, loss: 0.08 },
   'Au(金)': { matte: 0.95, slag: 0.02, gas: 0, dust: 0, loss: 0.03 },
   'C (碳)': { matte: 0, slag: 0, gas: 0.92, dust: 0.02, loss: 0.06 },
-  'Ca(钙)': { matte: 0, slag: 0.98, gas: 0, dust: 0, loss: 0.02 },
+  'CaO(氧化钙)': { matte: 0, slag: 0.98, gas: 0, dust: 0, loss: 0.02 },
   'Cu(铜)': { matte: 0.86, slag: 0.08, gas: 0.01, dust: 0, loss: 0.05 },
   'Fe(铁)': { matte: 0.18, slag: 0.78, gas: 0.02, dust: 0, loss: 0.02 },
-  'N (氮)': { matte: 0, slag: 0, gas: 0.98, dust: 0, loss: 0.02 },
-  'O (氧)': { matte: 0.08, slag: 0.58, gas: 0.28, dust: 0, loss: 0.06 },
+  'N(氮)': { matte: 0, slag: 0, gas: 0.98, dust: 0, loss: 0.02 },
+  'O(氧)': { matte: 0.08, slag: 0.58, gas: 0.28, dust: 0, loss: 0.06 },
   'Other(其他)': { matte: 0.05, slag: 0.65, gas: 0.08, dust: 0.08, loss: 0.14 },
   'Pb(铅)': { matte: 0.12, slag: 0.34, gas: 0.3, dust: 0.14, loss: 0.1 },
   'S (硫)': { matte: 0.22, slag: 0.02, gas: 0.74, dust: 0, loss: 0.02 },
   'Sb(锑)': { matte: 0.12, slag: 0.2, gas: 0.4, dust: 0.18, loss: 0.1 },
-  'Si(硅)': { matte: 0.01, slag: 0.97, gas: 0, dust: 0, loss: 0.02 },
+  'SiO₂(二氧化硅)': { matte: 0.01, slag: 0.97, gas: 0, dust: 0, loss: 0.02 },
   'Zn(锌)': { matte: 0.03, slag: 0.2, gas: 0.5, dust: 0.2, loss: 0.07 },
 }
 
@@ -100,10 +101,10 @@ export const DEFAULT_COPPER_FUEL: CopperFuelMaterial = {
   ash: 12,
   ratios: {
     'C (碳)': 68,
-    'O (氧)': 8,
-    'N (氮)': 1,
+    'O(氧)': 16,
+    'N(氮)': 2,
     'S (硫)': 0.8,
-    'Other(其他)': 22.2,
+    'Other(其他)': 13.2,
   },
   unitPrice: 900,
 }
@@ -120,14 +121,14 @@ function emptyProductEntry(key: CopperProductKey): CopperProductEntry {
 
 function productMassFactor(element: CopperElementKey, product: CopperProductKey) {
   if (product === 'slag') {
-    if (element === 'Si(硅)') return 60.084 / 28.085
-    if (element === 'Ca(钙)') return 56.077 / 40.078
-    if (element === 'Al(铝)') return 101.961 / (2 * 26.982)
-    if (element === 'Fe(铁)') return 71.844 / 55.845
+    if (element === 'SiO₂(二氧化硅)') return 1
+    if (element === 'CaO(氧化钙)') return 1
+    if (element === 'Al₂O₃(三氧化二铝)') return 1
+    if (element === 'Fe(铁)') return COMPOUND_MOLAR_MASS.FeO / atomicMass('Fe')
   }
   if (product === 'gas') {
-    if (element === 'S (硫)') return 64.066 / 32.06
-    if (element === 'C (碳)') return 44.01 / 12.011
+    if (element === 'S (硫)') return COMPOUND_MOLAR_MASS.SO2 / atomicMass('S')
+    if (element === 'C (碳)') return COMPOUND_MOLAR_MASS.CO2 / atomicMass('C')
   }
   if (product === 'dust' && ['As(砷)', 'Pb(铅)', 'Sb(锑)', 'Zn(锌)'].includes(element)) {
     return 1.2

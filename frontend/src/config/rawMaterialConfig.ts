@@ -85,13 +85,16 @@ export const SOLVENT_DEFAULT_PRICES: Record<string, number> = {
 }
 
 /** 摩尔质量 (g/mol) */
+import { atomicMass, COMPOUND_MOLAR_MASS } from '../utils/atomicMass.ts'
+
+/** 摩尔质量 (g/mol)，统一从原子质量表推导 */
 export const MOLAR_MASS = {
-  Sb: 121.76,
-  Fe: 55.845,
-  S: 32.06,
-  Sb2S3: 339.69,
-  FeS: 87.91,
-  FeS2: 119.98,
-  O2: 32,
-  N2: 28.02,
-}
+  Sb: atomicMass('Sb'),
+  Fe: atomicMass('Fe'),
+  S: atomicMass('S'),
+  Sb2S3: COMPOUND_MOLAR_MASS.Sb2S3,
+  FeS: COMPOUND_MOLAR_MASS.FeS,
+  FeS2: COMPOUND_MOLAR_MASS.FeS2,
+  O2: COMPOUND_MOLAR_MASS.O2,
+  N2: COMPOUND_MOLAR_MASS.N2,
+} as const

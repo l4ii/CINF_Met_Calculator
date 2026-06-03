@@ -5,6 +5,7 @@
 import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react'
 import type { ElementRatios } from '../config/rawMaterialConfig'
 import { phaseAnalysis, type ElementWeights } from '../utils/phaseAnalysis'
+import { atomicMass, COMPOUND_MOLAR_MASS } from '../utils/atomicMass.ts'
 
 export interface MaterialEntry {
   id: string
@@ -41,12 +42,12 @@ const CalcContext = createContext<CalcContextValue | null>(null)
 
 const OXIDE_TO_ELEMENT: Record<string, { elem: string; ratio: number }[]> = {
   'SiO₂(二氧化硅)': [
-    { elem: 'Si(硅)', ratio: 28.085 / 60.084 },
-    { elem: 'O (氧)', ratio: 32 / 60.084 },
+    { elem: 'Si(硅)', ratio: atomicMass('Si') / COMPOUND_MOLAR_MASS.SiO2 },
+    { elem: 'O (氧)', ratio: (2 * atomicMass('O')) / COMPOUND_MOLAR_MASS.SiO2 },
   ],
   'CaO(氧化钙)': [
-    { elem: 'Ca(钙)', ratio: 40.078 / 56.077 },
-    { elem: 'O (氧)', ratio: 16 / 56.077 },
+    { elem: 'Ca(钙)', ratio: atomicMass('Ca') / COMPOUND_MOLAR_MASS.CaO },
+    { elem: 'O (氧)', ratio: atomicMass('O') / COMPOUND_MOLAR_MASS.CaO },
   ],
   'Fe(铁)': [{ elem: 'Fe(铁)', ratio: 1 }],
 }

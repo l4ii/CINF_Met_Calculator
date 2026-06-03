@@ -5,6 +5,7 @@
  * - 输出可追溯 trace（每一步中间量），供 UI 展示与排错
  */
 import type { ElementWeights } from './phaseAnalysis'
+import { atomicMass, COMPOUND_MOLAR_MASS } from './atomicMass.ts'
 
 /** 五类产物 */
 export type ProductType = 'slag' | 'flue' | 'sb2o3' | 'matte' | 'noble_sb'
@@ -18,38 +19,38 @@ export const ELEMENT_DISTRIBUTION: Record<string, [number, number, number, numbe
   'Other(其他)': [0.5, 0.0, 0.3, 0.2, 0.0],
 }
 
-/** 摩尔质量 (g/mol) */
+/** 摩尔质量 (g/mol)，统一从原子质量表推导 */
 const MOLAR = {
-  Sb: 121.76,
-  Fe: 55.845,
-  S: 32.06,
-  Si: 28.085,
-  Ca: 40.078,
-  Al: 26.9815385,
-  Pb: 207.2,
-  As: 74.9216,
-  Zn: 65.38,
-  Cu: 63.546,
-  Ag: 107.8682,
-  Au: 196.96657,
-  O: 16,
-  N: 14.01,
-  Sb2S3: 339.69,
-  FeS: 87.91,
-  Sb2O3: 291.52,
-  FeO: 71.844,
-  SiO2: 60.084,
-  CaO: 56.077,
-  Al2O3: 101.961,
-  PbO: 223.199,
-  As2O3: 197.841,
-  ZnO: 81.379,
-  CuO: 79.545,
-  SO2: 64.07,
-  O2: 32,
-  N2: 28.02,
-  CO2: 44.01,
-}
+  Sb: atomicMass('Sb'),
+  Fe: atomicMass('Fe'),
+  S: atomicMass('S'),
+  Si: atomicMass('Si'),
+  Ca: atomicMass('Ca'),
+  Al: atomicMass('Al'),
+  Pb: atomicMass('Pb'),
+  As: atomicMass('As'),
+  Zn: atomicMass('Zn'),
+  Cu: atomicMass('Cu'),
+  Ag: atomicMass('Ag'),
+  Au: atomicMass('Au'),
+  O: atomicMass('O'),
+  N: atomicMass('N'),
+  Sb2S3: COMPOUND_MOLAR_MASS.Sb2S3,
+  FeS: COMPOUND_MOLAR_MASS.FeS,
+  Sb2O3: COMPOUND_MOLAR_MASS.Sb2O3,
+  FeO: COMPOUND_MOLAR_MASS.FeO,
+  SiO2: COMPOUND_MOLAR_MASS.SiO2,
+  CaO: COMPOUND_MOLAR_MASS.CaO,
+  Al2O3: COMPOUND_MOLAR_MASS.Al2O3,
+  PbO: COMPOUND_MOLAR_MASS.PbO,
+  As2O3: COMPOUND_MOLAR_MASS.As2O3,
+  ZnO: COMPOUND_MOLAR_MASS.ZnO,
+  CuO: COMPOUND_MOLAR_MASS.CuO,
+  SO2: COMPOUND_MOLAR_MASS.SO2,
+  O2: COMPOUND_MOLAR_MASS.O2,
+  N2: COMPOUND_MOLAR_MASS.N2,
+  CO2: COMPOUND_MOLAR_MASS.CO2,
+} as const
 
 /** 产物组分（质量百分比） */
 export interface ProductComposition {

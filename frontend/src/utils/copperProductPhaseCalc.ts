@@ -1,15 +1,24 @@
 import type { CopperProductKey, CopperProductResult } from './copperProcessCalc'
 import type { CopperElementKey } from './copperWorkflowCalc'
+import { COMPOUND_MOLAR_MASS, atomicMass, oxideMassFromElement } from './atomicMass.ts'
+import { COPPER_BUILTIN_PHASE_FRACTIONS } from './copperPhaseStoichiometry.ts'
+import { solvePhaseDistribution } from './copperPhaseSolver.ts'
 
 export type ProductPhaseRowKey = string
 export type ProductPhasePercentMap = Partial<Record<ProductPhaseRowKey, number>>
 export type ProductPhaseDraftMap = Partial<Record<ProductPhaseRowKey, string>>
 
+import { sortCopperPhaseKeys } from './copperDisplayOrder.ts'
+
+function sortProductPhaseRows(rows: string[]) {
+  return sortCopperPhaseKeys(rows)
+}
+
 export const PRODUCT_PHASE_ROWS: Record<CopperProductKey, ProductPhaseRowKey[]> = {
-  matte: ['Cu2S', 'FeS', 'Cu2O', 'Other'],
-  slag: ['FeO', 'SiO2', 'CaO', 'Al2O3', 'Cu2O', 'PbO', 'As2O3', 'ZnO', 'Other'],
-  gas: ['SO2', 'CO2', 'O2', 'N2', 'Other'],
-  dust: ['As2O3', 'PbO', 'Sb2O3', 'ZnO', 'Other'],
+  matte: sortProductPhaseRows(['Cu2S', 'FeS', 'Cu2O', 'Other']),
+  slag: sortProductPhaseRows(['FeO', 'SiO2', 'CaO', 'Al2O3', 'Cu2O', 'PbO', 'As2O3', 'ZnO', 'Other']),
+  gas: sortProductPhaseRows(['SO2', 'CO2', 'O2', 'N2', 'Other']),
+  dust: sortProductPhaseRows(['As2O3', 'PbO', 'Sb2O3', 'ZnO', 'Other']),
   loss: ['Other'],
 }
 
@@ -32,40 +41,66 @@ export const PRODUCT_PHASE_DISPLAY: Record<string, string> = {
   Other: 'Other',
 }
 
-const MOLAR = {
-  Cu: 63.546,
-  Fe: 55.845,
-  S: 32.06,
-  Si: 28.085,
-  Ca: 40.078,
-  Al: 26.982,
-  Pb: 207.2,
-  As: 74.922,
-  Sb: 121.76,
-  Zn: 65.38,
-  C: 12.011,
-  O: 16,
-  N: 14.01,
-  Cu2S: 159.16,
-  FeS: 87.91,
-  Cu2O: 143.09,
-  FeO: 71.844,
-  SiO2: 60.084,
-  CaO: 56.077,
-  Al2O3: 101.961,
-  PbO: 223.2,
-  As2O3: 197.841,
-  Sb2O3: 291.52,
-  ZnO: 81.38,
-  SO2: 64.066,
-  CO2: 44.01,
-  O2: 32,
-  N2: 28.02,
+const MM = COMPOUND_MOLAR_MASS
+
+function builtinPhaseSpecs(keys: string[]) {
+  return keys
+    .filter((key) => key !== 'Other' && COPPER_BUILTIN_PHASE_FRACTIONS[key])
+    .map((key) => ({
+      id: key,
+      fractions: COPPER_BUILTIN_PHASE_FRACTIONS[key] ?? {},
+    }))
 }
 
-function oxideMass(elementMass: number, elementMolar: number, oxideMolar: number, elementCount = 1) {
-  if (elementMass <= 0) return 0
-  return elementMass * (oxideMolar / (elementCount * elementMolar))
+function elementPoolFromWeights(elementWeights: Partial<Record<CopperElementKey, number>>) {
+  const pool: Partial<Record<CopperElementKey, number>> = {}
+  for (const [element, weight] of Object.entries(elementWeights) as [CopperElementKey, number][]) {
+    if (!Number.isFinite(weight) || weight <= 0) continue
+    if (element === 'O(氧)' || element === 'C (碳)' || element === 'N(氮)' || element === 'Other(其他)') continue
+    pool[element] = weight
+  }
+  return pool
+}
+
+function solveProductPhaseMasses(
+  phaseKeys: string[],
+  elementWeights: Partial<Record<CopperElementKey, number>>,
+  productMass: number
+) {
+  const pool = elementPoolFromWeights(elementWeights)
+  const activeKeys = phaseKeys.filter((key) => {
+    if (key === 'Other') return false
+    const fractions = COPPER_BUILTIN_PHASE_FRACTIONS[key] ?? {}
+    return (Object.entries(fractions) as [CopperElementKey, number][]).some(
+      ([element, fraction]) =>
+        fraction > 0 &&
+        element !== 'O(氧)' &&
+        element !== 'C (碳)' &&
+        element !== 'N(氮)' &&
+        element !== 'Other(其他)' &&
+        (pool[element] ?? 0) > 0
+    )
+  })
+  const solver = solvePhaseDistribution(builtinPhaseSpecs(activeKeys), pool)
+  const comps: Record<string, number> = {}
+  if (solver.valid) {
+    for (const key of phaseKeys) {
+      if (key === 'Other') continue
+      comps[key] = Math.max(0, solver.amounts[key] ?? 0)
+    }
+  } else {
+    for (const key of phaseKeys) {
+      if (key === 'Other') continue
+      comps[key] = 0
+    }
+  }
+  const known = Object.values(comps).reduce((sum, value) => sum + value, 0)
+  comps.Other = Math.max(0, productMass - known)
+  if (Object.values(solver.residual ?? {}).some((value) => (value ?? 0) > 1e-6)) {
+    const residualMass = Object.values(solver.residual ?? {}).reduce((sum, value) => sum + Math.max(0, value ?? 0), 0)
+    comps.Other = Math.max(comps.Other ?? 0, residualMass)
+  }
+  return comps
 }
 
 function productPhaseTotal(phases: ProductPhasePercentMap, rows: ProductPhaseRowKey[]) {
@@ -111,39 +146,23 @@ export function calculateProductPhaseComposition(
     const comps: Record<string, number> = {}
 
     if (key === 'matte' && mass > 0) {
-      const cu = ew['Cu(铜)'] ?? 0
-      const fe = ew['Fe(铁)'] ?? 0
-      const s = ew['S (硫)'] ?? 0
-      const cu2sMass = Math.min(oxideMass(cu, MOLAR.Cu, MOLAR.Cu2S, 2), oxideMass(s, MOLAR.S, MOLAR.Cu2S, 1))
-      const fesMass = Math.min(oxideMass(fe, MOLAR.Fe, MOLAR.FeS, 1), Math.max(0, s - (cu2sMass * (32.066 / 159.16))))
-      const cu2oMass = Math.max(0, oxideMass(cu, MOLAR.Cu, MOLAR.Cu2O, 2) - cu2sMass)
-      comps.Cu2S = cu2sMass
-      comps.FeS = fesMass
-      comps.Cu2O = cu2oMass
-      comps.Other = Math.max(0, mass - cu2sMass - fesMass - cu2oMass)
+      const matteKeys = rows.filter((row) => row !== 'Other')
+      Object.assign(comps, solveProductPhaseMasses(matteKeys, ew, mass))
     } else if (key === 'slag' && mass > 0) {
-      comps.FeO = oxideMass(ew['Fe(铁)'] ?? 0, MOLAR.Fe, MOLAR.FeO, 1)
-      comps.SiO2 = oxideMass(ew['Si(硅)'] ?? 0, MOLAR.Si, MOLAR.SiO2, 1)
-      comps.CaO = oxideMass(ew['Ca(钙)'] ?? 0, MOLAR.Ca, MOLAR.CaO, 1)
-      comps.Al2O3 = oxideMass(ew['Al(铝)'] ?? 0, MOLAR.Al, MOLAR.Al2O3, 2)
-      comps.Cu2O = oxideMass(ew['Cu(铜)'] ?? 0, MOLAR.Cu, MOLAR.Cu2O, 2)
-      comps.PbO = oxideMass(ew['Pb(铅)'] ?? 0, MOLAR.Pb, MOLAR.PbO, 1)
-      comps.As2O3 = oxideMass(ew['As(砷)'] ?? 0, MOLAR.As, MOLAR.As2O3, 2)
-      comps.ZnO = oxideMass(ew['Zn(锌)'] ?? 0, MOLAR.Zn, MOLAR.ZnO, 1)
-      const known = Object.values(comps).reduce((sum, value) => sum + value, 0)
-      comps.Other = Math.max(0, mass - known)
+      const slagKeys = rows.filter((row) => row !== 'Other')
+      Object.assign(comps, solveProductPhaseMasses(slagKeys, ew, mass))
     } else if (key === 'gas' && mass > 0) {
-      comps.SO2 = oxideMass(ew['S (硫)'] ?? 0, MOLAR.S, MOLAR.SO2, 1)
-      comps.CO2 = oxideMass(ew['C (碳)'] ?? 0, MOLAR.C, MOLAR.CO2, 1)
-      comps.O2 = oxideMass(ew['O (氧)'] ?? 0, MOLAR.O, MOLAR.O2, 2)
-      comps.N2 = oxideMass(ew['N (氮)'] ?? 0, MOLAR.N, MOLAR.N2, 2)
+      comps.SO2 = oxideMassFromElement(ew['S (硫)'] ?? 0, 'S', { S: 1, O: 2 })
+      comps.CO2 = oxideMassFromElement(ew['C (碳)'] ?? 0, 'C', { C: 1, O: 2 })
+      comps.O2 = ew['O(氧)'] ?? 0
+      comps.N2 = ew['N(氮)'] ?? 0
       const known = Object.values(comps).reduce((sum, value) => sum + value, 0)
       comps.Other = Math.max(0, mass - known)
     } else if (key === 'dust' && mass > 0) {
-      comps.As2O3 = oxideMass(ew['As(砷)'] ?? 0, MOLAR.As, MOLAR.As2O3, 2) * 1.2
-      comps.PbO = oxideMass(ew['Pb(铅)'] ?? 0, MOLAR.Pb, MOLAR.PbO, 1) * 1.2
-      comps.Sb2O3 = oxideMass(ew['Sb(锑)'] ?? 0, MOLAR.Sb, MOLAR.Sb2O3, 2) * 1.2
-      comps.ZnO = oxideMass(ew['Zn(锌)'] ?? 0, MOLAR.Zn, MOLAR.ZnO, 1) * 1.2
+      comps.As2O3 = oxideMassFromElement(ew['As(砷)'] ?? 0, 'As', { As: 2, O: 3 }, 2) * 1.2
+      comps.PbO = oxideMassFromElement(ew['Pb(铅)'] ?? 0, 'Pb', { Pb: 1, O: 1 }) * 1.2
+      comps.Sb2O3 = oxideMassFromElement(ew['Sb(锑)'] ?? 0, 'Sb', { Sb: 2, O: 3 }, 2) * 1.2
+      comps.ZnO = oxideMassFromElement(ew['Zn(锌)'] ?? 0, 'Zn', { Zn: 1, O: 1 }) * 1.2
       const known = Object.values(comps).reduce((sum, value) => sum + value, 0)
       comps.Other = Math.max(0, mass - known)
     } else if (key === 'loss') {
@@ -159,10 +178,10 @@ export function calculateProductPhaseComposition(
 }
 
 export function calculateGasVolumePercents(phases: ProductPhasePercentMap) {
-  const so2 = (phases.SO2 ?? 0) / MOLAR.SO2
-  const co2 = (phases.CO2 ?? 0) / MOLAR.CO2
-  const o2 = (phases.O2 ?? 0) / MOLAR.O2
-  const n2 = (phases.N2 ?? 0) / MOLAR.N2
+  const so2 = (phases.SO2 ?? 0) / MM.SO2
+  const co2 = (phases.CO2 ?? 0) / MM.CO2
+  const o2 = (phases.O2 ?? 0) / MM.O2
+  const n2 = (phases.N2 ?? 0) / MM.N2
   const other = (phases.Other ?? 0) / 28
   const total = so2 + co2 + o2 + n2 + other
   if (total <= 0) return { SO2: 0, CO2: 0, O2: 0, N2: 0, Other: 0 }
@@ -176,21 +195,51 @@ export function calculateGasVolumePercents(phases: ProductPhasePercentMap) {
 }
 
 const PHASE_TO_ELEMENT_MASS: Record<string, Partial<Record<CopperElementKey, (mass: number) => number>>> = {
-  Cu2S: { 'Cu(铜)': (m) => m * ((2 * MOLAR.Cu) / MOLAR.Cu2S), 'S (硫)': (m) => m * (MOLAR.S / MOLAR.Cu2S) },
-  FeS: { 'Fe(铁)': (m) => m * (MOLAR.Fe / MOLAR.FeS), 'S (硫)': (m) => m * (MOLAR.S / MOLAR.FeS) },
-  Cu2O: { 'Cu(铜)': (m) => m * ((2 * MOLAR.Cu) / MOLAR.Cu2O), 'O (氧)': (m) => m * ((2 * MOLAR.O) / MOLAR.Cu2O) },
-  FeO: { 'Fe(铁)': (m) => m * (MOLAR.Fe / MOLAR.FeO), 'O (氧)': (m) => m * (MOLAR.O / MOLAR.FeO) },
-  SiO2: { 'Si(硅)': (m) => m * (MOLAR.Si / MOLAR.SiO2), 'O (氧)': (m) => m * ((2 * MOLAR.O) / MOLAR.SiO2) },
-  CaO: { 'Ca(钙)': (m) => m * (MOLAR.Ca / MOLAR.CaO), 'O (氧)': (m) => m * (MOLAR.O / MOLAR.CaO) },
-  Al2O3: { 'Al(铝)': (m) => m * ((2 * MOLAR.Al) / MOLAR.Al2O3), 'O (氧)': (m) => m * ((3 * MOLAR.O) / MOLAR.Al2O3) },
-  PbO: { 'Pb(铅)': (m) => m * (MOLAR.Pb / MOLAR.PbO), 'O (氧)': (m) => m * (MOLAR.O / MOLAR.PbO) },
-  As2O3: { 'As(砷)': (m) => m * ((2 * MOLAR.As) / MOLAR.As2O3), 'O (氧)': (m) => m * ((3 * MOLAR.O) / MOLAR.As2O3) },
-  Sb2O3: { 'Sb(锑)': (m) => m * ((2 * MOLAR.Sb) / MOLAR.Sb2O3), 'O (氧)': (m) => m * ((3 * MOLAR.O) / MOLAR.Sb2O3) },
-  ZnO: { 'Zn(锌)': (m) => m * (MOLAR.Zn / MOLAR.ZnO), 'O (氧)': (m) => m * (MOLAR.O / MOLAR.ZnO) },
-  SO2: { 'S (硫)': (m) => m * (MOLAR.S / MOLAR.SO2), 'O (氧)': (m) => m * ((2 * MOLAR.O) / MOLAR.SO2) },
-  CO2: { 'C (碳)': (m) => m * (MOLAR.C / MOLAR.CO2), 'O (氧)': (m) => m * ((2 * MOLAR.O) / MOLAR.CO2) },
-  O2: { 'O (氧)': (m) => m },
-  N2: { 'N (氮)': (m) => m },
+  Cu2S: {
+    'Cu(铜)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.Cu2S['Cu(铜)'] ?? 0),
+    'S (硫)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.Cu2S['S (硫)'] ?? 0),
+  },
+  FeS: {
+    'Fe(铁)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.FeS['Fe(铁)'] ?? 0),
+    'S (硫)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.FeS['S (硫)'] ?? 0),
+  },
+  Cu2O: {
+    'Cu(铜)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.Cu2O['Cu(铜)'] ?? 0),
+    'O(氧)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.Cu2O['O(氧)'] ?? 0),
+  },
+  FeO: {
+    'Fe(铁)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.FeO['Fe(铁)'] ?? 0),
+    'O(氧)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.FeO['O(氧)'] ?? 0),
+  },
+  SiO2: { 'SiO₂(二氧化硅)': (m) => m },
+  CaO: { 'CaO(氧化钙)': (m) => m },
+  Al2O3: { 'Al₂O₃(三氧化二铝)': (m) => m },
+  PbO: {
+    'Pb(铅)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.PbO['Pb(铅)'] ?? 0),
+    'O(氧)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.PbO['O(氧)'] ?? 0),
+  },
+  As2O3: {
+    'As(砷)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.As2O3['As(砷)'] ?? 0),
+    'O(氧)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.As2O3['O(氧)'] ?? 0),
+  },
+  Sb2O3: {
+    'Sb(锑)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.Sb2O3['Sb(锑)'] ?? 0),
+    'O(氧)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.Sb2O3['O(氧)'] ?? 0),
+  },
+  ZnO: {
+    'Zn(锌)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.ZnO['Zn(锌)'] ?? 0),
+    'O(氧)': (m) => m * (COPPER_BUILTIN_PHASE_FRACTIONS.ZnO['O(氧)'] ?? 0),
+  },
+  SO2: {
+    'S (硫)': (m) => m * (atomicMass('S') / MM.SO2),
+    'O(氧)': (m) => m * ((2 * atomicMass('O')) / MM.SO2),
+  },
+  CO2: {
+    'C (碳)': (m) => m * (atomicMass('C') / MM.CO2),
+    'O(氧)': (m) => m * ((2 * atomicMass('O')) / MM.CO2),
+  },
+  O2: { 'O(氧)': (m) => m },
+  N2: { 'N(氮)': (m) => m },
 }
 
 export function deriveProductElementsFromPhases(
