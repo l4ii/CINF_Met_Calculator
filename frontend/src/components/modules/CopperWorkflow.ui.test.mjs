@@ -2,12 +2,43 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 
 const component = await readFile(new URL('./CopperWorkflow.tsx', import.meta.url), 'utf8')
+const elementTable = await readFile(new URL('./CopperBatchElementTable.tsx', import.meta.url), 'utf8')
 const workflowCalc = await readFile(new URL('../../utils/copperWorkflowCalc.ts', import.meta.url), 'utf8')
 const splash = await readFile(new URL('../../../../electron/splash.html', import.meta.url), 'utf8')
 
-assert(component.includes('rowSpan={2}'), 'copper table top-left header cell should span two header rows')
-assert(component.includes('writing-mode:vertical-rl') && component.includes('组分'), 'left vertical column should label 组分')
-assert(component.includes('H₂O') && component.includes('updateMaterialMoisture') && component.includes('moistureInputClass'), 'element table moisture inputs should use amber/green border states without row highlight')
+assert(
+  elementTable.includes('>t/h</th>') &&
+    !elementTable.includes('投料量 t/h') &&
+    elementTable.includes('>类型</th>') &&
+    elementTable.includes('>占比%</th>'),
+  'transposed element table should use material rows with element columns'
+)
+assert(elementTable.includes('CopperMaterialSelect'), 'raw material name picker should use custom centered dropdown')
+assert(
+  elementTable.includes('justify-end') && elementTable.includes('删除原料'),
+  'delete raw material action should align to the right above total column'
+)
+assert(
+  component.includes('COPPER_PLACEHOLDER_ELEMENT_KEYS') && component.includes('phaseTableRowKeys'),
+  'empty batch tables should use placeholder element/phase columns'
+)
+assert(
+  component.includes('phaseRowKeys={phaseTableRowKeys}'),
+  'phase batch table should receive dynamic phase row keys'
+)
+assert(!elementTable.includes('border-r-blue'), 'name column should not use a heavy divider before feed column')
+assert(!elementTable.includes('writing-mode:vertical-rl'), 'transposed element table should not use the old vertical 组分 column')
+assert(
+  elementTable.includes('renderMaterialWaterRow') &&
+    elementTable.includes('colSpan={middleSpan}') &&
+    elementTable.includes('rowSpan={2}') &&
+    elementTable.includes('step="0.0001"') &&
+    elementTable.includes('含量：') &&
+    component.includes('updateMaterialMoisture') &&
+    component.includes('moistureInputClass'),
+  'element table moisture should use dedicated water rows with 含量 input and amber/green border states'
+)
+assert(!elementTable.includes('>H₂O%</th>'), 'element table should not keep a vertical H₂O% column')
 assert(component.includes('exportPhaseComposition') && component.includes('导出 Excel'), 'phase assistant should export the current pivot table to Excel')
 assert(component.includes('saveCopperBatchExcelWorkbook') && component.includes('getElectronExportWorkbookSaver'), 'Excel export should prefer native save dialog when available')
 assert(component.includes('phaseMaterialId'), 'case snapshot should persist the active phase material tab')
@@ -15,7 +46,11 @@ assert(component.includes('setTimeout(() => setWorkflowMessage(null)'), 'workflo
 assert(component.includes('buildFurnaceBlendPhaseColumn'), 'phase blend column should include all furnace feed columns')
 assert(!component.includes('合计(干基)') && !component.includes('湿基含量') && !component.includes('buildWetBasisContentAnalysis'), 'phase assist should use single wet-basis total row')
 assert(component.includes('元素转换') && component.includes('phaseElementView') && component.includes('role="switch"'), 'phase assist should expose iOS-style element conversion switch')
-assert(component.includes('添加新原料'), 'calculation table add button should clearly add a new raw material')
+assert(
+  component.includes('+ 添加原料') && component.includes('onClick={addMaterial}') && component.includes('BatchAddSolventControl'),
+  'calculation table toolbar should add raw materials and solvents beside export'
+)
+assert(!elementTable.includes('onAddMaterial'), 'element table should not keep footer add-material handlers')
 assert(component.includes('导出Excel'), 'calculation table should expose an Excel export action')
 assert(component.includes('APP_NAME_ZH'), 'Excel export filename should use the software Chinese name')
 assert(component.includes('buildCopperBatchExportFilename'), 'Excel export should build the requested software_stage_date filename')
@@ -67,7 +102,7 @@ assert(
 )
 assert(component.includes('openLibraryMaterialEditDialog'), 'material library rows should expose an edit affordance backed by dialog state')
 assert(component.includes('保存修改'), 'material library edit dialog should use a distinct save action label')
-assert(component.includes('删除列'), 'delete-column action should use a clear 删除列 label')
+assert(elementTable.includes('onRemoveMaterial') && elementTable.includes('删'), 'transposed table should expose per-row delete for raw materials')
 assert(component.includes('批量导入'), 'material-library description should explain batch import/maintenance')
 assert(component.includes('title="修改原料库条目"'), 'material library rows should expose a modify action beside delete')
 assert(component.includes('原料库移除'), 'material library rows should expose a delete action')
@@ -77,45 +112,103 @@ assert(!component.includes('bg-red-600 text-white hover:bg-red-700'), 'material 
 assert(component.includes('text-center">操作</th>'), 'material library action header should be centered')
 assert(component.includes('py-1.5 text-center'), 'material library delete actions should be centered')
 assert(component.includes('text-sm') && component.includes('min-w-[1020px]'), 'material library table should use page-consistent text sizing and compact layout')
-assert(component.includes('const calculationTableWidth = Math.max('), 'calculation table should use a fixed computed width instead of stretching full screen')
-assert(component.includes('<table className="table-fixed text-sm" style={{ width: calculationTableWidth }}>'), 'calculation table should use the same readable text size as the material library')
-assert(component.includes('rawColumnWidth') && component.includes('formatTableNumber'), 'calculation table should compact columns from visible content and show two-decimal values')
-assert(component.includes('rowSpan={COPPER_ELEMENT_KEYS.length + 4}'), 'left column should span feed, elements, total, spacer, and H2O rows')
-assert(component.includes('rowSpan={COPPER_ELEMENT_KEYS.length + 4}') && component.includes('>产物<'), 'product output should use a vertical product group beside the blend result')
+assert(
+  component.includes('batchElementTableWidth(elementTableKeys.length, elementTableNameColWidth)') &&
+    component.includes('elementTableNameColWidth') &&
+    component.includes('batchPhaseTableWidth(phaseTableRowKeys.length, batchTableNameColWidth)'),
+  'batch tables should use fixed computed widths matched to their column layouts'
+)
+assert(
+  elementTable.includes('CopperBatchTableColGroup') &&
+    elementTable.includes('batchElementTableColWidths') &&
+    elementTable.includes('viewportWidth'),
+  'element batch table should lock column widths with colgroup and fit to container width'
+)
+assert(
+  component.includes('computePhaseAssistTableLayout') && component.includes('text-sm'),
+  'phase assist table should use fitted column widths and text-sm typography'
+)
+assert(
+  component.includes('batchTableNameColWidthFromLabels') &&
+    component.includes('elementTableNameColWidth') &&
+    component.includes('displayRawMaterialName(material.name)'),
+  'phase table name width follows row labels; element table reserves library option widths'
+)
+assert(
+  elementTable.includes('table-fixed text-sm" style={{ width: resolvedTableWidth'),
+  'transposed element table should use computed width from colgroup sum'
+)
+assert(component.includes('formatTableNumber') && component.includes('CopperBatchElementTable'), 'calculation table should format numbers via shared element table component')
+assert(elementTable.includes('>产出</td>') && elementTable.includes('混料'), 'transposed table should render blend and product rows')
+assert(!elementTable.includes('rowSpan={COPPER_ELEMENT_KEYS.length + 4}'), 'transposed table should not use the old vertical row-span layout')
 assert(component.includes('function productOutputCellClass'), 'product output area should have its own pending/resolved frame styling')
 assert(component.includes("productCalculated ? 'resolved' : 'pending'"), 'product output frame should turn green after product calculation is refilled')
-assert(component.includes('title="联动迭代结果：产出由静态系数 × 混料总质量计算；双击进入迭代输入。"'), 'product output cells should double-click into the iterative input area')
+assert(
+  elementTable.includes('onDoubleClick={onOpenIterationAssist}') && component.includes('PRODUCT_CALCULATION_BASIS'),
+  'product output cells should double-click into the iterative input area'
+)
 assert(!component.includes('title="点击跳转到产出计算"'), 'vertical product label should not remain the primary click target')
-assert(component.includes('left-[34px]'), 'sticky project column should align after the fixed vertical unit column')
-assert(component.includes('style={{ width: rawColumnWidth(material) }}'), 'each raw-material calculation column should use a computed compact width')
+assert(elementTable.includes('sticky left-[56px]'), 'transposed table name column should stick after the narrowed type column')
+assert(
+  elementTable.includes('viewportWidth') && elementTable.includes('ResizeObserver') && elementTable.includes('sticky left-0'),
+  'element table title should stay centered in the scroll viewport'
+)
+assert(!elementTable.includes('stickyNameDividerClass'), 'element table should not show a heavy divider after the name column')
+assert(
+  elementTable.includes('batchTableDataColWidth') && elementTable.includes('elementColWidths'),
+  'element columns should use content-based widths'
+)
+assert(
+  elementTable.includes('元素含量表（w%）') &&
+    elementTable.includes('删除原料') &&
+    elementTable.includes('操作：'),
+  'element table should expose a title row and delete action on water rows'
+)
+assert(
+  component.includes('batchTableNameColWidth') && component.includes('nameColWidth={batchTableNameColWidth}'),
+  'batch tables should use dynamic name column width from selected materials'
+)
+assert(component.includes('rawColumnWidth') && component.includes('phaseTableRawColumnWidths'), 'phase table should still use compact column widths from raw materials')
 assert(!component.includes('w-full min-w-[1040px] table-fixed text-xs'), 'calculation table should not stretch full-width with the old small font')
 assert(component.includes('sectionTitle(darkMode)} mb-0`}>配料总表'), 'calculation table title should use section-title sizing')
 assert(component.includes("const base = 'border-t px-1 py-1 align-middle text-center'"), 'calculation table cells should center displayed parameters')
 assert(component.includes('text-center font-mono text-sm'), 'calculation table numeric inputs should be centered')
 assert(component.includes('function materialSelectClass'), 'raw-material select should use a dedicated class instead of cramped numeric input sizing')
-assert(component.includes('h-9 w-full appearance-none') && component.includes('leading-normal'), 'raw-material select should have enough height and normal line-height for centered text')
-assert(component.includes("materialSelectClass(darkMode, material.name.trim() ? 'resolved' : 'pending')"), 'unselected raw-material names should show the same pending red frame as other required inputs')
+assert(
+  component.includes('h-9 w-full whitespace-nowrap') &&
+    component.includes('px-2') &&
+    component.includes('leading-normal'),
+  'raw-material select trigger should have enough height and compact horizontal padding'
+)
+assert(
+  elementTable.includes('materialSelectClass(') &&
+    elementTable.includes("material.name.trim() ? 'resolved' : 'pending'"),
+  'unselected raw-material names should show the same pending red frame as other required inputs'
+)
 assert(!component.includes('h-7 w-full truncate px-1 py-0 text-center text-sm'), 'raw-material select should not use the old cramped h-7 style')
 assert(!component.includes('className="px-1 py-2 text-center font-semibold">原料</th>'), 'raw material placeholder header cells should be removed')
 assert(!component.includes('>固定</td>'), 'solvent fixed placeholder cells should be removed from the calculation table')
 assert(!component.includes('>自动</td>'), 'mix automatic placeholder cell should be removed from the calculation table')
-assert(component.includes('可直接手动输入原料投料量'), 'raw material feed amount should be an explicit manual input')
-assert(component.includes('rawWeightDrafts'), 'raw feed amount inputs should keep empty draft values before user entry')
-assert(component.includes("value={rawWeightDrafts[material.id] ?? ''}"), 'default and added raw feed amount cells should render empty before input')
-assert(component.includes("rawWeightStatus(material.id)"), 'raw feed amount cells should use red/green validity highlighting')
-assert(component.includes('步骤1：输入投料量'), 'raw feed tooltip should show sequence step 1')
-assert(component.includes('待计算物相成分'), 'raw O/C/Other inputs should be marked as pending phase solving')
-assert(component.includes('熔剂投料量：单击可手动输入；双击进入迭代输入。'), 'solvent feed result cells should support click-to-edit and double-click iteration entry')
+assert(elementTable.includes('可直接手动输入原料投料量'), 'raw material feed amount should be an explicit manual input')
+assert(component.includes('rawWeightDrafts') && elementTable.includes('rawWeightDrafts'), 'raw feed amount inputs should keep empty draft values before user entry')
+assert(elementTable.includes("value={rawWeightDrafts[material.id] ?? ''}"), 'default and added raw feed amount cells should render empty before input')
+assert(elementTable.includes('rawWeightStatus(material.id)'), 'raw feed amount cells should use red/green validity highlighting')
+assert(elementTable.includes('步骤1：输入投料量'), 'raw feed tooltip should show sequence step 1')
+assert(elementTable.includes('待计算物相成分'), 'raw O/C/Other inputs should be marked as pending phase solving')
+assert(elementTable.includes('熔剂投料量：单击可手动输入；双击进入迭代输入。'), 'solvent feed result cells should support click-to-edit and double-click iteration entry')
 assert(component.includes('border-emerald') && component.includes('bg-emerald'), 'refilled calculation inputs should support a green resolved state')
-assert(component.includes("type SolveInputStatus = 'none' | 'pending' | 'resolved'"), 'calculation input highlighting should distinguish none, pending, and resolved states')
+assert(
+  component.includes("from './CopperBatchElementTable'") && component.includes('type SolveInputStatus'),
+  'calculation input highlighting should share SolveInputStatus with the element batch table'
+)
 assert(component.includes('manualPhaseCells'), 'phase O/C/Other cells should also resolve green when manually typed')
 assert(component.includes('manualSolventWeights'), 'solvent feed cells should resolve green after coupled iteration writes results')
 assert(component.includes('manualFuelWeightValid'), 'fuel coal cell should resolve green after coupled iteration writes results')
-assert(component.includes('步骤2：物相成分') && component.includes('可直接手动输入'), 'phase tooltip should show sequence step 2 and allow manual input')
+assert(elementTable.includes('步骤2：物相成分') && elementTable.includes('可直接手动输入'), 'phase tooltip should show sequence step 2 and allow manual input')
 assert(component.includes('phaseCompletedMaterials'), 'phase completion should be tracked per raw material instead of marking all materials at once')
 assert(component.includes('phasePreviewUnknowns'), 'phase assistant should keep phase preview state for case persistence after refill')
 assert(component.includes('calculatePhaseUnknownsPreview'), 'phase assistant should calculate merged table results on demand')
-assert(component.includes('计算物相成分') && component.includes('回填到配料总表'), 'phase assistant should separate calculate and refill actions')
+assert(component.includes('计算物相成分') && component.includes('回填物相到配料总表'), 'phase assistant should separate calculate and distinct phase backfill label')
 assert(!component.includes('清除选择'), 'phase assistant should not expose clear-selection action')
 assert(component.includes('phaseSheetTabs') && component.includes('selectPhaseSheet'), 'phase assistant should show excel-style material tabs when entering phase assist')
 assert(component.includes('未计算') && component.includes('phaseAssistTabMaterialIds'), 'phase assistant should show pending tab status before calculate')
@@ -127,14 +220,14 @@ assert(
 )
 assert(component.includes('activePhasePreview'), 'phase assistant should only show solver preview after calculate is clicked')
 assert(component.includes('buildPhasePreviewUnknowns'), 'phase assistant should restore preview data from saved batch results when reopening')
-assert(component.includes('熔剂投料量：单击可手动输入；双击进入迭代输入。'), 'solvent amount cells should allow editing and double-click navigation')
-assert(component.includes('产出由静态系数 × 混料总质量计算'), 'product output cells should still explain the static coefficient calculation')
-assert(component.includes('燃料煤投料量：单击可手动输入；双击进入迭代输入。'), 'fuel amount cell should allow editing and double-click navigation')
+assert(elementTable.includes('熔剂投料量：单击可手动输入；双击进入迭代输入。'), 'solvent amount cells should allow editing and double-click navigation')
+assert(component.includes('PRODUCT_CALCULATION_BASIS'), 'product output cells should still explain the static coefficient calculation')
+assert(elementTable.includes('燃料煤投料量：单击可手动输入；双击进入迭代输入。'), 'fuel amount cell should allow editing and double-click navigation')
 assert(component.includes('calculationTableRef'), 'calculation table needs a ref so assistant calculations can return after refill')
 assert(component.includes('scrollToCalculationTable()'), 'assistant refill actions should jump back to the calculation table')
-assert(component.includes('onClick={(event) => event.stopPropagation()}'), 'manual calculation inputs should not jump away on ordinary click')
+assert(elementTable.includes('onClick={(event) => event.stopPropagation()}'), 'manual calculation inputs should not jump away on ordinary click')
 assert(component.includes('openIterationAssist') && component.includes('iterationAssistRef'), 'solvent, product, and heat result cells should open the iteration input section')
-assert(component.includes('onDoubleClick={() => {') && component.includes('openElementAssist(material.id)'), 'double-clicking raw O/C/Other cells should still open element completion')
+assert(elementTable.includes('onOpenElementAssist') && component.includes('openElementAssist'), 'double-clicking raw O/C/Other cells should still open element completion')
 assert(component.includes('混料关键参数'), 'blend indicators should sit directly below the calculation table')
 assert(component.indexOf('混料关键参数') < component.indexOf('ref={elementAssistRef}'), 'blend indicators should remain in the calculation-table card before assistant sections')
 assert(component.includes('function BlendMetric'), 'blend indicators should use a dedicated lightweight metric style')
@@ -142,13 +235,11 @@ assert(component.includes('<BlendMetric darkMode={darkMode} label='), 'blend ind
 assert(!component.includes('compact={true}'), 'blend indicators should not keep result-card compact Metric styling')
 assert(component.includes('mt-0.5 font-mono text-base'), 'blend metric values should be only one step larger than table body text')
 assert(component.includes('gap-2 md:grid-cols-3 xl:grid-cols-6'), 'blend indicator grid should stay visually compact')
-assert(component.includes('>名称<'), 'second header row first data column should be 名称')
-assert(component.includes('熔剂1') && component.includes('熔剂2'), 'solvent headers should be numbered 熔剂1 and 熔剂2')
-assert(component.includes('石灰石') && component.includes('铁矿石'), 'second header row should show solvent material names')
-assert(((component.match(/>混料<\/th>/g) ?? []).length >= 2), 'mix column should show 混料 on both header rows')
-assert(component.includes('productTableColumns.map((product) =>') && component.includes('product.name'), 'product outputs should be shown as one product column per product plus summary')
-assert(component.indexOf('>混料</th>') < component.indexOf("key={`product-head-${product.key}`"), 'product columns should sit to the right of the blend column')
-assert(component.includes('>富氧空气</th>') && component.indexOf('>富氧空气</th>') < component.indexOf('>混料</th>'), 'oxygen-enriched air should sit immediately left of the blend column')
+assert(elementTable.includes('名称') && elementTable.includes('nameColStyle(nameColWidth)'), 'transposed table header should include 名称 column with dynamic width')
+assert(elementTable.includes('熔剂{index + 1}'), 'transposed table should number solvent rows')
+assert(elementTable.includes('石灰石'), 'transposed table should show limestone solvent name')
+assert(elementTable.includes('productTableColumns.map'), 'transposed table should render one row per product output')
+assert(elementTable.includes('富氧空气'), 'transposed table should include oxygen-enriched air row')
 assert(!component.includes('>物相</td>'), 'old bottom phase row should be removed from the calculation table')
 assert(!component.includes('O/C/Other</button>'), 'old phase-row O/C/Other buttons should be removed')
 assert(component.includes('>物相成分</h3>'), 'first assistant section should be named professionally')
@@ -212,7 +303,7 @@ assert(
 )
 const heatAssistSection = component.slice(
   component.indexOf('③ 热平衡与燃料煤'),
-  component.indexOf('<CaseFooterActions', component.indexOf('③ 热平衡与燃料煤'))
+  component.indexOf('④ 富氧空气', component.indexOf('③ 热平衡与燃料煤'))
 )
 assert(
   heatAssistSection.includes('联动迭代结果') && heatAssistSection.includes('assistAlertPanelClassName'),
@@ -259,7 +350,7 @@ assert(
 assert(!component.includes('物相反推 O / C / Other'), 'old phase reverse wording should be removed')
 assert(!component.includes('物相折算'), 'phase-assistant wording should no longer emphasize conversion')
 assert(!component.includes('体积分数') && !component.includes("label: 'v%'"), 'phase summary table and export should no longer include volume fraction rows')
-assert(component.includes('>混料<') || component.includes('混料</th>'), 'right-most result column should be named 混料')
+assert(elementTable.includes('混料') || component.includes('混料'), 'blend result row should be named 混料')
 assert(!component.includes('入炉计'), 'right-most result column should no longer be named 入炉计')
 assert(component.includes('function StageSheetTabs'), 'copper workflow should use Excel-like sheet tabs for stage switching')
 assert(!component.includes('{index + 1}. {stage.name}'), 'stage header should not show the old numbered stage button group')
@@ -270,14 +361,14 @@ assert(component.includes('案例名称') && component.includes('newCaseName'), 
 assert(component.includes('suggestCopperCaseName(smeltMethodName)'), 'new case name should be prefilled from the selected smelting method')
 assert(component.includes('铜冶炼计算'), 'default case name should include the copper smelting calculation label')
 assert(component.includes('新建案例') && component.includes('历史案例'), 'case workspace should let users create and review previous cases')
-assert(component.includes('saveCurrentCaseAndGoNext'), 'process pages should auto-save before moving to the next step')
 assert(component.includes('METCAL_COPPER_CASE_FILE_TYPE') && component.includes('.metcal-copper-case.json'), 'cases should export as a documented JSON case file')
 assert(component.includes('导入案例') && component.includes('importCopperCaseFile'), 'case workspace should import exported case files')
 assert(component.includes('handleCaseDrop') && component.includes('onDrop={handleCaseDrop}'), 'case workspace should allow opening case JSON files by drag and drop')
 assert(component.includes('将案例文件拖入此处即可导入'), 'case workspace should show a visible drag-and-drop import target')
 assert(component.includes('caseDropActive'), 'case workspace should highlight the drop zone while dragging files over it')
 assert(component.includes('删除案例') && component.includes('deleteCopperCase'), 'case workspace should allow deleting previous cases')
-assert(component.includes('返回工作区') && component.includes('下一步'), 'process pages should expose return-to-workspace and next-step actions')
+assert(!component.includes('function CaseFooterActions'), 'bottom case footer with return/next should be removed')
+assert(!component.includes('>返回工作区<'), 'duplicate bottom return-to-workspace button should be removed')
 const caseWorkspaceSection = component.slice(component.indexOf("if (activeSheet === 'raw_material')"), component.indexOf("if (activeSheet === 'cu_equipment')"))
 assert(!caseWorkspaceSection.includes('案例管理'), 'case workspace create area should be one row without the separate case-management explainer panel')
 assert(!caseWorkspaceSection.includes('当前案例数'), 'case workspace should not show the current case count badge')
@@ -288,7 +379,7 @@ assert(caseWorkspaceSection.includes('onClick={() => openCopperCase(record)}') &
 assert(!caseWorkspaceSection.includes('打开案例'), 'case history action area should not keep a separate open button')
 assert(caseWorkspaceSection.includes('导出案例') && component.includes('exportCopperCaseWithSaveDialog'), 'case history should allow exporting a portable case file via a save dialog')
 assert(caseWorkspaceSection.includes('whitespace-nowrap'), 'history actions should keep short action labels on one line')
-assert(component.includes('function CaseFooterActions'), 'case save/export actions should live at the bottom of each process page')
+assert(component.includes('CopperBatchElementTable'), 'element summary table should use transposed row layout component')
 assert(component.includes('keydown') && component.includes("event.key.toLowerCase() === 's'"), 'Ctrl+S should save the active case')
 assert(component.includes('confirmSaveBeforeCaseNavigation') && component.includes('是否保存当前页面的内容'), 'stage switching should support save confirmation when needed')
 assert(component.includes('hasCopperCaseGeneratedData') && component.includes('isCopperCaseContentDirty'), 'stage switching should prompt when generated data or unsaved edits need attention')
@@ -298,9 +389,17 @@ const saveDialogSection = component.slice(component.indexOf('function SaveBefore
 assert(saveDialogSection.includes('不保存') && saveDialogSection.includes('保存') && saveDialogSection.includes('grid-cols-2'), 'save prompt should offer equal-width save and skip actions')
 assert(!saveDialogSection.includes('取消切换') && !saveDialogSection.includes('保存并切换') && !saveDialogSection.includes('不保存继续'), 'save prompt should not keep the old three-button layout')
 assert(!component.includes('window.confirm'), 'save prompt should not use the browser/native confirm dialog')
-const stageHeaderSection = component.slice(component.indexOf('function StageHeader'), component.indexOf('function CaseFooterActions'))
+const stageHeaderSection = component.slice(component.indexOf('function StageHeader'), component.indexOf('function LabeledInput'))
 assert(!stageHeaderSection.includes('保存当前案例') && !stageHeaderSection.includes('当前案例：'), 'stage header should not keep top save/current-case controls')
-assert(stageHeaderSection.includes('返回项目工作区'), 'case pages should expose a top back action to the copper project workspace')
+assert(component.includes('function IteratingOverlay') && component.includes('steps?:'), 'iterating overlay should support step progress')
+assert(!component.includes('phaseCalcStep') && !component.includes('解析物相方程'), 'phase calculation should use the shared simple calculating overlay')
+assert(component.includes('batchTableHighlight') && component.includes('batch-table-view-enter'), 'batch table view should animate and pulse after phase refill')
+assert(component.includes('shadow-md') && component.includes('BatchTableViewTabs'), 'batch table tabs should use prominent active styling')
+assert(component.includes('setShowElementAssist(true)') && component.includes('m.weight > 0 && m.name.trim()'), 'phase assist should auto-expand when feed rate and material are set')
+assert(!component.includes('添加新原料列'), 'batch table should not keep the external add-column button')
+assert(component.includes('addSolvent') && component.includes('removeSolvent'), 'batch table should support adding and removing solvent rows')
+assert(component.includes('回填物相到配料总表'), 'phase area should use distinct backfill label')
+assert(component.includes('回填熔剂、产物到配料总表'), 'iteration area should use distinct backfill label')
 assert(!component.includes('铜冶炼计算流程'), 'old process-choice title should be removed from the copper entry page')
 assert(!component.includes('点击熔炼进入原料、熔剂和目标渣型计算'), 'old click-smelting workflow copy should be removed')
 assert(!component.includes('返回铜冶炼流程'), 'return wording should not point back to the old flow page')
@@ -310,6 +409,23 @@ assert(component.includes('规模（万吨/a）') && component.includes('10万�
 assert(component.includes('设备选型总表'), 'equipment selection should show a summary sizing table')
 assert(component.includes('calculateCopperEquipmentSizing'), 'equipment selection should use a dedicated sizing calculation utility')
 assert(component.includes('调整系数'), 'equipment selection table should expose adjustment factors for later tuning')
+assert(
+  component.includes('closeCopperRatios') &&
+    component.includes('fillOther: false') &&
+    component.includes('normalizeCopperRatios({') &&
+    component.includes('...result.unknowns'),
+  'batch table should store assays without Other while phase backfill closes ratios'
+)
+assert(
+  component.includes('buildPhaseAssistDisplaySlots') &&
+    component.includes('BATCH_PHASE_ASSIST_MIN_DISPLAY_COLUMNS') &&
+    component.includes('canDeletePhaseAssistRow'),
+  'phase assist table should pad empty columns and protect Other/H2O rows'
+)
+assert(
+  component.includes('aria-label="删除物相"') && component.includes('×') && component.includes("row.kind !== 'other'"),
+  'phase assist delete action should use an icon button and skip Other/H2O rows'
+)
 
 assert(!splash.includes('class="features"'), 'splash should not use feature-card blocks')
 assert(

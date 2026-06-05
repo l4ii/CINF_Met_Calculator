@@ -12,6 +12,13 @@ import {
 } from '../../constants/appCopy'
 import { API_BASE_URL } from '../../config/api'
 import { formatUpdateError } from '../../utils/formatUpdateError'
+import {
+  readStoredUiScale,
+  resetUiScale,
+  setUiScale,
+  UI_SCALE_PRESETS,
+  type UiScalePreset,
+} from '../../utils/uiScale'
 
 export interface SettingsPageProps {
   darkMode: boolean
@@ -43,6 +50,7 @@ export default function SettingsPage({
   const [licenseBusy, setLicenseBusy] = useState(false)
   const [licenseMsg, setLicenseMsg] = useState<string | null>(null)
   const [licenseCopyOk, setLicenseCopyOk] = useState(false)
+  const [uiScalePercent, setUiScalePercent] = useState<UiScalePreset>(() => readStoredUiScale() as UiScalePreset)
   const [deployInfo, setDeployInfo] = useState<{
     assistantLocalDeploy?: boolean
     version?: string
@@ -218,6 +226,12 @@ export default function SettingsPage({
     dark: language === 'en' ? 'Dark' : '暗色',
     darkHint: language === 'en' ? 'Easier on eyes' : '护眼',
     uiLang: language === 'en' ? 'Language' : '界面语言',
+    uiScale: language === 'en' ? 'Interface scale' : '界面缩放',
+    uiScaleHint:
+      language === 'en'
+        ? 'Adjust overall UI size. Use Ctrl+wheel, Ctrl+/-/0, or the dropdown below.'
+        : '调整整体界面显示比例。可用 Ctrl+滚轮、Ctrl+/-/0 快捷键，或下方下拉选择。',
+    uiScaleReset: language === 'en' ? 'Reset to 100%' : '重置为 100%',
     feedbackSection: language === 'en' ? 'Feedback & updates' : '反馈与更新',
     feedbackTitle: language === 'en' ? 'Suggestions & feedback' : '建议与反馈',
     feedbackDesc:
@@ -500,6 +514,37 @@ export default function SettingsPage({
                   className={`flex-1 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${language === 'en' ? 'bg-blue-600 text-white shadow' : darkMode ? 'bg-gray-600/80 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                 >
                   English
+                </button>
+              </div>
+            </div>
+            <div className={cardCls}>
+              <h3 className={`text-base font-semibold mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{t.uiScale}</h3>
+              <p className={`text-sm mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{t.uiScaleHint}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  className={`rounded-lg border px-3 py-2 text-sm ${darkMode ? 'border-gray-600 bg-gray-800 text-gray-100' : 'border-gray-300 bg-white text-gray-900'}`}
+                  value={uiScalePercent}
+                  onChange={(event) => {
+                    const next = Number(event.target.value) as UiScalePreset
+                    setUiScalePercent(next)
+                    setUiScale(next)
+                  }}
+                >
+                  {UI_SCALE_PRESETS.map((preset) => (
+                    <option key={preset} value={preset}>
+                      {preset}%
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className={`rounded-lg border px-3 py-2 text-sm font-medium ${darkMode ? 'border-gray-600 text-gray-200 hover:bg-gray-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'}`}
+                  onClick={() => {
+                    const next = resetUiScale()
+                    setUiScalePercent(next as UiScalePreset)
+                  }}
+                >
+                  {t.uiScaleReset}
                 </button>
               </div>
             </div>

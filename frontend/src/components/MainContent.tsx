@@ -136,7 +136,7 @@ export default function MainContent({
 
   return (
     <div className={`flex-[4] min-h-0 flex flex-col overflow-hidden ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
-      <div className="flex-shrink-0 px-6 pt-4 pb-2">
+      <div className="flex-shrink-0 px-4 pt-2 pb-1">
         <h1 className={`text-2xl font-bold mb-1 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{appTitle}</h1>
         <p className={`text-sm mb-4 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{appSubtitle}</p>
         {isCopper && hasActiveCopperCase ? (
@@ -174,7 +174,7 @@ export default function MainContent({
       </div>
 
       <div ref={mainScrollRef} className="flex-1 min-h-0 overflow-y-auto">
-        <div className="w-full max-w-[1600px] mx-auto p-6">
+        <div className="w-full max-w-none mx-auto px-3 py-3 xl:px-4">
           {isCopper && (
             <ErrorBoundary>
               <CopperWorkflow

@@ -152,9 +152,19 @@ export function elementMassFraction(composition: FormulaComposition, elementSymb
 
 /** 单质/化合物摩尔质量快捷表（由原子质量推导，供配料模型高频使用） */
 export const COMPOUND_MOLAR_MASS = {
+  CuFeS2: compoundMolarMass({ Cu: 1, Fe: 1, S: 2 }),
+  CuS: compoundMolarMass({ Cu: 1, S: 1 }),
   Cu2S: compoundMolarMass({ Cu: 2, S: 1 }),
   FeS: compoundMolarMass({ Fe: 1, S: 1 }),
   FeS2: compoundMolarMass({ Fe: 1, S: 2 }),
+  CaCO3: compoundMolarMass({ Ca: 1, C: 1, O: 3 }),
+  MgCO3: compoundMolarMass({ Mg: 1, C: 1, O: 3 }),
+  MgO: compoundMolarMass({ Mg: 1, O: 1 }),
+  PbS: compoundMolarMass({ Pb: 1, S: 1 }),
+  ZnS: compoundMolarMass({ Zn: 1, S: 1 }),
+  NiS: compoundMolarMass({ Ni: 1, S: 1 }),
+  Bi2S3: compoundMolarMass({ Bi: 2, S: 3 }),
+  As2S3: compoundMolarMass({ As: 2, S: 3 }),
   Cu2O: compoundMolarMass({ Cu: 2, O: 1 }),
   CuO: compoundMolarMass({ Cu: 1, O: 1 }),
   FeO: compoundMolarMass({ Fe: 1, O: 1 }),

@@ -73,6 +73,11 @@ export function cardBase(dark: boolean) {
   return `rounded-xl border p-5 ${dark ? 'bg-gray-700/50 border-gray-600' : 'bg-white border-gray-200'}`
 }
 
+/** 紧凑卡片（1080p 铜冶炼流程等高密度页面） */
+export function cardCompact(dark: boolean) {
+  return `rounded-xl border p-4 ${dark ? 'bg-gray-700/50 border-gray-600' : 'bg-white border-gray-200'}`
+}
+
 /** 区块标题（模块标题） */
 export function sectionTitle(dark: boolean) {
   return `text-base font-semibold mb-4 ${dark ? 'text-gray-100' : 'text-gray-900'}`

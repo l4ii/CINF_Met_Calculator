@@ -7,6 +7,7 @@ const base = { id: 'm1', name: '测试矿', kind: 'raw', weight: 100, ratios: em
 
 assert(!requiresSulfurInput({ 'Si(硅)': 10 }))
 assert(requiresSulfurInput({ 'Cu(铜)': 20 }))
+assert(requiresSulfurInput({ 'FeO(氧化亚铁)': 35 }))
 assert(hasValidSulfurInput({ 'S (硫)': 5 }))
 
 const missingS = validateMaterialForPhaseCalc({

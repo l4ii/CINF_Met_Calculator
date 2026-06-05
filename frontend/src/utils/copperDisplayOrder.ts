@@ -10,8 +10,10 @@ export const COPPER_ELEMENT_DISPLAY_ORDER = [
   'Cu(铜)',
   'S (硫)',
   'Fe(铁)',
+  'FeO(氧化亚铁)',
   'SiO₂(二氧化硅)',
   'CaO(氧化钙)',
+  'MgO(氧化镁)',
   'Ag(银)',
   'Au(金)',
   'Pb(铅)',
@@ -19,13 +21,55 @@ export const COPPER_ELEMENT_DISPLAY_ORDER = [
   'Zn(锌)',
   'Al₂O₃(三氧化二铝)',
   'Sb(锑)',
+  'Ni(镍)',
+  'Se(硒)',
+  'Bi(铋)',
+  'Hg(汞)',
+  'Sn(锡)',
+  'Te(碲)',
+  'Cd(镉)',
+  'H(氢)',
   'O(氧)',
   'N(氮)',
   'C (碳)',
   'Other(其他)',
 ] as const
 
+/** 未选原料时元素表占位列（约 13 列，便于铺满页面） */
+export const COPPER_PLACEHOLDER_ELEMENT_KEYS = [
+  'Cu(铜)',
+  'S (硫)',
+  'Fe(铁)',
+  'FeO(氧化亚铁)',
+  'SiO₂(二氧化硅)',
+  'CaO(氧化钙)',
+  'MgO(氧化镁)',
+  'Al₂O₃(三氧化二铝)',
+  'Pb(铅)',
+  'Zn(锌)',
+  'As(砷)',
+  'Ag(银)',
+  'Au(金)',
+] as const
+
 export type CopperElementDisplayKey = (typeof COPPER_ELEMENT_DISPLAY_ORDER)[number]
+
+/** 未选原料时物相表占位列 */
+export const COPPER_PLACEHOLDER_PHASE_ROW_KEYS = [
+  'Cu2S',
+  'S',
+  'FeS',
+  'FeO',
+  'SiO2',
+  'CaO',
+  'Al2O3',
+  'PbO',
+  'ZnO',
+  'As2O3',
+  'O2',
+  'N2',
+  'H2O',
+] as const
 
 /** 内置投入物相基础清单；实际显示顺序由下方组成规则生成 */
 export const COPPER_BUILTIN_PHASE_DISPLAY_ORDER = [

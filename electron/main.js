@@ -515,10 +515,10 @@ function createWindow() {
   appReadyHandled = false
 
   const windowOptions = {
-    width: 1600,
+    width: 1920,
     height: 1080,
-    minWidth: 1200,
-    minHeight: 800,
+    minWidth: 1280,
+    minHeight: 720,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

@@ -1,6 +1,11 @@
 import type { CopperElementKey, CopperRatios, PhaseAssistRowSpec } from './copperWorkflowCalc.ts'
 import { calculateOrderedPhaseElementCompletion, normalizeCopperRatios } from './copperWorkflowCalc.ts'
 import {
+  allocateConcentratePhases,
+  shouldUseConcentrateNormativeAllocator,
+  type ConcentratePhaseKey,
+} from './copperConcentratePhaseNorm.ts'
+import {
   buildBlendPhaseColumn,
   normalizePhasePercents,
   type PhasePercentMap,
@@ -40,6 +45,24 @@ export function toPhaseAssistSpecs(rows: MaterialPhaseAssistRow[]): PhaseAssistR
     }))
 }
 
+function mapNormativePhasesToRowContents(
+  rows: MaterialPhaseAssistRow[],
+  phases: Record<ConcentratePhaseKey, number>
+): Record<string, number> {
+  const contents: Record<string, number> = {}
+  for (const row of rows) {
+    if (row.kind === 'water' || row.kind === 'draft') continue
+    if (row.kind === 'other' || row.id === 'Other') {
+      contents[row.id] = phases.Other
+      continue
+    }
+    const formula = (row.builtinKey ?? row.formula).trim() as ConcentratePhaseKey
+    const pct = phases[formula] ?? 0
+    if (pct > 0) contents[row.id] = pct
+  }
+  return contents
+}
+
 export function computeMaterialPhaseResult(
   materialId: string,
   materialName: string,
@@ -47,6 +70,23 @@ export function computeMaterialPhaseResult(
   ratios: CopperRatios,
   rows: MaterialPhaseAssistRow[]
 ): PhaseMaterialCalcResult {
+  if (shouldUseConcentrateNormativeAllocator(ratios)) {
+    const normalized = normalizeCopperRatios(ratios)
+    const phases = allocateConcentratePhases(ratios)
+    return {
+      materialId,
+      materialName,
+      weight,
+      phaseContents: mapNormativePhasesToRowContents(rows, phases),
+      unknowns: {
+        'O(氧)': normalized['O(氧)'] ?? 0,
+        'C (碳)': normalized['C (碳)'] ?? 0,
+        'Other(其他)': normalized['Other(其他)'] ?? 0,
+      },
+      valid: true,
+      status: 'ok',
+    }
+  }
   const result = calculateOrderedPhaseElementCompletion(ratios, toPhaseAssistSpecs(rows))
   return {
     materialId,

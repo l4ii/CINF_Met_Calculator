@@ -1,4 +1,5 @@
 import { validatePhaseFormulaInput } from './chemicalFormula.ts'
+import { CONCENTRATE_DEFAULT_PHASE_FORMULAS, concentratePhaseFractionsForFormula } from './copperConcentratePhaseNorm.ts'
 import {
   COPPER_PHASE_OXYGEN_FACTORS,
   COPPER_PHASE_SULFUR_FACTORS,
@@ -68,7 +69,8 @@ export function createDefaultMaterialPhaseRows(): MaterialPhaseAssistRow[] {
 export function createMaterialPhaseRowsFromFormulas(formulas: string[]): MaterialPhaseAssistRow[] {
   const rows = formulas.flatMap((formula): MaterialPhaseAssistRow[] => {
     if (formula.trim().toLowerCase() === 'other') return [createOtherMaterialPhaseRow()]
-    const builtinKey = COPPER_BUILTIN_PHASE_DISPLAY_ORDER.find((key) => key.toLowerCase() === formula.trim().toLowerCase())
+    const trimmed = formula.trim()
+    const builtinKey = COPPER_BUILTIN_PHASE_DISPLAY_ORDER.find((key) => key.toLowerCase() === trimmed.toLowerCase())
     if (builtinKey) {
       return [
         {
@@ -78,6 +80,18 @@ export function createMaterialPhaseRowsFromFormulas(formulas: string[]): Materia
           formula: builtinKey,
           displayLabel: INPUT_PHASE_DISPLAY[builtinKey],
           fractions: getBuiltinPhaseFractions(builtinKey),
+        },
+      ]
+    }
+    const concentrateFractions = concentratePhaseFractionsForFormula(trimmed)
+    if (Object.keys(concentrateFractions).length > 0) {
+      return [
+        {
+          id: `custom:${trimmed}`,
+          kind: 'custom',
+          formula: trimmed,
+          displayLabel: trimmed,
+          fractions: concentrateFractions,
         },
       ]
     }
@@ -94,6 +108,10 @@ export function createMaterialPhaseRowsFromFormulas(formulas: string[]): Materia
     ]
   })
   return ensureMaterialPhaseRows(rows)
+}
+
+export function createConcentrateMaterialPhaseRows(): MaterialPhaseAssistRow[] {
+  return createMaterialPhaseRowsFromFormulas([...CONCENTRATE_DEFAULT_PHASE_FORMULAS])
 }
 
 export function ensureMaterialPhaseRows(rows: MaterialPhaseAssistRow[] | undefined): MaterialPhaseAssistRow[] {

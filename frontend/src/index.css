@@ -8,6 +8,21 @@ html, body {
   overflow: hidden;
 }
 
+@keyframes batch-table-view-enter {
+  from {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.batch-table-view-enter {
+  animation: batch-table-view-enter 0.2s ease-out;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',

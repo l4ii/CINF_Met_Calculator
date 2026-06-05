@@ -7,5 +7,6 @@ assert(component.includes('本地助手部署'), 'deploy metadata should use a C
 assert(component.includes('Electron 版本'), 'Electron metadata should use a Chinese label')
 assert(!component.includes('cinfAssistantLocalDeploy:{'), 'raw deploy metadata key should not be shown on the page')
 assert(!component.includes('Electron version:'), 'Electron metadata label should not remain hard-coded in English')
+assert(component.includes('UI_SCALE_PRESETS') && component.includes('setUiScale'), 'settings should expose persisted interface scale controls')
 
 console.log('SettingsPage UI checks passed')

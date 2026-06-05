@@ -1,7 +1,11 @@
 import type { CopperMaterialColumn, CopperRatios } from './copperWorkflowCalc.ts'
 
 export function requiresSulfurInput(ratios: CopperRatios): boolean {
-  return (ratios['Cu(铜)'] ?? 0) > 0 || (ratios['Fe(铁)'] ?? 0) > 0
+  return (
+    (ratios['Cu(铜)'] ?? 0) > 0 ||
+    (ratios['Fe(铁)'] ?? 0) > 0 ||
+    (ratios['FeO(氧化亚铁)'] ?? 0) > 0
+  )
 }
 
 export function hasValidSulfurInput(ratios: CopperRatios): boolean {

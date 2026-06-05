@@ -7,12 +7,21 @@ const SYMBOL_TO_ELEMENT_KEY: Record<string, CopperElementKey> = {
   Ag: 'Ag(银)',
   As: 'As(砷)',
   Au: 'Au(金)',
+  Bi: 'Bi(铋)',
   C: 'C (碳)',
+  Cd: 'Cd(镉)',
   Cu: 'Cu(铜)',
   Fe: 'Fe(铁)',
+  H: 'H(氢)',
+  Hg: 'Hg(汞)',
+  Mg: 'MgO(氧化镁)',
+  Ni: 'Ni(镍)',
   Pb: 'Pb(铅)',
   S: 'S (硫)',
   Sb: 'Sb(锑)',
+  Se: 'Se(硒)',
+  Sn: 'Sn(锡)',
+  Te: 'Te(碲)',
   Zn: 'Zn(锌)',
 }
 
@@ -21,6 +30,7 @@ function symbolToCopperElementMass(symbol: string, atomMass: number): Partial<Re
   if (direct) return { [direct]: atomMass }
   if (symbol === 'Si') return { 'SiO₂(二氧化硅)': atomMass * (compoundMolarMass({ Si: 1, O: 2 }) / atomicMass('Si')) }
   if (symbol === 'Ca') return { 'CaO(氧化钙)': atomMass * (compoundMolarMass({ Ca: 1, O: 1 }) / atomicMass('Ca')) }
+  if (symbol === 'Mg') return { 'MgO(氧化镁)': atomMass * (compoundMolarMass({ Mg: 1, O: 1 }) / atomicMass('Mg')) }
   if (symbol === 'Al') return { 'Al₂O₃(三氧化二铝)': atomMass * (compoundMolarMass({ Al: 2, O: 3 }) / (2 * atomicMass('Al'))) }
   if (symbol === 'O') return { 'O(氧)': atomMass }
   if (symbol === 'N') return { 'N(氮)': atomMass }
@@ -122,6 +132,7 @@ function tokenizeFormula(normalized: string): {
 export const PHASE_FORMULA_ALIASES: Record<string, string> = {
   cus: 'CuS',
   cu2s: 'Cu2S',
+  cufes2: 'CuFeS2',
   cuo: 'CuO',
   cu2o: 'Cu2O',
   fes: 'FeS',
@@ -131,8 +142,16 @@ export const PHASE_FORMULA_ALIASES: Record<string, string> = {
   fe3o4: 'Fe3O4',
   sio2: 'SiO2',
   cao: 'CaO',
+  caco3: 'CaCO3',
+  mgco3: 'MgCO3',
   al2o3: 'Al2O3',
   caso4: 'CaSO4',
+  pbs: 'PbS',
+  zns: 'ZnS',
+  nis: 'NiS',
+  bi2s3: 'Bi2S3',
+  sb2s3: 'Sb2S3',
+  as2s3: 'As2S3',
   pbo: 'PbO',
   as2o3: 'As2O3',
   sb2o3: 'Sb2O3',
@@ -244,7 +263,7 @@ export function parseFormulaInput(raw: string): ParsedFormulaResult {
 
   const unsupportedElements = tokens
     .map(({ symbol }) => symbol)
-    .filter((symbol) => !SYMBOL_TO_ELEMENT_KEY[symbol] && !['Si', 'Ca', 'Al', 'O', 'N'].includes(symbol))
+    .filter((symbol) => !SYMBOL_TO_ELEMENT_KEY[symbol] && !['Si', 'Ca', 'Mg', 'Al', 'O', 'N'].includes(symbol))
 
   if (unsupportedElements.length > 0) {
     const unique = [...new Set(unsupportedElements)]

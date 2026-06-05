@@ -4,6 +4,7 @@ const {
   COPPER_ELEMENT_KEYS,
   COPPER_MATERIAL_LIBRARY,
   DEFAULT_COPPER_SOLVENTS,
+  calculateAssayDisplayTotal,
   calculateKnownTotal,
   calculatePhaseElementCompletion,
   calculateUnknownsFromPhases,
@@ -13,6 +14,7 @@ const {
   createDefaultSolventColumns,
   emptyCopperRatios,
   derivePhaseContentsFromElements,
+  closeCopperRatios,
   normalizeCopperRatios,
   parseCopperLibraryCsv,
   solveCopperSolvents,
@@ -45,25 +47,15 @@ function slagTargetRatiosFromMaterialsAndSolvents(rawMaterials, solventWeights =
   return slagTargetRatiosFromProductAndSolvents(baseSlag, solventWeights)
 }
 
-const expectedOrder = [
-  'Cu(铜)',
-  'S (硫)',
-  'Fe(铁)',
-  'SiO₂(二氧化硅)',
-  'CaO(氧化钙)',
-  'Ag(银)',
-  'Au(金)',
-  'Pb(铅)',
-  'As(砷)',
-  'Zn(锌)',
-  'Al₂O₃(三氧化二铝)',
-  'Sb(锑)',
-  'O(氧)',
-  'N(氮)',
-  'C (碳)',
-  'Other(其他)',
-]
-assert.deepEqual(COPPER_ELEMENT_KEYS, expectedOrder)
+const { COPPER_ELEMENT_DISPLAY_ORDER } = await import('./copperDisplayOrder.ts')
+assert.deepEqual(COPPER_ELEMENT_KEYS, [...COPPER_ELEMENT_DISPLAY_ORDER])
+
+const partialAssay = { 'Cu(铜)': 24, 'S (硫)': 18, 'Fe(铁)': 22 }
+const storedAssay = closeCopperRatios(partialAssay, { fillOther: false })
+assert.equal(storedAssay['Other(其他)'], 0, 'batch-table storage should not auto-fill Other')
+assert.ok(calculateKnownTotal(storedAssay) < 100, 'partial assay total should stay below 100 before phase backfill')
+const closedAssay = normalizeCopperRatios(partialAssay)
+assert.ok(Math.abs(calculateAssayDisplayTotal(closedAssay) - 100) < 1e-6, 'normalizeCopperRatios should still close to 100 via Other')
 
 assert.deepEqual(
   createDefaultCopperMaterials().map((material) => material.weight),
@@ -126,9 +118,9 @@ const rawMaterials = [
 
 const blend = calculateWeightedComposition(rawMaterials)
 assert.equal(blend.totalWeight, 100)
-assert.equal(blend.ratios['Cu(铜)'].toFixed(3), '22.400')
-assert.equal(blend.ratios['Fe(铁)'].toFixed(3), '29.600')
-assert.equal(blend.ratios['S (硫)'].toFixed(3), '31.800')
+assert.equal(blend.ratios['Cu(铜)'].toFixed(3), '22.064')
+assert.equal(blend.ratios['Fe(铁)'].toFixed(3), '29.063')
+assert.equal(blend.ratios['S (硫)'].toFixed(3), '31.246')
 assert.equal(blend.ratios['Other(其他)'].toFixed(3), '1.179')
 
 const { COPPER_BUILTIN_PHASE_FRACTIONS } = await import('./copperPhaseStoichiometry.ts')
@@ -216,22 +208,22 @@ assert.equal(
   100
 )
 
-const complexConc = COPPER_MATERIAL_LIBRARY.find((m) => m.id === 'cu-conc-complex')
-assert(complexConc)
-const complexCompletion = calculatePhaseElementCompletion(complexConc.ratios)
-assert.equal(
-  Math.round(
-    (calculateKnownTotal({ ...complexConc.ratios, ...complexCompletion.unknowns }) +
-      complexCompletion.unknowns['Other(其他)']) *
-      1000
-  ) / 1000,
-  100,
-  'phase completion must close to 100% even when stoichiometric oxide O exceeds assay headroom (e.g. 复杂铜精矿)'
+const internalConc = COPPER_MATERIAL_LIBRARY.find((m) => m.id === 'cu-conc-internal')
+assert(internalConc, 'SW internal concentrate should be in library')
+assert.ok((internalConc.ratios['O(氧)'] ?? 0) >= 0, 'library concentrate O should be non-negative after cleanup')
+assert.ok(Math.abs(calculateAssayDisplayTotal(internalConc.ratios) - 100) <= 0.05)
+
+const { computeMaterialPhaseResult } = await import('./copperPhaseBatchCalc.ts')
+const { createConcentrateMaterialPhaseRows } = await import('./copperPhaseAssist.ts')
+const normResult = computeMaterialPhaseResult(
+  'test-internal',
+  internalConc.name,
+  1,
+  internalConc.ratios,
+  createConcentrateMaterialPhaseRows()
 )
-assert.ok(
-  complexCompletion.unknowns['O(氧)'] < 8,
-  'O2 should be capped-down from raw phase sum so total does not exceed 100%'
-)
+assert.equal(normResult.valid, true, normResult.message ?? 'normative phase calc')
+assert.ok((normResult.unknowns['O(氧)'] ?? 0) >= 0, 'phase unknown O should be non-negative after library cleanup')
 
 const { createDefaultMaterialPhaseRows, rowsForPhaseCalculation } = await import('./copperPhaseAssist.ts')
 const { calculateOrderedPhaseElementCompletion } = await import('./copperWorkflowCalc.ts')
@@ -279,6 +271,15 @@ const solventSolution = solveCopperSolvents({
   targetCaOSiO2: 0.45,
   solvents: DEFAULT_COPPER_SOLVENTS,
 })
+const insufficientSolvents = solveCopperSolvents({
+  rawMaterials: [lowFeRaw],
+  targetFeSiO2: 1,
+  targetCaOSiO2: 0.45,
+  solvents: [DEFAULT_COPPER_SOLVENTS[0]],
+})
+assert.equal(insufficientSolvents.valid, false)
+assert(insufficientSolvents.message.includes('2 个熔剂'))
+
 assert.equal(solventSolution.valid, true)
 assert(solventSolution.solventWeights['石灰'] > 0)
 assert(solventSolution.solventWeights['铁矿石'] > 0)
@@ -392,5 +393,21 @@ assert.equal(importedLibrary[0].ratios['Cu(铜)'], 25)
 assert.equal(importedLibrary[0].ratios['Ag(银)'], 0.06)
 assert.equal(importedLibrary[0].ratios['Other(其他)'].toFixed(3), '12.940')
 assert.equal(importedLibrary[1].ratios['SiO₂(二氧化硅)'], 8)
+
+const under100 = normalizeCopperRatios({ 'Cu(铜)': 30, 'Fe(铁)': 20, 'S (硫)': 25 })
+assert.equal(under100['Other(其他)'], 25, 'ratios below 100% should fill Other to close')
+
+const over100 = normalizeCopperRatios({ 'Cu(铜)': 60, 'Fe(铁)': 50, 'S (硫)': 20 })
+assert.equal(over100['Other(其他)'], 0, 'ratios over 100% should scale down and zero Other')
+assert(Math.abs(calculateKnownTotal(over100) - 100) < 0.02, 'scaled ratios should sum to 100%')
+
+const withNegative = normalizeCopperRatios({ 'Cu(铜)': 20, 'O(氧)': -5, 'Fe(铁)': 30 })
+assert((withNegative['O(氧)'] ?? 0) >= 0, 'negative O should clamp to zero before normalization')
+assert.equal(withNegative['Other(其他)'], 50, 'negative inputs should still close to 100% via Other')
+
+for (const material of COPPER_MATERIAL_LIBRARY) {
+  assert((material.ratios['O(氧)'] ?? 0) >= 0, `${material.name} library O should be non-negative`)
+  assert(Math.abs(calculateKnownTotal(material.ratios) + (material.ratios['Other(其他)'] ?? 0) - 100) < 0.05, `${material.name} should sum to 100%`)
+}
 
 console.log('copperWorkflowCalc tests passed')
