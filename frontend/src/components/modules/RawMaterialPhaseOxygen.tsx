@@ -18,6 +18,7 @@ import {
 } from '../../utils/blendSuggest'
 import { useCalc, type MaterialEntry } from '../../context/CalcContext'
 import ElementTableCompact from '../ElementTableCompact'
+import { BatchTableNumericReadonly } from './BatchTableNumericCell'
 import {
   btnPrimary,
   btnPrimaryDisabled,
@@ -1019,7 +1020,9 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                           {blendSuggestModal.blend.map((b) => (
                             <tr key={b.id + b.name} className={dark ? 'border-t border-gray-700' : 'border-t border-gray-100'}>
                               <td className="px-3 py-2">{displayMaterialName(b.name)}</td>
-                              <td className="px-3 py-2 text-right font-mono">{b.weight.toFixed(4)}</td>
+                              <td className="px-3 py-2 text-right">
+                                <BatchTableNumericReadonly darkMode={darkMode} value={b.weight} className="text-right text-sm" />
+                              </td>
                               <td className="px-3 py-2 text-right font-mono">{blendTotalWeight > 0 ? ((b.weight / blendTotalWeight) * 100).toFixed(2) : '0.00'}%</td>
                               <td className="px-3 py-2 text-right font-mono">{(b.unitPriceYuanPerTon / 10000).toFixed(2)}{isEn ? ' x10k' : '万'}</td>
                               <td className="px-3 py-2 text-right font-mono">{(b.weight * b.unitPriceYuanPerTon).toFixed(0)}</td>
@@ -1060,8 +1063,12 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                             return (
                               <tr key={row.element} className={dark ? 'border-t border-gray-700' : 'border-t border-gray-100'}>
                                 <td className="px-3 py-2">{displayElementLabel(row.element)}</td>
-                                <td className="px-3 py-2 text-right font-mono">{row.target.toFixed(4)}</td>
-                                <td className="px-3 py-2 text-right font-mono">{row.achieved.toFixed(4)}</td>
+                                <td className="px-3 py-2 text-right">
+                                  <BatchTableNumericReadonly darkMode={darkMode} value={row.target} className="text-right text-sm" />
+                                </td>
+                                <td className="px-3 py-2 text-right">
+                                  <BatchTableNumericReadonly darkMode={darkMode} value={row.achieved} className="text-right text-sm" />
+                                </td>
                                 <td className={`px-3 py-2 text-right font-mono ${severity}`}>
                                   {row.relErrPct >= 0 ? '+' : ''}{row.relErrPct.toFixed(1)}%
                                 </td>
@@ -1675,10 +1682,18 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                       <td className={`py-2 px-3 ${dark ? 'text-gray-300' : 'text-gray-700'}`}>
                         {displaySolutionLabel(sol.label)}
                       </td>
-                      <td className="text-center py-2 px-3 font-mono">{(Number(sol.limestone) || 0).toFixed(4)}</td>
-                      <td className="text-center py-2 px-3 font-mono">{(Number(sol.ironOre) || 0).toFixed(4)}</td>
-                      <td className="text-center py-2 px-3 font-mono">{(Number(sol.feSiO2) || 0).toFixed(4)}</td>
-                      <td className="text-center py-2 px-3 font-mono">{(Number(sol.caOSiO2) || 0).toFixed(4)}</td>
+                      <td className="text-center py-2 px-3">
+                        <BatchTableNumericReadonly darkMode={darkMode} value={Number(sol.limestone) || 0} className="text-sm" />
+                      </td>
+                      <td className="text-center py-2 px-3">
+                        <BatchTableNumericReadonly darkMode={darkMode} value={Number(sol.ironOre) || 0} className="text-sm" />
+                      </td>
+                      <td className="text-center py-2 px-3">
+                        <BatchTableNumericReadonly darkMode={darkMode} value={Number(sol.feSiO2) || 0} className="text-sm" />
+                      </td>
+                      <td className="text-center py-2 px-3">
+                        <BatchTableNumericReadonly darkMode={darkMode} value={Number(sol.caOSiO2) || 0} className="text-sm" />
+                      </td>
                       <td className={`text-center py-2 px-3 font-mono ${
                         nsga2Results[0] && (Number(sol.cost) || 0) < (Number(nsga2Results[0].cost) || 0)
                           ? 'text-green-500'
@@ -1813,7 +1828,9 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                         ${tag === 'excess' ? (dark ? 'bg-amber-900/30' : 'bg-amber-50/70') : ''}`}
                     >
                       <td className={`py-2 px-3 ${dark ? 'text-gray-300' : 'text-gray-700'}`}>{name}</td>
-                      <td className="text-center py-2 px-3 font-mono">{mass.toFixed(4)}</td>
+                      <td className="text-center py-2 px-3">
+                        <BatchTableNumericReadonly darkMode={darkMode} value={mass} className="text-sm" />
+                      </td>
                       <td className="text-center py-2 px-3 font-mono">
                         {phaseBasis.totalWeight > 0 ? ((mass / phaseBasis.totalWeight) * 100).toFixed(2) : '0.00'}%
                       </td>
@@ -1826,14 +1843,22 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                       <>
                         <tr className={`border-b ${dark ? 'border-gray-600/50' : 'border-gray-200'} ${dark ? 'bg-green-900/30' : 'bg-green-50/70'}`}>
                           <td className={`py-2 px-3 ${dark ? 'text-gray-300' : 'text-gray-700'}`}>{isEn ? 'Other in sulfur-bearing base feed' : '含硫基础原料中其他组分'}</td>
-                          <td className="text-center py-2 px-3 font-mono">{otherMass.toFixed(4)}</td>
+                          <td className="text-center py-2 px-3">
+                            <BatchTableNumericReadonly darkMode={darkMode} value={otherMass} className="text-sm" />
+                          </td>
                           <td className="text-center py-2 px-3 font-mono">
                             {phaseBasis.totalWeight > 0 ? ((otherMass / phaseBasis.totalWeight) * 100).toFixed(2) : '0.00'}%
                           </td>
                         </tr>
                         <tr className={`${dark ? 'bg-orange-900/40' : 'bg-orange-100/80'}`}>
                           <td className={`py-2 px-3 font-semibold ${dark ? 'text-gray-200' : 'text-gray-800'}`}>{isEn ? 'Total' : '总计'}</td>
-                          <td className="text-center py-2 px-3 font-mono font-semibold">{phaseBasis.totalWeight.toFixed(4)}</td>
+                          <td className="text-center py-2 px-3 font-semibold">
+                            <BatchTableNumericReadonly
+                              darkMode={darkMode}
+                              value={phaseBasis.totalWeight}
+                              className="text-sm font-semibold"
+                            />
+                          </td>
                           <td className="text-center py-2 px-3 font-mono font-semibold">100.00%</td>
                         </tr>
                       </>

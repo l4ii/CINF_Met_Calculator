@@ -1,5 +1,8 @@
 import type { CopperElementKey, CopperRatios, PhaseAssistRowSpec } from './copperWorkflowCalc.ts'
-import { calculateOrderedPhaseElementCompletion, normalizeCopperRatios } from './copperWorkflowCalc.ts'
+import {
+  calculateOrderedPhaseElementCompletion,
+  normalizeCopperRatios,
+} from './copperWorkflowCalc.ts'
 import {
   allocateConcentratePhases,
   shouldUseConcentrateNormativeAllocator,
@@ -11,9 +14,9 @@ import {
   type PhasePercentMap,
 } from './copperPhaseTableCalc.ts'
 import type { MaterialPhaseAssistRow } from './copperPhaseAssist.ts'
+import { materialPhaseRowDisplayLabel } from './copperPhaseAssist.ts'
 import { getBuiltinPhaseFractions } from './copperPhaseTableCalc.ts'
 import {
-  COPPER_PHASE_H2O_KEY,
   COPPER_PHASE_TABLE_COMPOUND_KEYS,
   type CopperPhaseTableCompoundKey,
 } from './copperElementDisplay.ts'
@@ -31,12 +34,12 @@ export type PhaseMaterialCalcResult = {
   message?: string
 }
 
-/** 物相区表头元素列（化合物口径，含 H₂O） */
+/** 物相区表头元素列（化合物口径） */
 export const COPPER_PHASE_TABLE_ELEMENT_KEYS = [...COPPER_PHASE_TABLE_COMPOUND_KEYS] as const
 
 export function toPhaseAssistSpecs(rows: MaterialPhaseAssistRow[]): PhaseAssistRowSpec[] {
   return rows
-    .filter((row) => row.kind !== 'draft' && row.kind !== 'water')
+    .filter((row) => row.kind !== 'draft')
     .map((row) => ({
       id: row.id,
       kind: row.kind as PhaseAssistRowSpec['kind'],
@@ -51,7 +54,7 @@ function mapNormativePhasesToRowContents(
 ): Record<string, number> {
   const contents: Record<string, number> = {}
   for (const row of rows) {
-    if (row.kind === 'water' || row.kind === 'draft') continue
+    if (row.kind === 'draft') continue
     if (row.kind === 'other' || row.id === 'Other') {
       contents[row.id] = phases.Other
       continue
@@ -134,7 +137,11 @@ export function buildBlendPhaseFromMaterialResults(
     .filter((item) => item.weight > 0)
     .map((item) => ({
       weight: item.weight,
-      phases: phaseContentsToInputPhaseMap(item.phaseContents, rowsByMaterial[item.materialId] ?? []),
+      phases: phaseContentsToInputPhaseMap(
+        item.phaseContents,
+        rowsByMaterial[item.materialId] ?? [],
+        item.unknowns
+      ),
     }))
   if (columns.length === 0) {
     return normalizePhasePercents({})
@@ -157,47 +164,11 @@ export function traceAssayNotInPhaseRows(
   }, 0)
 }
 
-/** H₂O 质量流量 t/h：水分 % 为总投料量中的占比 */
-export function waterPhaseMassTh(feedRateTh: number, moisturePercent: number): number {
-  const m = Math.max(0, Math.min(100, moisturePercent))
-  if (feedRateTh <= 0 || m <= 0) return 0
-  return feedRateTh * (m / 100)
-}
-
-/** 物相表 H₂O 行 w%：直接等于元素总表输入的水分 %（总投料占比） */
-export function waterPhasePercent(_feedRateTh: number, moisturePercent: number): number {
-  const m = Math.max(0, Math.min(100, moisturePercent))
-  return m > 0 ? m : 0
-}
-
-/** 干基物相求解后按 (1 - m/100) 缩放，用于湿基显示 */
-export function dryToWetScaleFactor(moisturePercent: number): number {
-  const m = Math.max(0, Math.min(100, moisturePercent))
-  return m >= 100 ? 0 : 1 - m / 100
-}
-
-function scaleElementRecord(
-  elements: Partial<Record<string, number>>,
-  scale: number
-): Partial<Record<string, number>> {
-  if (scale >= 1 - 1e-12) return elements
-  const out: Partial<Record<string, number>> = {}
-  for (const [key, value] of Object.entries(elements)) {
-    if (value && value > 0) out[key] = value * scale
-  }
-  return out
-}
-
 export function phaseRowElementContributions(
   row: MaterialPhaseAssistRow,
   phasePercent: number,
   feedRateTh = 0
 ): Partial<Record<string, number>> {
-  if (row.kind === 'water') {
-    const mass = waterPhaseMassTh(feedRateTh, phasePercent)
-    if (mass <= 0) return {}
-    return { [COPPER_PHASE_H2O_KEY]: mass }
-  }
   if (phasePercent <= 0) return {}
   const out: Partial<Record<string, number>> = {}
   const fractions =
@@ -226,51 +197,31 @@ export type PhasePivotRow = {
 export function buildPhasePivotRows(
   rows: MaterialPhaseAssistRow[],
   phaseContents: Record<string, number> | null,
-  feedRateTh = 0,
-  moisturePercent = 0
+  feedRateTh = 0
 ): PhasePivotRow[] {
-  const m = Math.max(0, Math.min(100, moisturePercent))
-  const scale = dryToWetScaleFactor(m)
-
   return rows
     .filter((row) => row.kind !== 'draft')
     .map((row) => {
-      if (row.kind === 'water') {
-        const wp = feedRateTh > 0 && m > 0 ? m : null
-        return {
-          rowId: row.id,
-          label: row.displayLabel || row.formula,
-          phasePercent: wp,
-          elements:
-            wp == null
-              ? {}
-              : phaseRowElementContributions(row, m, feedRateTh),
-        }
-      }
       const pct = phaseContents ? phaseContents[row.id] ?? null : null
-      const dryPercent = pct == null ? null : Math.max(0, pct)
-      if (dryPercent == null || dryPercent <= 0) {
+      const phasePercent = pct == null ? null : Math.max(0, pct)
+      if (phasePercent == null || phasePercent <= 0) {
         return {
           rowId: row.id,
-          label: row.displayLabel || row.formula,
+          label: materialPhaseRowDisplayLabel(row),
           phasePercent: null,
           elements: {},
         }
       }
-      const wetPercent = dryPercent * scale
-      const dryElements = phaseRowElementContributions(row, dryPercent, feedRateTh)
       return {
         rowId: row.id,
-        label: row.displayLabel || row.formula,
-        phasePercent: wetPercent,
-        elements: scaleElementRecord(dryElements, scale),
+        label: materialPhaseRowDisplayLabel(row),
+        phasePercent,
+        elements: phaseRowElementContributions(row, phasePercent, feedRateTh),
       }
     })
 }
 
-export const PHASE_WATER_ROW_ID = 'H2O'
-
-/** 物相 w% 与元素质量流量合计（含 H₂O，湿基下应约 100% / ≈ 投料量） */
+/** 物相 w% 与元素质量流量合计（干基下应约 100% / ≈ 投料量） */
 export function sumPhasePivotTotals(pivotRows: PhasePivotRow[]) {
   const elements = Object.fromEntries(
     COPPER_PHASE_TABLE_ELEMENT_KEYS.map((key) => [key, 0])
@@ -285,7 +236,7 @@ export function sumPhasePivotTotals(pivotRows: PhasePivotRow[]) {
   return { phaseTotal, elements }
 }
 
-/** 干基物相 w% 闭合（不含 H₂O，求解校验用） */
+/** 干基物相 w% 闭合（求解校验用） */
 export function phaseMassPercentClosure(
   ratios: CopperRatios,
   phaseTotal: number,

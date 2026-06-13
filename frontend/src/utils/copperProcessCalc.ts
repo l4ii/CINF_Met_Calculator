@@ -13,8 +13,16 @@ export interface CopperProductEntry {
 
 export interface CopperProductResult {
   products: Record<CopperProductKey, CopperProductEntry>
-  distribution: Partial<Record<CopperElementKey, Record<CopperProductKey, number>>>
+  distribution: CopperProductDistribution
   totalProductMass: number
+}
+
+export type CopperProductDistribution = Partial<Record<CopperElementKey, Partial<Record<CopperProductKey, number>>>>
+
+export interface CopperProductModel {
+  id: string
+  name: string
+  distribution: CopperProductDistribution
 }
 
 export interface CopperFuelMaterial extends CopperMaterialColumn {
@@ -70,8 +78,9 @@ export const COPPER_PRODUCT_FORMULAS: Record<CopperProductKey, string> = {
 }
 
 const PRODUCT_KEYS: CopperProductKey[] = ['matte', 'slag', 'gas', 'dust', 'loss']
+export const COPPER_PRODUCT_KEYS = [...PRODUCT_KEYS] as CopperProductKey[]
 
-export const DEFAULT_COPPER_PRODUCT_DISTRIBUTION: Partial<Record<CopperElementKey, Record<CopperProductKey, number>>> = {
+export const DEFAULT_COPPER_PRODUCT_DISTRIBUTION: CopperProductDistribution = {
   'Ag(银)': { matte: 0.9, slag: 0.03, gas: 0, dust: 0.02, loss: 0.05 },
   'Al₂O₃(三氧化二铝)': { matte: 0, slag: 0.96, gas: 0, dust: 0, loss: 0.04 },
   'As(砷)': { matte: 0.08, slag: 0.12, gas: 0.55, dust: 0.17, loss: 0.08 },
@@ -90,6 +99,12 @@ export const DEFAULT_COPPER_PRODUCT_DISTRIBUTION: Partial<Record<CopperElementKe
   'Zn(锌)': { matte: 0.03, slag: 0.2, gas: 0.5, dust: 0.2, loss: 0.07 },
 }
 
+export const DEFAULT_COPPER_PRODUCT_MODEL: CopperProductModel = {
+  id: 'default-copper-product-distribution',
+  name: '默认静态产物分配模型',
+  distribution: DEFAULT_COPPER_PRODUCT_DISTRIBUTION,
+}
+
 export const DEFAULT_COPPER_FUEL: CopperFuelMaterial = {
   id: 'fuel-coal',
   name: '热平衡煤',
@@ -100,11 +115,15 @@ export const DEFAULT_COPPER_FUEL: CopperFuelMaterial = {
   moisture: 8,
   ash: 12,
   ratios: {
-    'C (碳)': 68,
-    'O(氧)': 16,
-    'N(氮)': 2,
-    'S (硫)': 0.8,
-    'Other(其他)': 13.2,
+    'FeO(氧化亚铁)': 0.94,
+    'S (硫)': 0.86,
+    'SiO₂(二氧化硅)': 4,
+    'CaO(氧化钙)': 0.59,
+    'MgO(氧化镁)': 0.74,
+    'C (碳)': 60.73,
+    'H(氢)': 1.45,
+    'O(氧)': 2.8,
+    'Other(其他)': 27.89,
   },
   unitPrice: 900,
 }
@@ -136,10 +155,47 @@ function productMassFactor(element: CopperElementKey, product: CopperProductKey)
   return 1
 }
 
-export function calculateCopperProducts(feed: WeightedComposition): CopperProductResult {
+function normalizeDistributionRow(row: Partial<Record<CopperProductKey, number>> | undefined) {
+  const values = Object.fromEntries(
+    PRODUCT_KEYS.map((key) => {
+      const value = Number(row?.[key] ?? 0)
+      return [key, Number.isFinite(value) ? Math.max(0, value) : 0]
+    })
+  ) as Record<CopperProductKey, number>
+  const total = PRODUCT_KEYS.reduce((sum, key) => sum + values[key], 0)
+  if (total <= 0) return values
+  for (const key of PRODUCT_KEYS) {
+    values[key] = values[key] / total
+  }
+  return values
+}
+
+export function normalizeCopperProductModel(model: Partial<CopperProductModel> | undefined = DEFAULT_COPPER_PRODUCT_MODEL): CopperProductModel {
+  const source = model?.distribution ?? DEFAULT_COPPER_PRODUCT_DISTRIBUTION
+  const elements = new Set<CopperElementKey>([
+    ...(Object.keys(DEFAULT_COPPER_PRODUCT_DISTRIBUTION) as CopperElementKey[]),
+    ...(Object.keys(source) as CopperElementKey[]),
+  ])
+  const distribution: CopperProductDistribution = {}
+  for (const element of elements) {
+    const merged = {
+      ...(DEFAULT_COPPER_PRODUCT_DISTRIBUTION[element] ?? {}),
+      ...(source[element] ?? {}),
+    }
+    distribution[element] = normalizeDistributionRow(merged)
+  }
+  return {
+    id: model?.id ?? DEFAULT_COPPER_PRODUCT_MODEL.id,
+    name: model?.name ?? DEFAULT_COPPER_PRODUCT_MODEL.name,
+    distribution,
+  }
+}
+
+export function calculateCopperProducts(feed: WeightedComposition, model?: Partial<CopperProductModel>): CopperProductResult {
+  const productModel = normalizeCopperProductModel(model)
   const products = Object.fromEntries(PRODUCT_KEYS.map((key) => [key, emptyProductEntry(key)])) as Record<CopperProductKey, CopperProductEntry>
   for (const [element, elementWeight] of Object.entries(feed.elementWeights) as [CopperElementKey, number][]) {
-    const distribution = DEFAULT_COPPER_PRODUCT_DISTRIBUTION[element]
+    const distribution = productModel.distribution[element]
     if (!distribution || elementWeight <= 0) continue
     for (const key of PRODUCT_KEYS) {
       const allocated = elementWeight * (distribution[key] ?? 0)
@@ -158,7 +214,7 @@ export function calculateCopperProducts(feed: WeightedComposition): CopperProduc
 
   return {
     products,
-    distribution: DEFAULT_COPPER_PRODUCT_DISTRIBUTION,
+    distribution: productModel.distribution,
     totalProductMass: PRODUCT_KEYS.reduce((sum, key) => sum + products[key].mass, 0),
   }
 }

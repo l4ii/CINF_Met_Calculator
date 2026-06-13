@@ -10,6 +10,7 @@ import {
 } from '../../utils/leadFlashBlendOptimize'
 import { useCalc } from '../../context/CalcContext'
 import { btnPrimary, btnSecondary, cardBase, hintText, inputBase, inputSm, labelBase, resultBox, sectionTitle } from '../../theme/uiTheme'
+import { BatchTableNumericReadonly } from './BatchTableNumericCell'
 
 interface LeadFlashBlendOptimizerProps {
   darkMode: boolean
@@ -550,7 +551,9 @@ export default function LeadFlashBlendOptimizer({ darkMode, language = 'zh' }: L
                 {result.blend.map((item) => (
                   <tr key={item.id} className={`border-t ${dark ? 'border-gray-600' : 'border-gray-200'}`}>
                     <td className="py-2 pr-3 font-medium">{item.name}</td>
-                    <td className="py-2 px-3 text-right font-mono">{item.weight.toFixed(4)}</td>
+                    <td className="py-2 px-3 text-right">
+                      <BatchTableNumericReadonly darkMode={dark} value={item.weight} className="text-right text-sm" />
+                    </td>
                     <td className="py-2 px-3 text-right font-mono">{item.sharePct.toFixed(2)}</td>
                     <td className="py-2 px-3 text-right font-mono">{item.unitPrice.toFixed(0)}</td>
                     <td className="py-2 px-3 text-right font-mono">{item.cost.toFixed(0)}</td>

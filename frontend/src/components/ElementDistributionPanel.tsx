@@ -2,6 +2,7 @@
  * 元素分布表：可嵌入原料页，或由悬浮按钮弹出的浮层
  */
 import { useCalc } from '../context/CalcContext'
+import { BatchTableNumericReadonly } from './modules/BatchTableNumericCell'
 
 interface ElementDistributionPanelProps {
   darkMode: boolean
@@ -77,11 +78,19 @@ export default function ElementDistributionPanel({
             {elementTableRows.map((row, i) => (
               <tr key={i} className={`border-b ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
                 <td className="py-2 px-2">{row.name}</td>
-                <td className="text-right py-2 px-2 font-mono">{row.weight.toFixed(2)}</td>
-                <td className="text-right py-2 px-2 font-mono">{row.ratioPct.toFixed(2)}</td>
+                <td className="text-right py-2 px-2">
+                  <BatchTableNumericReadonly darkMode={darkMode} value={row.weight} className="text-right text-sm" />
+                </td>
+                <td className="text-right py-2 px-2">
+                  <BatchTableNumericReadonly darkMode={darkMode} value={row.ratioPct} className="text-right text-sm" />
+                </td>
                 {allElements.map((e) => (
-                  <td key={e} className="text-right py-2 px-2 font-mono">
-                    {(row.elements[e] ?? 0).toFixed(2)}
+                  <td key={e} className="text-right py-2 px-2">
+                    <BatchTableNumericReadonly
+                      darkMode={darkMode}
+                      value={row.elements[e] ?? 0}
+                      className="text-right text-sm"
+                    />
                   </td>
                 ))}
               </tr>
@@ -91,7 +100,8 @@ export default function ElementDistributionPanel({
       </div>
       {mixResult && (
         <div className={`mt-3 text-xs ${labelCls}`}>
-          固态混料总质量：<span className="font-mono font-semibold">{mixResult.totalWeight.toFixed(4)} t/h</span>
+          固态混料总质量：
+          <BatchTableNumericReadonly darkMode={darkMode} value={mixResult.totalWeight} className="inline font-semibold" /> t/h
         </div>
       )}
     </div>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 export type CopperMaterialSelectOption = { id: string; label: string }
@@ -26,12 +26,21 @@ export function CopperMaterialSelect({
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
   const [menuStyle, setMenuStyle] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(
     null
   )
 
   const selected = options.find((item) => item.id === value)
   const displayLabel = selected?.label ?? placeholder
+  const normalizedQuery = query.trim().toLowerCase()
+  const filteredOptions = useMemo(
+    () =>
+      normalizedQuery
+        ? options.filter((item) => item.label.toLowerCase().includes(normalizedQuery))
+        : options,
+    [normalizedQuery, options]
+  )
 
   const updateMenuPosition = useCallback(() => {
     const trigger = triggerRef.current
@@ -85,9 +94,13 @@ export function CopperMaterialSelect({
     }
   }, [open, listId])
 
+  useEffect(() => {
+    if (!open) setQuery('')
+  }, [open])
+
   const menuPanelClass = darkMode
-    ? 'rounded border border-gray-600 bg-gray-800 py-1 shadow-lg'
-    : 'rounded border border-gray-200 bg-white py-1 shadow-lg'
+    ? 'rounded border border-gray-600 bg-gray-800 shadow-lg'
+    : 'rounded border border-gray-200 bg-white shadow-lg'
 
   const itemClass = (active: boolean, selectedItem: boolean) => {
     const base = 'block w-full px-2 py-1.5 text-center text-[13px] leading-normal'
@@ -103,9 +116,8 @@ export function CopperMaterialSelect({
   const menu =
     open && menuStyle
       ? createPortal(
-          <ul
+          <div
             id={listId}
-            role="listbox"
             className={menuPanelClass}
             style={{
               position: 'fixed',
@@ -113,42 +125,67 @@ export function CopperMaterialSelect({
               left: menuStyle.left,
               width: menuStyle.width,
               maxHeight: menuStyle.maxHeight,
-              overflowY: 'auto',
               zIndex: 10000,
             }}
           >
-            <li role="presentation">
-              <button
-                type="button"
-                role="option"
-                aria-selected={!value}
-                className={itemClass(false, !value)}
-                onClick={() => {
-                  onChange('')
-                  setOpen(false)
+            <div className={`border-b p-1 ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
+              <input
+                className={`h-8 w-full rounded border px-2 text-center text-[13px] outline-none ${
+                  darkMode
+                    ? 'border-gray-600 bg-gray-900 text-gray-100 placeholder:text-gray-500 focus:border-blue-400'
+                    : 'border-gray-300 bg-white text-gray-900 placeholder:text-gray-400 focus:border-blue-500'
+                }`}
+                value={query}
+                placeholder="搜索原料"
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setOpen(false)
                 }}
-              >
-                {placeholder}
-              </button>
-            </li>
-            {options.map((item) => (
-              <li key={item.id} role="presentation">
+              />
+            </div>
+            <ul
+              role="listbox"
+              style={{ maxHeight: Math.max(72, menuStyle.maxHeight - 42), overflowY: 'auto' }}
+            >
+              <li role="presentation">
                 <button
                   type="button"
                   role="option"
-                  aria-selected={item.id === value}
-                  className={itemClass(false, item.id === value)}
-                  title={item.label}
+                  aria-selected={!value}
+                  className={itemClass(false, !value)}
                   onClick={() => {
-                    onChange(item.id)
+                    onChange('')
                     setOpen(false)
                   }}
                 >
-                  {item.label}
+                  {placeholder}
                 </button>
               </li>
-            ))}
-          </ul>,
+              {filteredOptions.length === 0 ? (
+                <li className={`px-2 py-3 text-center text-[13px] ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                  无匹配原料
+                </li>
+              ) : (
+                filteredOptions.map((item) => (
+                  <li key={item.id} role="presentation">
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={item.id === value}
+                      className={itemClass(false, item.id === value)}
+                      title={item.label}
+                      onClick={() => {
+                        onChange(item.id)
+                        setOpen(false)
+                      }}
+                    >
+                      {item.label}
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>,
           document.body
         )
       : null

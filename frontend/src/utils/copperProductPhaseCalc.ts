@@ -52,14 +52,71 @@ function builtinPhaseSpecs(keys: string[]) {
     }))
 }
 
-function elementPoolFromWeights(elementWeights: Partial<Record<CopperElementKey, number>>) {
+const POOL_EXCLUDED_FROM_LINEAR_SOLVE = new Set<CopperElementKey>([
+  'O(氧)',
+  'C (碳)',
+  'N(氮)',
+  'Other(其他)',
+])
+
+export function elementPoolForPhaseSolve(
+  elementWeights: Partial<Record<CopperElementKey, number>>
+): Partial<Record<CopperElementKey, number>> {
   const pool: Partial<Record<CopperElementKey, number>> = {}
   for (const [element, weight] of Object.entries(elementWeights) as [CopperElementKey, number][]) {
     if (!Number.isFinite(weight) || weight <= 0) continue
-    if (element === 'O(氧)' || element === 'C (碳)' || element === 'N(氮)' || element === 'Other(其他)') continue
+    if (POOL_EXCLUDED_FROM_LINEAR_SOLVE.has(element)) continue
     pool[element] = weight
   }
   return pool
+}
+
+function elementPoolFromWeights(elementWeights: Partial<Record<CopperElementKey, number>>) {
+  return elementPoolForPhaseSolve(elementWeights)
+}
+
+export function filterActiveProductPhaseKeys(
+  phaseKeys: string[],
+  pool: Partial<Record<CopperElementKey, number>>
+): string[] {
+  return phaseKeys.filter((key) => {
+    if (key === 'Other') return false
+    const fractions = COPPER_BUILTIN_PHASE_FRACTIONS[key] ?? {}
+    return (Object.entries(fractions) as [CopperElementKey, number][]).some(
+      ([element, fraction]) =>
+        fraction > 0 && !POOL_EXCLUDED_FROM_LINEAR_SOLVE.has(element) && (pool[element] ?? 0) > 0
+    )
+  })
+}
+
+/** 烟气物相化学计量（S→SO₂、C→CO₂ 等） */
+export function computeFlueGasPhaseMasses(params: {
+  sulfurMass: number
+  carbonMass: number
+  oxygenMass: number
+  nitrogenMass: number
+  hydrogenMass?: number
+  arsenicMass?: number
+  mercuryMass?: number
+  targetMass?: number
+  retainedOxygenMass?: number
+}): Record<string, number> {
+  const phases: Record<string, number> = {
+    SO2: oxideMassFromElement(params.sulfurMass, 'S', { S: 1, O: 2 }),
+    SO3: 0,
+    CO2: oxideMassFromElement(params.carbonMass, 'C', { C: 1, O: 2 }),
+    O2: Math.max(0, params.retainedOxygenMass ?? params.oxygenMass * 0.15),
+    N2: Math.max(0, params.nitrogenMass),
+    H2O: oxideMassFromElement(params.hydrogenMass ?? 0, 'H', { H: 2, O: 1 }, 2),
+    As2O3: oxideMassFromElement(params.arsenicMass ?? 0, 'As', { As: 2, O: 3 }, 2),
+    Hg: Math.max(0, params.mercuryMass ?? 0),
+  }
+  const known = Object.values(phases).reduce((sum, value) => sum + value, 0)
+  const target = Math.max(params.targetMass ?? 0, known)
+  if (known <= 0) return phases
+  if (Math.abs(target - known) < 1e-9) return phases
+  const scale = target / known
+  return Object.fromEntries(Object.entries(phases).map(([key, value]) => [key, value * scale]))
 }
 
 function solveProductPhaseMasses(

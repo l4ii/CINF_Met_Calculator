@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && npx electron ..\"",
+    "dev": "node ../scripts/dev-clean-ports.js && concurrently \"vite\" \"wait-on http://localhost:5173 && npx electron ..\"",
     "build": "vite build",
     "dist:builder": "npx electron-builder --config ../electron-builder.yml"
   },

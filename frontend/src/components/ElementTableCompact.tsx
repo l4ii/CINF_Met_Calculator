@@ -5,6 +5,7 @@
  */
 import { useState } from 'react'
 import { useCalc } from '../context/CalcContext'
+import { BatchTableNumericReadonly } from './modules/BatchTableNumericCell'
 
 interface ElementTableCompactProps {
   darkMode: boolean
@@ -136,7 +137,6 @@ export default function ElementTableCompact({ darkMode, language = 'zh', variant
               const r = row as typeof elementTableRows[0] & { isDisplayOnly?: boolean }
               const isMixed = r.rowType === 'mixed' && r.detailRows
               const isSolvent = r.rowType === 'solvent' && r.detailRows
-              const isDisplayOnly = r.isDisplayOnly
               return (
               <tr
                 key={i}
@@ -171,11 +171,19 @@ export default function ElementTableCompact({ darkMode, language = 'zh', variant
                     displayName(row.name)
                   )}
                 </td>
-                <td className="text-right py-1.5 px-1 font-mono">{row.weight.toFixed(4)}</td>
-                <td className="text-right py-1.5 px-1 font-mono">{row.ratioPct.toFixed(4)}</td>
+                <td className="text-right py-1.5 px-1">
+                  <BatchTableNumericReadonly darkMode={darkMode} value={row.weight} className="text-right text-xs" />
+                </td>
+                <td className="text-right py-1.5 px-1">
+                  <BatchTableNumericReadonly darkMode={darkMode} value={row.ratioPct} className="text-right text-xs" />
+                </td>
                 {allCols.map((c) => (
-                  <td key={c.key} className="text-right py-1.5 px-0.5 font-mono">
-                    {(row.elements?.[c.key] ?? 0).toFixed(4)}
+                  <td key={c.key} className="text-right py-1.5 px-0.5">
+                    <BatchTableNumericReadonly
+                      darkMode={darkMode}
+                      value={row.elements?.[c.key] ?? 0}
+                      className="text-right text-xs"
+                    />
                   </td>
                 ))}
               </tr>
@@ -189,7 +197,8 @@ export default function ElementTableCompact({ darkMode, language = 'zh', variant
           const feedWeight = totalRow?.weight ?? mixResult?.totalWeight ?? 0
           return feedWeight > 0 ? (
             <span className={labelCls}>
-              {isEn ? 'Total feed mass:' : '投料量总质量:'} <span className="font-mono font-semibold">{feedWeight.toFixed(4)} t/h</span>
+              {isEn ? 'Total feed mass:' : '投料量总质量:'}{' '}
+              <BatchTableNumericReadonly darkMode={darkMode} value={feedWeight} className="inline font-semibold" /> t/h
             </span>
           ) : null
         })()}

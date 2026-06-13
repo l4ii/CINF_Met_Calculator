@@ -3,6 +3,7 @@
  * 采用与入炉原料元素总表相同的设计，支持悬浮显示
  */
 import type { ProductResult } from '../utils/productCalc'
+import { BatchTableNumericReadonly } from './modules/BatchTableNumericCell'
 
 interface ProductElementTableCompactProps {
   darkMode: boolean
@@ -120,11 +121,19 @@ export default function ProductElementTableCompact({
                 <td className={`py-1.5 px-2 font-medium truncate ${firstCellCls} ${darkMode ? 'text-gray-200' : 'text-gray-800'}`} title={row.name}>
                   {row.name}
                 </td>
-                <td className="text-right py-1.5 px-1 font-mono">{row.weight.toFixed(4)}</td>
-                <td className="text-right py-1.5 px-1 font-mono">{row.ratioPct.toFixed(2)}</td>
+                <td className="text-right py-1.5 px-1">
+                  <BatchTableNumericReadonly darkMode={darkMode} value={row.weight} className="text-right text-xs" />
+                </td>
+                <td className="text-right py-1.5 px-1">
+                  <BatchTableNumericReadonly darkMode={darkMode} value={row.ratioPct} className="text-right text-xs" />
+                </td>
                 {allCols.map((c) => (
-                  <td key={c.key} className="text-right py-1.5 px-0.5 font-mono">
-                    {(row.elements?.[c.key] ?? 0).toFixed(4)}
+                  <td key={c.key} className="text-right py-1.5 px-0.5">
+                    <BatchTableNumericReadonly
+                      darkMode={darkMode}
+                      value={row.elements?.[c.key] ?? 0}
+                      className="text-right text-xs"
+                    />
                   </td>
                 ))}
               </tr>
@@ -134,7 +143,8 @@ export default function ProductElementTableCompact({
       </div>
       <div className={`mt-3 pt-3 border-t ${borderCls} flex flex-wrap gap-4 text-sm`}>
         <span className={labelCls}>
-          {isEn ? 'Total product mass' : '产物总质量'}: <span className="font-mono font-semibold">{totalMass.toFixed(4)} t/h</span>
+          {isEn ? 'Total product mass' : '产物总质量'}:{' '}
+          <BatchTableNumericReadonly darkMode={darkMode} value={totalMass} className="inline font-semibold" /> t/h
         </span>
       </div>
     </div>

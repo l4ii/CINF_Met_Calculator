@@ -5,7 +5,7 @@ export function CopperBatchTableColGroup({ widths }: { widths: number[] }) {
   return (
     <colgroup>
       {widths.map((width, index) => (
-        <col key={index} style={{ width, minWidth: width }} />
+        <col key={index} style={{ width }} />
       ))}
     </colgroup>
   )

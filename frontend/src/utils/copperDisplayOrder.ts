@@ -50,6 +50,8 @@ export const COPPER_PLACEHOLDER_ELEMENT_KEYS = [
   'As(砷)',
   'Ag(银)',
   'Au(金)',
+  'H(氢)',
+  'O(氧)',
 ] as const
 
 export type CopperElementDisplayKey = (typeof COPPER_ELEMENT_DISPLAY_ORDER)[number]
@@ -68,7 +70,6 @@ export const COPPER_PLACEHOLDER_PHASE_ROW_KEYS = [
   'As2O3',
   'O2',
   'N2',
-  'H2O',
 ] as const
 
 /** 内置投入物相基础清单；实际显示顺序由下方组成规则生成 */
@@ -195,15 +196,14 @@ export function sortCopperPhaseKeys(
 export function buildUnifiedCopperPhaseRowKeys(extraKeys: Iterable<string> = []): string[] {
   const merged = new Set<string>([...COPPER_UNIFIED_PHASE_ROW_ORDER, ...extraKeys])
   merged.delete('Other')
-  merged.delete('H2O')
   const sorted = sortCopperPhaseKeys(merged)
-  sorted.push('H2O', 'Other')
+  sorted.push('Other')
   return sorted
 }
 
 export function buildInputPhaseRowKeys(): string[] {
   const keys = [...COPPER_BUILTIN_PHASE_DISPLAY_ORDER]
-  return [...sortCopperPhaseKeys(keys), 'H2O', 'Other']
+  return [...sortCopperPhaseKeys(keys), 'Other']
 }
 
 export function phasePrimaryElementKey(phaseKey: string): CopperElementDisplayKey {
@@ -306,7 +306,7 @@ function formulaComplexityScore(phaseKey: string) {
 
 export type MaterialPhaseSortRow = {
   id: string
-  kind: 'builtin' | 'custom' | 'draft' | 'water' | 'other'
+  kind: 'builtin' | 'custom' | 'draft' | 'other'
   builtinKey?: string
   formula?: string
   fractions?: Partial<Record<CopperElementDisplayKey, number>>
@@ -315,7 +315,6 @@ export type MaterialPhaseSortRow = {
 export function materialPhaseRowSortIndex(row: MaterialPhaseSortRow): number {
   if (row.kind === 'draft') return Number.MAX_SAFE_INTEGER
   if (row.kind === 'other' || row.id === 'Other' || row.formula === 'Other') return Number.MAX_SAFE_INTEGER - 1
-  if (row.kind === 'water' || row.id === 'H2O' || row.formula === 'H2O') return Number.MAX_SAFE_INTEGER - 2
   if (row.kind === 'builtin' && row.builtinKey) {
     return copperBuiltinPhaseSortIndex(row.builtinKey)
   }

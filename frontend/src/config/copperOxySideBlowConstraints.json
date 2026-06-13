@@ -1,0 +1,489 @@
+{
+  "version": 1,
+  "method": "cu-oxy-side-blast",
+  "_variableNotes": {
+    "GMC": "白铜锍铜品位，百分数 0–100。典型 70–78。与 #11/#12 经验公式 GMC/100 配套。"
+  },
+  "variables": {
+    "GMC": 75
+  },
+  "products": {
+    "smeltingSlag": {
+      "name": "熔炼渣",
+      "phases": [
+        "Cu2S",
+        "Cu2O",
+        "FeS",
+        "FeO",
+        "Fe3O4",
+        "As2O3",
+        "PbO",
+        "ZnO",
+        "NiO",
+        "SeO2",
+        "Bi2O3",
+        "Sb2O3",
+        "Fe2SiO4",
+        "CaSiO3",
+        "MgSiO3",
+        "Mullite",
+        "SnO",
+        "SiO2",
+        "Cd",
+        "Au",
+        "Ag",
+        "Te",
+        "Other"
+      ]
+    },
+    "matte": {
+      "name": "白铜锍",
+      "phases": [
+        "Cu2S",
+        "FeS",
+        "Fe3O4",
+        "Ni",
+        "Pb",
+        "Zn",
+        "As2S3",
+        "Se",
+        "Bi",
+        "Sb",
+        "Cd",
+        "Sn",
+        "Au",
+        "Ag",
+        "Te",
+        "Other"
+      ]
+    },
+    "flueGas": {
+      "name": "熔炼出炉烟气",
+      "phases": [
+        "SO2",
+        "SO3",
+        "CO2",
+        "O2",
+        "N2",
+        "H2O",
+        "As2O3",
+        "Hg"
+      ]
+    },
+    "dust": {
+      "name": "烟气含尘",
+      "phases": [
+        "Cu2S",
+        "Cu2O",
+        "FeS",
+        "FeO",
+        "Fe3O4",
+        "PbO",
+        "PbS",
+        "ZnO",
+        "ZnS",
+        "SeO2",
+        "NiO",
+        "CaO",
+        "MgO",
+        "Al2O3",
+        "SiO2",
+        "As2O3",
+        "Bi2O3",
+        "Sb2O3",
+        "Cd",
+        "Au",
+        "Ag",
+        "Other"
+      ]
+    },
+    "fugitive": {
+      "name": "无组织排放",
+      "phases": [
+        "SO2"
+      ]
+    },
+    "loss": {
+      "name": "损失",
+      "phases": [
+        "Cu",
+        "S",
+        "Other"
+      ]
+    }
+  },
+  "elementDistributions": [
+    {
+      "element": "Cu(铜)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "W%",
+          "value": 2
+        },
+        {
+          "product": "matte",
+          "type": "W%",
+          "value": "GMC"
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": 1
+        },
+        {
+          "product": "loss",
+          "type": "D%",
+          "value": 0.2504
+        }
+      ]
+    },
+    {
+      "element": "S (硫)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "W%",
+          "value": 0.6
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": 0.2
+        },
+        {
+          "product": "fugitive",
+          "type": "D%",
+          "value": 0
+        },
+        {
+          "product": "loss",
+          "type": "D%",
+          "value": 0.03
+        }
+      ]
+    },
+    {
+      "element": "Fe(铁)",
+      "rules": [
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": 0.55
+        }
+      ]
+    },
+    {
+      "element": "As(砷)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 15
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 30
+        }
+      ]
+    },
+    {
+      "element": "Pb(铅)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 38
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 30
+        }
+      ]
+    },
+    {
+      "element": "Zn(锌)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 65
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 12
+        }
+      ]
+    },
+    {
+      "element": "Ni(镍)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 18
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 80
+        }
+      ]
+    },
+    {
+      "element": "Se(硒)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 10
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 75
+        }
+      ]
+    },
+    {
+      "element": "Bi(铋)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 10
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 9
+        }
+      ]
+    },
+    {
+      "element": "Sb(锑)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 30
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 20
+        }
+      ]
+    },
+    {
+      "element": "S(硅)",
+      "rules": [
+        {
+          "product": "flueGas",
+          "type": "D%",
+          "value": 0.2
+        }
+      ]
+    },
+    {
+      "element": "Ca(钙)",
+      "rules": [
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": 0.1
+        }
+      ]
+    },
+    {
+      "element": "Mg(镁)",
+      "rules": [
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": 0.1
+        }
+      ]
+    },
+    {
+      "element": "Al(铝)",
+      "rules": [
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": 0.1
+        }
+      ]
+    },
+    {
+      "element": "Sn(锡)",
+      "rules": [
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 20
+        }
+      ]
+    },
+    {
+      "element": "Cd(镉)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 50
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 15
+        }
+      ]
+    },
+    {
+      "element": "Au(金)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 2.4
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 97.5
+        }
+      ]
+    },
+    {
+      "element": "Ag(银)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 3.9
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 96
+        }
+      ]
+    },
+    {
+      "element": "Te(碲)",
+      "rules": [
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 90
+        }
+      ]
+    },
+    {
+      "element": "Other(其他)",
+      "rules": [
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": 0.5
+        }
+      ]
+    }
+  ],
+  "customConstraints": [
+    {
+      "expr": "Input.煤 / Input.混合铜精矿",
+      "target": 0.13,
+      "note": "【解读】燃料煤干重 ÷ 混合铜精矿干重。【业务】煤/精矿比，典型约 0.13。【执行】硬约束：同次求解将燃料煤干重设为目标煤/精矿比，并同步重构入炉混料元素量。"
+    },
+    {
+      "expr": "Input.加料口漏风 / 5.73",
+      "target": 1,
+      "note": "【解读】加料口漏风流量 ÷ 5.73。【业务】将加料口漏风固定为 5.73 t/h（Nm³/h 折算质量）。【执行】强制矫正：每轮将加料口漏风列重量设为 5.73。"
+    },
+    {
+      "expr": "(Input.二次风.O2 / O) / ((Input.混合铜精矿.CuFeS2.S / S / 4) + (Input.混合铜精矿.FeS2.S / S / 2) * 0.7 + Input.煤.C / C * 0.7)",
+      "target": 1.02,
+      "note": "【解读】(二次风 O₂ 摩尔) ÷ (精矿硫化物理论耗氧摩尔×0.7 + 煤碳理论耗氧摩尔×0.7)。【业务】供氧系数 ≈1.02，表示约 2% 过量氧。【执行】硬约束：按 S、C 摩尔量重算二次风。"
+    },
+    {
+      "expr": "((Input.空气.O2 + Input.氧气.O2) / O * 22.4) / (Input.空气 + Input.氧气)",
+      "target": 0.85,
+      "note": "【解读】(总 O₂ 摩尔×22.4) ÷ 总气流质量。【业务】富氧/气流配比相关指标，目标 0.85。【执行】硬约束：保持空气+氧气总量并调整二者比例；总量为 0 时使用极小正数避免 0/0。"
+    },
+    {
+      "expr": "Output.熔炼出炉烟气.O2 / (Input.空气.O2 + Input.氧气.O2 + Input.二次风.O2 + Input.加料口漏风.O2)",
+      "target": 0.05,
+      "note": "【解读】出炉烟气 O₂ 质量 ÷ 入炉总 O₂ 质量。【业务】烟气残氧率约 5%（原 0.85 为笔误）。【执行】强制矫正：按入炉 O₂×0.05 设定烟气 O₂ 相质量。"
+    },
+    {
+      "expr": "OutputE.熔炼渣.Fe / (OutputE.熔炼渣.Si / Si * SiO2)",
+      "target": 2,
+      "note": "【解读】熔炼渣 Fe 单质质量 ÷ (Si 单质质量按 Si→SiO₂ 折算的 SiO₂ 当量质量)。等价于 Fe_mass/SiO₂_mass。【业务】炉渣 Fe/SiO₂ 质量比 = 2（硅酸度相关）。【执行】强制矫正：调用 ensureSlagFeOSiO2，原子质量从内置库读取。"
+    },
+    {
+      "expr": "Output.熔炼渣.Cu2S / Output.熔炼渣.Cu2O",
+      "target": 2,
+      "note": "【解读】熔炼渣 Cu₂S 质量 ÷ Cu₂O 质量。【业务】渣中铜硫化物/氧化物质量比 = 2。【执行】强制矫正 Cu₂S/Cu₂O 物相比。"
+    },
+    {
+      "expr": "Output.熔炼渣.Fe3O4 / Output.熔炼渣",
+      "target": 0.15,
+      "note": "【解读】熔炼渣 Fe₃O₄ 质量 ÷ 熔炼渣总质量。【业务】磁性铁占渣量 15%。【执行】强制矫正 Fe₃O₄ 质量分数。"
+    },
+    {
+      "expr": "Output.熔炼渣.Fe2SiO4 / Output.熔炼渣.FeO",
+      "target": 19.325,
+      "note": "【解读】熔炼渣 Fe2SiO4 质量 ÷ FeO 质量。【业务】硅酸铁/氧化亚铁质量比 = 19.325。【执行】强制矫正 Fe2SiO4/FeO 物相比。"
+    },
+    {
+      "expr": "Output.烟气含尘.Cu2S / Output.烟气含尘.Cu2O",
+      "target": 4,
+      "note": "【解读】烟尘 Cu₂S ÷ Cu₂O 质量比。【业务】烟尘中铜以硫化态为主，比值为 4。【执行】强制矫正烟尘 Cu₂S/Cu₂O。"
+    },
+    {
+      "expr": "Output.烟气含尘.Fe3O4.Fe / Output.烟气含尘.Fe",
+      "target": 0.12,
+      "note": "【解读】烟尘 Fe₃O₄ 中 Fe 质量 ÷ 烟尘总 Fe 质量。【业务】烟尘铁中约 12% 以磁性铁形式存在。【执行】强制矫正 Fe₃O₄ 相质量。"
+    },
+    {
+      "expr": "OutputE.白铜锍.S / ((-0.125 * GMC / 100 + 0.292) * Output.白铜锍)",
+      "target": 1,
+      "note": "【解读】白铜锍 S 质量 ÷ (经验式 S%×锍总质量)。S% = -0.125×GMC/100+0.292，GMC 为铜品位 %。【业务】锍硫含量随 GMC 变化的经验关联。【执行】强制矫正白铜锍物相（applyMatteGmcPhases）。"
+    },
+    {
+      "expr": "OutputE.白铜锍.Fe / ((-0.825 * GMC / 100 + 0.633) * Output.白铜锍)",
+      "target": 1,
+      "note": "【解读】白铜锍 Fe 质量 ÷ (经验式 Fe%×锍总质量)。Fe% = -0.825×GMC/100+0.633。【业务】锍铁含量随 GMC 变化。【执行】强制矫正白铜锍物相（applyMatteGmcPhases）。"
+    },
+    {
+      "expr": "Output.熔炼出炉烟气.As2O3.As / (Output.熔炼出炉烟气.As2O3.As + Output.烟气含尘.As2O3.As)",
+      "target": 0.6,
+      "note": "【解读】烟气 As₂O₃ 中 As ÷ (烟气+烟尘) As 总量。【业务】砷 60% 入烟气、40% 入烟尘。【执行】强制分割 As 于烟气/烟尘 As₂O₃ 相。"
+    },
+    {
+      "expr": "Output.烟气含尘 / Input.混合铜精矿",
+      "target": 0.02,
+      "note": "【解读】烟尘总质量 ÷ 入炉精矿质量。【业务】烟尘率为精矿的 2%。【执行】强制将烟尘总量缩放至 2%×精矿。"
+    },
+    {
+      "expr": "Output.烟气含尘.PbO.Pb / Output.烟气含尘.PbS.Pb",
+      "target": 5,
+      "note": "【解读】烟尘 PbO 中 Pb ÷ PbS 中 Pb。【业务】烟尘铅 5/6 氧化态、1/6 硫化态，元素质量比 5。【执行】按 PbO/PbS 中 Pb 质量分数换算物相质量。"
+    },
+    {
+      "expr": "Output.烟气含尘.ZnO.Zn / Output.烟气含尘.ZnS.Zn",
+      "target": 5,
+      "note": "【解读】烟尘 ZnO 中 Zn ÷ ZnS 中 Zn。【业务】烟尘锌 5/6 氧化态、1/6 硫化态。【执行】按 ZnO/ZnS 中 Zn 质量分数换算物相质量。"
+    }
+  ],
+  "solverParams": {
+    "wPercentIterations": 40,
+    "newtonMaxIterations": 50,
+    "tolerance": 0.0001
+  }
+}

@@ -1,9 +1,10 @@
 import {
   COPPER_ELEMENT_KEYS,
   COPPER_PHASE_ASSIGNMENT_KEYS,
-  calculateKnownTotal,
   calculateUnknownsFromPhases,
+  deriveDryBasisMoisturePercent,
   derivePhaseContentsFromElements,
+  materialWaterWeight,
   normalizeCopperRatios,
   type CopperElementKey,
   type CopperPhaseAssignmentKey,
@@ -11,8 +12,10 @@ import {
   type CopperRatios,
 } from './copperWorkflowCalc.ts'
 import { COMPOUND_MOLAR_MASS } from './atomicMass.ts'
+import { formulaToDisplayLabel } from './chemicalFormula.ts'
 import { COPPER_BUILTIN_PHASE_FRACTIONS } from './copperPhaseStoichiometry.ts'
 import { buildInputPhaseRowKeys } from './copperDisplayOrder.ts'
+import { PRODUCT_PHASE_DISPLAY } from './copperProductPhaseCalc.ts'
 
 export const INPUT_PHASE_DISPLAY: Record<CopperPhaseAssignmentKey, string> = {
   Cu2S: 'Cu₂S',
@@ -32,12 +35,25 @@ export const INPUT_PHASE_DISPLAY: Record<CopperPhaseAssignmentKey, string> = {
   C: 'C',
 }
 
-export type InputPhaseRowKey = CopperPhaseAssignmentKey | 'H2O' | 'Other'
+export type InputPhaseRowKey = CopperPhaseAssignmentKey | 'Other'
 
-export const INPUT_PHASE_EXTRA_DISPLAY: Record<'H2O' | 'Other', string> = {
-  H2O: 'H₂O',
+export const INPUT_PHASE_EXTRA_DISPLAY: Record<'Other', string> = {
   Other: 'Other',
 }
+
+/** 物相总表/导出等存储键 → 带化学下标的显示名（O₂/N₂ 在总表中仍显示为 O/N） */
+export function phaseStorageKeyToDisplayLabel(key: string): string {
+  if (key === 'O2') return 'O'
+  if (key === 'N2') return 'N'
+  const inputDisplay = INPUT_PHASE_DISPLAY[key as CopperPhaseAssignmentKey]
+  if (inputDisplay) return inputDisplay
+  const extraDisplay = INPUT_PHASE_EXTRA_DISPLAY[key as 'Other']
+  if (extraDisplay) return extraDisplay
+  const productDisplay = PRODUCT_PHASE_DISPLAY[key]
+  if (productDisplay) return productDisplay
+  return formulaToDisplayLabel(key)
+}
+
 export const INPUT_PHASE_ROW_KEYS = buildInputPhaseRowKeys() as readonly InputPhaseRowKey[]
 
 export type PhasePercentMap = Partial<Record<InputPhaseRowKey, number>>
@@ -163,11 +179,13 @@ export function buildBlendPhaseColumn(
       columns.reduce((sum, column) => sum + Math.max(0, column.weight) * Math.max(0, column.phases[key] ?? 0), 0) / totalWeight,
     ])
   ) as PhasePercentMap
+  const total = phaseColumnTotal(blended)
+  if (Math.abs(total - 100) <= 0.05) return blended
   return normalizePhasePercents(blended)
 }
 
 export type FurnaceBlendPhaseColumnInput =
-  | { weight: number; phases: PhasePercentMap; moisture?: number }
+  | { weight: number; phases: PhasePercentMap; moisture?: number; waterWeight?: number }
   | { weight: number; oxygenWeightPct: { O2: number; N2: number } }
 
 /** 入炉混料物相：原料 + 熔剂 + 燃料 + 富氧空气按投料量加权（含 O₂/N₂ 行） */
@@ -200,7 +218,12 @@ export function buildFurnaceBlendPhaseColumn(columns: FurnaceBlendPhaseColumnInp
       o2Sum += column.weight * Math.max(0, column.oxygenWeightPct.O2)
       n2Sum += column.weight * Math.max(0, column.oxygenWeightPct.N2)
     } else {
-      moistureSum += column.weight * Math.max(0, column.moisture ?? 0)
+      const water = materialWaterWeight({
+        weight: column.weight,
+        waterWeight: column.waterWeight,
+        moisture: column.moisture,
+      })
+      moistureSum += deriveDryBasisMoisturePercent(column.weight, water) * column.weight
     }
   }
 

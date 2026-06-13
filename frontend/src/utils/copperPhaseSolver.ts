@@ -190,7 +190,7 @@ export function solvePhaseDistribution(
   const tolerance = options.tolerance ?? 1e-6
   const activePhases = phases.filter((phase) => Object.keys(phase.fractions ?? {}).length > 0)
   if (activePhases.length === 0) {
-    return emptyResult('empty', '未选择可计算的物相')
+    return emptyResult('empty', '物相所含元素均未在化验单中填写，无法参与分配')
   }
 
   const elements = collectParticipatingElements(activePhases, pool)
@@ -202,9 +202,11 @@ export function solvePhaseDistribution(
   }
 
   if (phaseCount > elementCount) {
+    const excess = phaseCount - elementCount
+    const elementNames = elements.join('、')
     return emptyResult(
       'underdetermined',
-      `物相个数(${phaseCount})多于可分配元素数(${elementCount})，方程欠定，请减少物相或补充约束`,
+      `当前物相列表有 ${phaseCount} 个物相，但化验单中只填写了 ${elementCount} 个可参与分配的元素（${elementNames}）。物相数量不能超过元素数量，请删除 ${excess} 个物相行，或在配料总表中补充更多元素含量后重试。`,
       elementCount,
       phaseCount
     )

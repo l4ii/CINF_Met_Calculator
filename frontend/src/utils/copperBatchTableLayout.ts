@@ -1,22 +1,44 @@
 /** 配料总表固定列宽（px） */
 export const BATCH_TABLE_CATEGORY_COL_WIDTH = 56
-/** 投料量 t/h：约 5 字符宽 */
-export const BATCH_TABLE_FEED_COL_WIDTH = 64
-/** 占比 %：最大 100.0000 */
-export const BATCH_TABLE_SHARE_COL_WIDTH = 72
-/** 物相等中间数据列默认宽度（无样本时的回退） */
-export const BATCH_TABLE_MIDDLE_COL_WIDTH = 56
-/** 元素总表元素列默认宽度（与物相表数据列逻辑一致） */
-export const BATCH_TABLE_ELEMENT_COL_WIDTH = BATCH_TABLE_MIDDLE_COL_WIDTH
-/** 合计列：需容纳「100.0000」 */
-export const BATCH_TABLE_TOTAL_COL_WIDTH = 80
-export const BATCH_TABLE_OPS_COL_WIDTH = 64
 
 /** 数据列最小/最大宽度（按表头与单元格内容估算） */
 export const BATCH_TABLE_DATA_COL_MIN = 44
 export const BATCH_TABLE_DATA_COL_MAX = 76
 /** 全表无有效数值时的窄列（如 Ag、Au 全 0） */
 export const BATCH_TABLE_SPARSE_COL_WIDTH = 40
+
+/** 自定义下拉左右内边距 + 箭头区 */
+const NAME_COL_SELECT_CHROME_PX = 36
+/** 13px 中文名称约 15px/字 */
+const NAME_COL_GLYPH_PX = 15
+const DATA_COL_GLYPH_PX = 8.5
+const DATA_COL_CHROME_PX = 14
+
+/** 2 位小数 w% 列绝对下限（约 "99.99"，紧凑 padding） */
+export const BATCH_TABLE_PCT_ABS_MIN = Math.max(
+  BATCH_TABLE_DATA_COL_MIN,
+  Math.ceil(5 * DATA_COL_GLYPH_PX) + 10
+)
+/** 2 位小数 w% 列名义最小宽 */
+export const BATCH_TABLE_PCT_COL_WIDTH = BATCH_TABLE_PCT_ABS_MIN
+/** 投料量 t/h 列绝对下限（2 位小数，约 9999.99） */
+export const BATCH_TABLE_MASS_ABS_MIN = Math.max(
+  BATCH_TABLE_DATA_COL_MIN,
+  Math.ceil(7 * DATA_COL_GLYPH_PX) + 10
+)
+/** 投料量 t/h 列名义最小宽 */
+export const BATCH_TABLE_MASS_COL_WIDTH = BATCH_TABLE_MASS_ABS_MIN
+/** @deprecated 使用 BATCH_TABLE_MASS_COL_WIDTH */
+export const BATCH_TABLE_FEED_COL_WIDTH = BATCH_TABLE_MASS_COL_WIDTH
+/** 占比 %：最大 100.0000 */
+export const BATCH_TABLE_SHARE_COL_WIDTH = 72
+/** 物相等中间数据列默认宽度（无样本时的回退） */
+export const BATCH_TABLE_MIDDLE_COL_WIDTH = 56
+/** 元素总表元素列默认宽度（与物相表数据列逻辑一致） */
+export const BATCH_TABLE_ELEMENT_COL_WIDTH = BATCH_TABLE_PCT_COL_WIDTH
+/** 合计列（2 位小数，约 100.00） */
+export const BATCH_TABLE_TOTAL_COL_WIDTH = BATCH_TABLE_PCT_COL_WIDTH
+export const BATCH_TABLE_OPS_COL_WIDTH = 64
 
 /** 物相成分辅助表（透视）列宽 */
 export const BATCH_TABLE_ASSIST_LABEL_COL_MIN = 48
@@ -27,16 +49,19 @@ export const BATCH_TABLE_ASSIST_ADD_COL_MIN = 32
 /** 物相成分辅助表最少显示列数（含占位空列） */
 export const BATCH_PHASE_ASSIST_MIN_DISPLAY_COLUMNS = 13
 
+/** 添加原料弹窗固定列宽 */
+export const LIBRARY_DIALOG_NAME_COL_WIDTH = 160
+export const LIBRARY_DIALOG_LABEL_COL_WIDTH = 56
+export const LIBRARY_DIALOG_ADD_COL_WIDTH = 40
+export const LIBRARY_DIALOG_OTHER_COL_WIDTH = 80
+export const LIBRARY_DIALOG_TOTAL_COL_WIDTH = 80
+export const LIBRARY_DIALOG_OPS_COL_WIDTH = 80
+export const LIBRARY_DIALOG_ELEMENT_COL_MIN = 56
+export const LIBRARY_DIALOG_ELEMENT_COL_MAX = 96
+
 /** 配料总表「名称」列最小/最大宽度（px） */
 export const BATCH_TABLE_NAME_COL_MIN = 128
 export const BATCH_TABLE_NAME_COL_MAX = 360
-
-/** 自定义下拉左右内边距 + 箭头区 */
-const NAME_COL_SELECT_CHROME_PX = 36
-/** 13px 中文名称约 15px/字 */
-const NAME_COL_GLYPH_PX = 15
-const DATA_COL_GLYPH_PX = 8.5
-const DATA_COL_CHROME_PX = 14
 
 export type FitColWidthsOptions = {
   flexibleIndices?: number[]
@@ -81,7 +106,6 @@ function sumElementTableFixed(nameColWidth: number, elementColWidths: number[]):
     BATCH_TABLE_CATEGORY_COL_WIDTH +
     nameColWidth +
     BATCH_TABLE_FEED_COL_WIDTH +
-    BATCH_TABLE_SHARE_COL_WIDTH +
     elementColWidths.reduce((sum, width) => sum + width, 0) +
     BATCH_TABLE_TOTAL_COL_WIDTH
   )
@@ -93,8 +117,7 @@ function sumPhaseTableFixed(nameColWidth: number, phaseColWidths: number[]): num
     nameColWidth +
     BATCH_TABLE_FEED_COL_WIDTH +
     phaseColWidths.reduce((sum, width) => sum + width, 0) +
-    BATCH_TABLE_TOTAL_COL_WIDTH +
-    BATCH_TABLE_OPS_COL_WIDTH
+    BATCH_TABLE_TOTAL_COL_WIDTH
   )
 }
 
@@ -165,7 +188,6 @@ export function batchElementTableMinColWidths(
     BATCH_TABLE_CATEGORY_COL_WIDTH,
     nameColWidth,
     BATCH_TABLE_FEED_COL_WIDTH,
-    BATCH_TABLE_SHARE_COL_WIDTH,
     ...elementColWidths,
     BATCH_TABLE_TOTAL_COL_WIDTH,
   ]
@@ -179,40 +201,67 @@ export function batchPhaseTableMinColWidths(nameColWidth: number, phaseColWidths
     BATCH_TABLE_FEED_COL_WIDTH,
     ...phaseColWidths,
     BATCH_TABLE_TOTAL_COL_WIDTH,
-    BATCH_TABLE_OPS_COL_WIDTH,
   ]
 }
 
 /** 元素总表整体宽度（列宽之和） */
+export function fixedBatchElementColumnWidths(elementCount: number): number[] {
+  return Array.from({ length: elementCount }, () => BATCH_TABLE_PCT_COL_WIDTH)
+}
+
 export function batchElementTableWidth(
   elementColumnCountOrWidths: number | number[],
   nameColWidth: number
 ): number {
   const elementColWidths = Array.isArray(elementColumnCountOrWidths)
     ? elementColumnCountOrWidths
-    : Array.from({ length: elementColumnCountOrWidths }, () => BATCH_TABLE_ELEMENT_COL_WIDTH)
+    : fixedBatchElementColumnWidths(elementColumnCountOrWidths)
   return sumElementTableFixed(nameColWidth, elementColWidths)
 }
 
 /** 物相总表整体宽度 */
+export function fixedBatchPhaseColumnWidths(phaseRowCount: number): number[] {
+  return Array.from({ length: phaseRowCount }, () => BATCH_TABLE_PCT_COL_WIDTH)
+}
+
 export function batchPhaseTableWidth(
   phaseRowCountOrWidths: number | number[],
   nameColWidth: number
 ): number {
   const phaseColWidths = Array.isArray(phaseRowCountOrWidths)
     ? phaseRowCountOrWidths
-    : Array.from({ length: phaseRowCountOrWidths }, () => BATCH_TABLE_MIDDLE_COL_WIDTH)
+    : fixedBatchPhaseColumnWidths(phaseRowCountOrWidths)
   return sumPhaseTableFixed(nameColWidth, phaseColWidths)
 }
 
+export type BatchElementColumnWidthMeta = {
+  width: number
+  sparse: boolean
+}
+
+/** 按表头 + 单元格样本估算各元素列宽（含稀疏列标记） */
+export function batchElementColumnWidthMeta(
+  elementKeys: readonly string[],
+  headerLabel: (element: string) => string,
+  samplesForElement: (element: string) => string[]
+): BatchElementColumnWidthMeta[] {
+  return elementKeys.map((element) => {
+    const samples = samplesForElement(element)
+    const sparse = isSparseDataColumn(samples)
+    const width = batchTableDataColWidth(headerLabel(element), samples, sparse)
+    return { width, sparse }
+  })
+}
+
 /**
- * 固定列保持 min 宽，数据列将容器剩余宽度均分（每列至少为内容 min）。
+ * 固定列保持 min 宽；容器有余量时仅向非稀疏数据列按内容宽度比例分配，避免 Ag/Au 等全 0 列被撑宽。
  */
 export function distributeBatchDataColumnWidths(
   leadingFixed: number[],
   dataMinWidths: number[],
   trailingFixed: number[],
-  containerWidth: number
+  containerWidth: number,
+  dataSparseFlags?: boolean[]
 ): number[] {
   const minWidths = [...leadingFixed, ...dataMinWidths, ...trailingFixed]
   const fixedSum = leadingFixed.reduce((sum, width) => sum + width, 0) + trailingFixed.reduce((sum, width) => sum + width, 0)
@@ -222,38 +271,217 @@ export function distributeBatchDataColumnWidths(
     return minWidths
   }
   const extra = containerWidth - minTotal
-  const n = dataMinWidths.length
-  const per = Math.floor(extra / n)
-  const remainder = extra - per * n
-  const expanded = dataMinWidths.map((min, index) => min + per + (index === n - 1 ? remainder : 0))
+  const sparseFlags =
+    dataSparseFlags ?? dataMinWidths.map((width) => width <= BATCH_TABLE_SPARSE_COL_WIDTH + 1)
+  const flexIndices = dataMinWidths.map((_, index) => index).filter((index) => !sparseFlags[index])
+  if (flexIndices.length === 0) {
+    return minWidths
+  }
+  const expanded = [...dataMinWidths]
+  const flexMinSum = flexIndices.reduce((sum, index) => sum + dataMinWidths[index], 0)
+  let remainder = extra
+  flexIndices.forEach((index, order) => {
+    const isLast = order === flexIndices.length - 1
+    const share = isLast ? remainder : Math.floor((extra * dataMinWidths[index]) / flexMinSum)
+    expanded[index] += share
+    remainder -= share
+  })
   return [...leadingFixed, ...expanded, ...trailingFixed]
 }
 
-/** 元素总表 colgroup 各列宽度（顺序与表头一致） */
-export function batchElementTableColWidths(
-  nameColWidth: number,
-  elementColWidths: number[],
-  containerWidth = 0
-): number[] {
-  const leadingFixed = [
-    BATCH_TABLE_CATEGORY_COL_WIDTH,
-    nameColWidth,
-    BATCH_TABLE_FEED_COL_WIDTH,
-    BATCH_TABLE_SHARE_COL_WIDTH,
-  ]
-  const trailingFixed = [BATCH_TABLE_TOTAL_COL_WIDTH]
-  return distributeBatchDataColumnWidths(leadingFixed, elementColWidths, trailingFixed, containerWidth)
+export type BatchTableColLayout = { widths: number[]; tableWidth: number }
+
+export type FitBatchTableToViewportOptions = {
+  flexibleIndices: number[]
+  absoluteMinWidths?: number[]
+  /** 可压缩至 BATCH_TABLE_NAME_COL_MIN 的名称列索引 */
+  nameColIndex?: number
 }
 
-/** 物相总表 colgroup 各列宽度 */
+function sumWidths(widths: number[]) {
+  return widths.reduce((sum, width) => sum + width, 0)
+}
+
+function expandFlexEvenly(widths: number[], flex: number[], extra: number) {
+  if (extra <= 0 || flex.length === 0) return
+  const per = Math.floor(extra / flex.length)
+  let remainder = extra - per * flex.length
+  flex.forEach((index, order) => {
+    widths[index] += per + (order < remainder ? 1 : 0)
+  })
+}
+
+function shrinkFlexProportional(
+  widths: number[],
+  flex: number[],
+  absMins: number[],
+  amount: number
+): number {
+  if (amount <= 0 || flex.length === 0) return 0
+  const caps = flex.map((index) => Math.max(0, widths[index] - absMins[index]))
+  const totalCap = caps.reduce((sum, cap) => sum + cap, 0)
+  if (totalCap <= 0) return 0
+  const shrinkBy = Math.min(amount, totalCap)
+  let remaining = shrinkBy
+  flex.forEach((index, order) => {
+    const isLast = order === flex.length - 1
+    const share = isLast ? remaining : Math.floor((shrinkBy * caps[order]) / totalCap)
+    widths[index] -= share
+    remaining -= share
+  })
+  flex.forEach((index) => {
+    widths[index] = Math.max(absMins[index], widths[index])
+  })
+  return shrinkBy
+}
+
+function nudgeWidthsToTarget(
+  widths: number[],
+  flex: number[],
+  absMins: number[],
+  target: number
+) {
+  let diff = target - sumWidths(widths)
+  if (diff === 0 || flex.length === 0) return
+  let guard = 0
+  while (diff !== 0 && guard < flex.length * 200) {
+    const index = flex[guard % flex.length]
+    if (diff > 0) {
+      widths[index] += 1
+      diff -= 1
+    } else if (widths[index] > absMins[index]) {
+      widths[index] -= 1
+      diff += 1
+    }
+    guard += 1
+  }
+}
+
+/**
+ * 双向适配视口：容器宽于最小宽时均分撑满；窄于最小宽时按比例压缩 flexible 列（不低于 absoluteMin），必要时压缩名称列。
+ */
+export function fitBatchTableToViewport(
+  minWidths: number[],
+  containerWidth: number,
+  options: FitBatchTableToViewportOptions
+): BatchTableColLayout {
+  const flex = options.flexibleIndices.filter((index) => index >= 0 && index < minWidths.length)
+  const absMins =
+    options.absoluteMinWidths && options.absoluteMinWidths.length === minWidths.length
+      ? options.absoluteMinWidths
+      : [...minWidths]
+  const widths = [...minWidths]
+  const minSum = sumWidths(minWidths)
+  const targetWidth = containerWidth > 0 ? containerWidth : minSum
+
+  if (flex.length === 0) {
+    return { widths, tableWidth: Math.max(minSum, targetWidth) }
+  }
+
+  if (minSum <= targetWidth) {
+    expandFlexEvenly(widths, flex, targetWidth - minSum)
+    nudgeWidthsToTarget(widths, flex, absMins, targetWidth)
+    return { widths, tableWidth: targetWidth }
+  }
+
+  let excess = minSum - targetWidth
+  excess -= shrinkFlexProportional(widths, flex, absMins, excess)
+
+  const nameIndex = options.nameColIndex
+  if (excess > 0 && nameIndex != null && nameIndex >= 0 && nameIndex < widths.length) {
+    const nameShrink = Math.min(excess, widths[nameIndex] - BATCH_TABLE_NAME_COL_MIN)
+    if (nameShrink > 0) {
+      widths[nameIndex] -= nameShrink
+      excess -= nameShrink
+    }
+  }
+
+  if (excess > 0) {
+    const tableWidth = sumWidths(widths)
+    return { widths, tableWidth }
+  }
+
+  nudgeWidthsToTarget(widths, flex, absMins, targetWidth)
+  return { widths, tableWidth: targetWidth }
+}
+
+/** @deprecated 使用 fitBatchTableToViewport */
+export function distributeBatchTableEvenly(
+  minWidths: number[],
+  containerWidth: number,
+  flexibleIndices: number[]
+): BatchTableColLayout {
+  return fitBatchTableToViewport(minWidths, containerWidth, { flexibleIndices })
+}
+
+/** 元素总表 colgroup：最小宽 + 视口双向 fit */
+export function batchElementTableColWidths(
+  nameColWidth: number,
+  elementCount: number,
+  containerWidth = 0,
+  elementAbsMinWidths?: number[]
+): BatchTableColLayout {
+  const elementMins =
+    elementAbsMinWidths ??
+    Array.from({ length: elementCount }, () => BATCH_TABLE_PCT_COL_WIDTH)
+  const minWidths = [
+    BATCH_TABLE_CATEGORY_COL_WIDTH,
+    nameColWidth,
+    BATCH_TABLE_MASS_COL_WIDTH,
+    ...elementMins,
+    BATCH_TABLE_TOTAL_COL_WIDTH,
+  ]
+  const absMins = [
+    BATCH_TABLE_CATEGORY_COL_WIDTH,
+    BATCH_TABLE_NAME_COL_MIN,
+    BATCH_TABLE_MASS_ABS_MIN,
+    ...elementMins,
+    BATCH_TABLE_PCT_ABS_MIN,
+  ]
+  const flexIndices = [
+    2,
+    ...Array.from({ length: elementCount }, (_, index) => 3 + index),
+    minWidths.length - 1,
+  ]
+  return fitBatchTableToViewport(minWidths, containerWidth, {
+    flexibleIndices: flexIndices,
+    absoluteMinWidths: absMins,
+    nameColIndex: 1,
+  })
+}
+
+/** 物相总表 colgroup：最小宽 + 视口双向 fit */
 export function batchPhaseTableColWidths(
   nameColWidth: number,
-  phaseColWidths: number[],
-  containerWidth = 0
-): number[] {
-  const leadingFixed = [BATCH_TABLE_CATEGORY_COL_WIDTH, nameColWidth, BATCH_TABLE_FEED_COL_WIDTH]
-  const trailingFixed = [BATCH_TABLE_TOTAL_COL_WIDTH, BATCH_TABLE_OPS_COL_WIDTH]
-  return distributeBatchDataColumnWidths(leadingFixed, phaseColWidths, trailingFixed, containerWidth)
+  phaseRowCount: number,
+  containerWidth = 0,
+  phaseAbsMinWidths?: number[]
+): BatchTableColLayout {
+  const phaseMins = phaseAbsMinWidths ?? fixedBatchPhaseColumnWidths(phaseRowCount)
+  const minWidths = [
+    BATCH_TABLE_CATEGORY_COL_WIDTH,
+    nameColWidth,
+    BATCH_TABLE_MASS_COL_WIDTH,
+    ...phaseMins,
+    BATCH_TABLE_TOTAL_COL_WIDTH,
+  ]
+  const absMins = [
+    BATCH_TABLE_CATEGORY_COL_WIDTH,
+    BATCH_TABLE_NAME_COL_MIN,
+    BATCH_TABLE_MASS_ABS_MIN,
+    ...phaseMins.map(() => BATCH_TABLE_PCT_ABS_MIN),
+    BATCH_TABLE_PCT_ABS_MIN,
+  ]
+  const flexIndices = [
+    2,
+    ...Array.from({ length: phaseRowCount }, (_, index) => 3 + index),
+    minWidths.length - 1,
+  ]
+  return fitBatchTableToViewport(minWidths, containerWidth, {
+    flexibleIndices: flexIndices,
+    absoluteMinWidths: absMins,
+    nameColIndex: 1,
+  })
 }
 
 export type PhaseAssistColumnWidthInput = {
@@ -270,7 +498,7 @@ export function batchPhaseAssistPhaseColWidth(column: PhaseAssistColumnWidthInpu
     return batchTableDataColWidth(header, [header, '待填物相', 'Cu2S2'], false)
   }
   if (!column.hasData) {
-    return batchTableDataColWidth(header, [header, '0'], true)
+    return batchTableDataColWidth(header, [header, '0'], false)
   }
   return batchTableDataColWidth(header, [header, ...column.samples], false)
 }
@@ -292,7 +520,7 @@ export function batchPhaseAssistMinColWidths(
 export function batchPhaseAssistColWidths(
   phaseColumnCountOrWidths: number | number[],
   containerWidth = 0,
-  options?: { labelWidth?: number; totalWidth?: number }
+  options?: { labelWidth?: number; totalWidth?: number; includeActionColumn?: boolean }
 ): { widths: number[]; tableWidth: number } {
   const phaseColWidths = Array.isArray(phaseColumnCountOrWidths)
     ? phaseColumnCountOrWidths
@@ -301,24 +529,104 @@ export function batchPhaseAssistColWidths(
     options?.labelWidth ?? BATCH_TABLE_ASSIST_LABEL_COL_MIN,
     options?.totalWidth ?? BATCH_TABLE_ASSIST_TOTAL_COL_MIN,
   ]
-  const trailingFixed = [BATCH_TABLE_ASSIST_ADD_COL_MIN]
+  const trailingFixed = options?.includeActionColumn === false ? [] : [BATCH_TABLE_ASSIST_ADD_COL_MIN]
   const widths = distributeBatchDataColumnWidths(leadingFixed, phaseColWidths, trailingFixed, containerWidth)
   const tableWidth = widths.reduce((sum, width) => sum + width, 0)
   return { widths, tableWidth }
 }
 
-/** 根据表头行、w% 行与元素行样本生成物相成分辅助表列宽 */
+export type LibraryDialogColumnWidthInput = {
+  header: string
+  samples: string[]
+}
+
+/** 添加原料弹窗：按容器宽度与元素列内容估算各列宽度 */
+export function computeLibraryDialogColWidths(
+  elementColumns: LibraryDialogColumnWidthInput[],
+  containerWidth = 0
+): { widths: number[]; tableWidth: number; elementColWidths: number[] } {
+  const leadingFixed = [LIBRARY_DIALOG_NAME_COL_WIDTH, LIBRARY_DIALOG_LABEL_COL_WIDTH]
+  const trailingFixed = [
+    LIBRARY_DIALOG_ADD_COL_WIDTH,
+    LIBRARY_DIALOG_OTHER_COL_WIDTH,
+    LIBRARY_DIALOG_TOTAL_COL_WIDTH,
+    LIBRARY_DIALOG_OPS_COL_WIDTH,
+  ]
+  const elementMinWidths = elementColumns.map((column) => {
+    const contentWidth = batchTableDataColWidth(column.header, column.samples, false)
+    return Math.max(LIBRARY_DIALOG_ELEMENT_COL_MIN, Math.min(LIBRARY_DIALOG_ELEMENT_COL_MAX, contentWidth))
+  })
+  const fixedSum = leadingFixed.reduce((sum, width) => sum + width, 0) + trailingFixed.reduce((sum, width) => sum + width, 0)
+  const elementMinSum = elementMinWidths.reduce((sum, width) => sum + width, 0)
+  const minTotal = fixedSum + elementMinSum
+
+  let elementColWidths = elementMinWidths
+  if (containerWidth > minTotal && elementMinWidths.length > 0) {
+    const extra = containerWidth - minTotal
+    const per = Math.floor(extra / elementMinWidths.length)
+    const remainder = extra - per * elementMinWidths.length
+    elementColWidths = elementMinWidths.map((min, index) =>
+      min + per + (index < remainder ? 1 : 0)
+    )
+  }
+
+  const widths = [...leadingFixed, ...elementColWidths, ...trailingFixed]
+  const tableWidth = Math.max(minTotal, containerWidth > 0 ? containerWidth : minTotal, widths.reduce((sum, w) => sum + w, 0))
+  return { widths, tableWidth, elementColWidths }
+}
+
+/** 根据表头行、w% 行与元素行样本生成物相成分辅助表列宽（物相列最小宽 + 容器均分） */
 export function computePhaseAssistTableLayout(params: {
   labelSamples: string[]
   totalSamples: string[]
   phaseColumns: PhaseAssistColumnWidthInput[]
   containerWidth?: number
-}): { widths: number[]; tableWidth: number } {
+  includeActionColumn?: boolean
+}): BatchTableColLayout {
   const labelWidth = batchTableDataColWidth('物相', params.labelSamples, false)
-  const totalWidth = Math.max(
-    BATCH_TABLE_ASSIST_TOTAL_COL_MIN,
-    batchTableDataColWidth('合计', params.totalSamples, false)
-  )
-  const phaseColWidths = params.phaseColumns.map((column) => batchPhaseAssistPhaseColWidth(column))
-  return batchPhaseAssistColWidths(phaseColWidths, params.containerWidth ?? 0, { labelWidth, totalWidth })
+  const totalWidth = BATCH_TABLE_ASSIST_TOTAL_COL_MIN
+  const phaseColWidths = fixedBatchPhaseColumnWidths(params.phaseColumns.length)
+  const trailingFixed = params.includeActionColumn === false ? [] : [BATCH_TABLE_ASSIST_ADD_COL_MIN]
+  const minWidths = [labelWidth, totalWidth, ...phaseColWidths, ...trailingFixed]
+  const phaseStart = 2
+  const flexIndices = Array.from({ length: phaseColWidths.length }, (_, index) => phaseStart + index)
+  const absMins = [
+    labelWidth,
+    totalWidth,
+    ...phaseColWidths.map(() => BATCH_TABLE_PCT_ABS_MIN),
+    ...trailingFixed,
+  ]
+  return fitBatchTableToViewport(minWidths, params.containerWidth ?? 0, {
+    flexibleIndices: flexIndices,
+    absoluteMinWidths: absMins,
+  })
+}
+
+/** 产物在总产物中的质量占比 %，固定小数位（默认 4 位） */
+export function formatProductSharePercent(value: number, digits = 4) {
+  if (!Number.isFinite(value)) return '—'
+  return value.toFixed(digits)
+}
+
+export type OxyProductToneKey =
+  | 'smeltingSlag'
+  | 'matte'
+  | 'flueGas'
+  | 'dust'
+  | 'fugitive'
+  | 'loss'
+
+/** 富氧侧吹炉六种产物行背景色（与配料总表色系一致） */
+export function oxyProductToneClass(dark: boolean, key: OxyProductToneKey): string {
+  if (key === 'smeltingSlag') return dark ? 'bg-stone-950/30 text-stone-100' : 'bg-stone-100 text-stone-900'
+  if (key === 'matte') return dark ? 'bg-amber-950/25 text-amber-50' : 'bg-amber-50 text-amber-950'
+  if (key === 'flueGas') return dark ? 'bg-sky-950/25 text-sky-50' : 'bg-sky-50 text-sky-950'
+  if (key === 'dust') return dark ? 'bg-yellow-950/20 text-yellow-50' : 'bg-yellow-50 text-yellow-950'
+  if (key === 'fugitive') return dark ? 'bg-violet-950/25 text-violet-100' : 'bg-violet-50 text-violet-950'
+  return dark ? 'bg-gray-800/40 text-gray-300' : 'bg-gray-100 text-gray-700'
+}
+
+/** 产出表占比列高亮 */
+export function oxyProductShareHighlightClass(dark: boolean): string {
+  return dark ? 'text-blue-300' : 'text-blue-700'
 }

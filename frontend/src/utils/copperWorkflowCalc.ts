@@ -1,9 +1,6 @@
 import {
-  calculateCopperHeatBalance,
   calculateCopperProducts,
-  type CopperFuelMaterial,
-  type CopperHeatBalanceResult,
-  type CopperProductResult,
+  type CopperProductModel,
 } from './copperProcessCalc.ts'
 import { atomicMass, COMPOUND_MOLAR_MASS, ELEMENT_N_TO_N2, ELEMENT_O_TO_O2 } from './atomicMass.ts'
 import {
@@ -29,11 +26,81 @@ export interface CopperMaterialColumn {
   id: string
   name: string
   kind: 'raw' | 'solvent' | 'fuel' | 'gas'
+  airRole?: 'air' | 'oxygen' | 'secondary' | 'feed_leak'
   weight: number
-  /** 干基水分 %，不计入元素 100%；湿质量 = weight × (1 + moisture/100) */
+  /** 含水质量 t/h；湿基 = weight + waterWeight */
+  waterWeight?: number
+  /** 干基水分 %（派生缓存）；湿质量 = weight + waterWeight */
   moisture?: number
   ratios: CopperRatios
   unitPrice?: number
+}
+
+const H2O_ELEMENT_FRACTIONS = COPPER_BUILTIN_PHASE_FRACTIONS.H2O ?? {}
+
+/** H₂O 中 H、O 元素 w%（合计 100） */
+export function waterElementRatios(): Pick<CopperRatios, 'H(氢)' | 'O(氧)'> {
+  const hFrac = H2O_ELEMENT_FRACTIONS['H(氢)'] ?? 0
+  const oFrac = H2O_ELEMENT_FRACTIONS['O(氧)'] ?? 0
+  return {
+    'H(氢)': hFrac * 100,
+    'O(氧)': oFrac * 100,
+  }
+}
+
+export function deriveDryBasisMoisturePercent(dryWeight: number, waterWeight: number): number {
+  const dry = Math.max(0, dryWeight)
+  const water = Math.max(0, waterWeight)
+  if (dry <= 0) return 0
+  return (water / dry) * 100
+}
+
+export function materialWaterWeight(material: Pick<CopperMaterialColumn, 'weight' | 'waterWeight' | 'moisture'>): number {
+  if (material.waterWeight != null && Number.isFinite(material.waterWeight)) {
+    return Math.max(0, material.waterWeight)
+  }
+  const dry = Math.max(0, material.weight)
+  const m = Math.max(0, material.moisture ?? 0)
+  return dry > 0 && m > 0 ? dry * (m / 100) : 0
+}
+
+export function materialWetWeight(material: Pick<CopperMaterialColumn, 'weight' | 'waterWeight' | 'moisture'>): number {
+  return Math.max(0, material.weight) + materialWaterWeight(material)
+}
+
+export function totalWaterWeight(materials: CopperMaterialColumn[]): number {
+  return materials.reduce((sum, m) => sum + materialWaterWeight(m), 0)
+}
+
+export function totalWetFeedWeight(materials: CopperMaterialColumn[]): number {
+  return materials.reduce((sum, m) => sum + materialWetWeight(m), 0)
+}
+
+/** 旧存档仅有 moisture% 时迁移为 waterWeight */
+export function migrateMaterialWaterWeight(material: CopperMaterialColumn): CopperMaterialColumn {
+  if (material.waterWeight != null && Number.isFinite(material.waterWeight)) {
+    const waterWeight = Math.max(0, material.waterWeight)
+    return {
+      ...material,
+      waterWeight,
+      moisture: deriveDryBasisMoisturePercent(material.weight, waterWeight),
+    }
+  }
+  const waterWeight = materialWaterWeight(material)
+  return {
+    ...material,
+    waterWeight,
+    moisture: deriveDryBasisMoisturePercent(material.weight, waterWeight),
+  }
+}
+
+export function syncMaterialMoistureFromWater(
+  patch: Partial<CopperMaterialColumn> & { weight?: number; waterWeight?: number }
+): Partial<CopperMaterialColumn> {
+  if (patch.waterWeight == null && patch.weight == null) return patch
+  const dry = Math.max(0, patch.weight ?? 0)
+  const water = Math.max(0, patch.waterWeight ?? 0)
+  return { ...patch, moisture: deriveDryBasisMoisturePercent(dry, water) }
 }
 
 export interface CopperLibraryMaterial {
@@ -46,12 +113,14 @@ export interface CopperLibraryMaterial {
 
 export interface CopperSolvent {
   id: string
-  name: '石灰' | '铁矿石'
+  name: string
   unitPrice: number
   composition: {
     'Fe(铁)': number
+    'FeO(氧化亚铁)'?: number
     'SiO₂(二氧化硅)': number
     'CaO(氧化钙)': number
+    'MgO(氧化镁)'?: number
   }
 }
 
@@ -103,34 +172,6 @@ export interface CopperOxygenAirCalculation {
   oxygenSupplyCoefficient: number
 }
 
-export interface CopperIterationTrace {
-  iteration: number
-  limeWeight: number
-  ironOreWeight: number
-  fuelWeight: number
-  oxygenAirWeight: number
-  feSiO2: number
-  caOSiO2: number
-  totalProductMass: number
-  maxDelta: number
-}
-
-export interface CopperIterativeBalanceResult {
-  valid: boolean
-  converged: boolean
-  message?: string
-  iterations: CopperIterationTrace[]
-  finalSolventSolution: CopperSolventSolution | null
-  finalSolventColumns: CopperMaterialColumn[]
-  finalFuel: CopperFuelMaterial
-  finalOxygenAirColumn: CopperMaterialColumn
-  finalOxygenAirCalculation: CopperOxygenAirCalculation
-  finalFeedWithoutFuel: WeightedComposition
-  finalFeed: WeightedComposition
-  finalProducts: CopperProductResult
-  finalHeatBalance: CopperHeatBalanceResult
-}
-
 export type CopperPhaseInput =
   | string
   | number
@@ -139,22 +180,6 @@ export type CopperPhaseInput =
       x?: string | number
     }
 
-const MOLAR_MASS_KG_PER_KMOL = {
-  C: atomicMass('C'),
-  S: atomicMass('S'),
-  O2: COMPOUND_MOLAR_MASS.O2,
-  N2: COMPOUND_MOLAR_MASS.N2,
-  Cu2S: COMPOUND_MOLAR_MASS.Cu2S,
-  FeS: COMPOUND_MOLAR_MASS.FeS,
-}
-const OXYGEN_DEMAND_COEFFICIENTS = {
-  // Cu2S + 1.5O2 -> Cu2O + SO2; FeS + 1.5O2 -> FeO + SO2.
-  Cu2S: 1.5,
-  FeS: 1.5,
-  S: 1,
-  C: 1,
-}
-
 export const COPPER_PHASE_ASSIGNMENT_KEYS = [...COPPER_BUILTIN_PHASE_DISPLAY_ORDER] as const
 export type CopperPhaseAssignmentKey = (typeof COPPER_PHASE_ASSIGNMENT_KEYS)[number]
 
@@ -162,21 +187,24 @@ export const COPPER_PHASE_OXYGEN_FACTORS = COPPER_PHASE_O2_FACTORS
 
 export const COPPER_PHASE_SULFUR_FACTORS = COPPER_PHASE_SULFUR_FRACTIONS
 
-const NORMAL_M3_PER_KMOL = 22.4
-const DEFAULT_OXYGEN_SUPPLY_COEFFICIENT = 1.15
-
 export const DEFAULT_COPPER_SOLVENTS: CopperSolvent[] = [
   {
-    id: 'lime',
-    name: '石灰',
-    unitPrice: 550,
-    composition: { 'Fe(铁)': 0, 'SiO₂(二氧化硅)': 0, 'CaO(氧化钙)': 85.05 },
+    id: 'silica',
+    name: '石英石',
+    unitPrice: 260,
+    composition: { 'Fe(铁)': 0, 'FeO(氧化亚铁)': 0.64, 'SiO₂(二氧化硅)': 85, 'CaO(氧化钙)': 0.5, 'MgO(氧化镁)': 1 },
   },
   {
     id: 'iron-ore',
     name: '铁矿石',
     unitPrice: 750,
     composition: { 'Fe(铁)': 59.94, 'SiO₂(二氧化硅)': 6, 'CaO(氧化钙)': 0 },
+  },
+  {
+    id: 'lime',
+    name: '石灰',
+    unitPrice: 550,
+    composition: { 'Fe(铁)': 0, 'SiO₂(二氧化硅)': 0, 'CaO(氧化钙)': 85.05 },
   },
 ]
 
@@ -212,22 +240,6 @@ const SW_DOMESTIC_BORDER_RATIOS: CopperRatios = {
 }
 
 export const COPPER_MATERIAL_LIBRARY: CopperLibraryMaterial[] = [
-  {
-    id: 'cu-conc-a',
-    name: '铜精矿 A',
-    category: 'concentrate',
-    unitPrice: 62000,
-    ratios: normalizeCopperRatios({
-      'Al₂O₃(三氧化二铝)': 1.53,
-      'CaO(氧化钙)': 0.75,
-      'Cu(铜)': 32.22,
-      'Fe(铁)': 25.95,
-      'Other(其他)': 0.014,
-      'Pb(铅)': 0.866,
-      'S (硫)': 31.95,
-      'SiO₂(二氧化硅)': 6.72,
-    }),
-  },
   {
     id: 'cu-conc-internal',
     name: '系统内精矿',
@@ -296,6 +308,22 @@ export const COPPER_MATERIAL_LIBRARY: CopperLibraryMaterial[] = [
     }),
   },
   {
+    id: 'cu-conc-a',
+    name: '铜精矿 A',
+    category: 'concentrate',
+    unitPrice: 62000,
+    ratios: normalizeCopperRatios({
+      'Al₂O₃(三氧化二铝)': 1.53,
+      'CaO(氧化钙)': 0.75,
+      'Cu(铜)': 32.22,
+      'Fe(铁)': 25.95,
+      'Other(其他)': 0.014,
+      'Pb(铅)': 0.866,
+      'S (硫)': 31.95,
+      'SiO₂(二氧化硅)': 6.72,
+    }),
+  },
+  {
     id: 'cu-conc-border',
     name: '边贸矿',
     category: 'concentrate',
@@ -342,6 +370,8 @@ export function migrateLegacyCopperRatios(ratios: CopperRatios): CopperRatios {
 export type CloseCopperRatiosOptions = {
   /** 是否将不足 100% 的差额补入 Other；原料总表输入阶段应为 false */
   fillOther?: boolean
+  /** 已知元素合计超 100% 时是否按比例缩放回 100%；配料总表输入应为 false */
+  scaleWhenOver100?: boolean
 }
 
 /** 迁移/非负化化验数据；可选将差额补入 Other 以闭合 100% */
@@ -350,6 +380,7 @@ export function closeCopperRatios(
   options: CloseCopperRatiosOptions = {}
 ): Record<CopperElementKey, number> {
   const fillOther = options.fillOther ?? false
+  const scaleWhenOver100 = options.scaleWhenOver100 ?? true
   const migrated = migrateLegacyCopperRatios(ratios)
   const feo = Number(migrated['FeO(氧化亚铁)'] ?? 0)
   if (Number.isFinite(feo) && feo > 0) {
@@ -362,7 +393,7 @@ export function closeCopperRatios(
     out[element] = Math.max(0, value)
   }
   const knownTotal = calculateKnownTotal(out)
-  if (knownTotal > 100 + 1e-3) {
+  if (knownTotal > 100 + 1e-3 && scaleWhenOver100) {
     const k = 100 / knownTotal
     for (const element of COPPER_ELEMENT_KEYS) {
       if (element === 'Other(其他)') continue
@@ -410,6 +441,34 @@ function normalizeHeader(value: string): string {
     .replace(/[（(].*?[）)]/g, '')
     .replace(/%/g, '')
     .toLowerCase()
+}
+
+const SUBSCRIPT_TO_DIGIT: Record<string, string> = {
+  '₀': '0',
+  '₁': '1',
+  '₂': '2',
+  '₃': '3',
+  '₄': '4',
+  '₅': '5',
+  '₆': '6',
+  '₇': '7',
+  '₈': '8',
+  '₉': '9',
+}
+
+function normalizeElementInputName(value: string): string {
+  let out = value
+  for (const [sub, digit] of Object.entries(SUBSCRIPT_TO_DIGIT)) {
+    out = out.split(sub).join(digit)
+  }
+  return normalizeHeader(out)
+}
+
+/** 将用户输入的元素/化合物名解析为 canonical 元素键；无法识别时返回 null */
+export function resolveCopperElementKey(name: string): CopperElementKey | null {
+  const trimmed = name.trim()
+  if (!trimmed) return null
+  return IMPORT_HEADER_TO_ELEMENT[normalizeElementInputName(trimmed)] ?? null
 }
 
 const IMPORT_HEADER_TO_ELEMENT: Record<string, CopperElementKey> = {
@@ -539,15 +598,22 @@ export function calculateAssayDisplayTotal(ratios: CopperRatios): number {
 }
 
 export function calculateWeightedComposition(materials: CopperMaterialColumn[]): WeightedComposition {
-  const totalWeight = materials.reduce((sum, material) => sum + Math.max(0, material.weight), 0)
+  const totalWeight = totalWetFeedWeight(materials)
   const elementWeights = emptyCopperRatios()
   if (totalWeight <= 0) {
     return { totalWeight: 0, ratios: emptyCopperRatios(), elementWeights }
   }
+  const waterRatios = waterElementRatios()
   for (const material of materials) {
+    const dryWeight = Math.max(0, material.weight)
     const normalized = normalizeCopperRatios(material.ratios)
     for (const element of COPPER_ELEMENT_KEYS) {
-      elementWeights[element] += (normalized[element] / 100) * material.weight
+      elementWeights[element] += (normalized[element] / 100) * dryWeight
+    }
+    const water = materialWaterWeight(material)
+    if (water > 0) {
+      elementWeights['H(氢)'] += ((waterRatios['H(氢)'] ?? 0) / 100) * water
+      elementWeights['O(氧)'] += ((waterRatios['O(氧)'] ?? 0) / 100) * water
     }
   }
   const ratios = emptyCopperRatios()
@@ -559,9 +625,12 @@ export function calculateWeightedComposition(materials: CopperMaterialColumn[]):
 
 export function solventOxidesToElements(composition: CopperSolvent['composition']): Record<CopperElementKey, number> {
   const out = emptyCopperRatios()
+  const feO = composition['FeO(氧化亚铁)'] ?? 0
   out['Fe(铁)'] = composition['Fe(铁)'] ?? 0
+  out['FeO(氧化亚铁)'] = feO
   out['SiO₂(二氧化硅)'] = composition['SiO₂(二氧化硅)'] ?? 0
   out['CaO(氧化钙)'] = composition['CaO(氧化钙)'] ?? 0
+  out['MgO(氧化镁)'] = composition['MgO(氧化镁)'] ?? 0
   out['Other(其他)'] = Math.max(0, 100 - calculateKnownTotal(out))
   return out
 }
@@ -569,8 +638,10 @@ export function solventOxidesToElements(composition: CopperSolvent['composition'
 export function elementRatiosToSolventComposition(ratios: CopperRatios): CopperSolvent['composition'] {
   return {
     'Fe(铁)': ratios['Fe(铁)'] ?? 0,
+    'FeO(氧化亚铁)': ratios['FeO(氧化亚铁)'] ?? 0,
     'SiO₂(二氧化硅)': ratios['SiO₂(二氧化硅)'] ?? 0,
     'CaO(氧化钙)': ratios['CaO(氧化钙)'] ?? 0,
+    'MgO(氧化镁)': ratios['MgO(氧化镁)'] ?? 0,
   }
 }
 
@@ -580,6 +651,7 @@ export function createDefaultCopperMaterials(): CopperMaterialColumn[] {
     name: '',
     kind: 'raw',
     weight: 0,
+    waterWeight: 0,
     moisture: 0,
     ratios: emptyCopperRatios(),
     unitPrice: 0,
@@ -587,23 +659,27 @@ export function createDefaultCopperMaterials(): CopperMaterialColumn[] {
 }
 
 export function createDefaultSolventColumns(weights: Record<string, number> = {}): CopperMaterialColumn[] {
-  return DEFAULT_COPPER_SOLVENTS.map((solvent) => ({
+  return DEFAULT_COPPER_SOLVENTS.slice(0, 1).map((solvent) => ({
     id: `solvent-${solvent.id}`,
     name: solvent.name,
     kind: 'solvent',
     weight: weights[solvent.name] ?? 0,
+    waterWeight: 0,
     moisture: 0,
     ratios: solventOxidesToElements(solvent.composition),
     unitPrice: solvent.unitPrice,
   }))
 }
 
-/** 按干料投料量加权的水分 % */
+/** 按干料投料量加权的干基水分 % */
 export function calculateWeightedMoisture(materials: CopperMaterialColumn[]): number {
   const totalDry = materials.reduce((sum, m) => sum + Math.max(0, m.weight), 0)
   if (totalDry <= 0) return 0
   return (
-    materials.reduce((sum, m) => sum + Math.max(0, m.weight) * Math.max(0, m.moisture ?? 0), 0) / totalDry
+    materials.reduce(
+      (sum, m) => sum + Math.max(0, m.weight) * deriveDryBasisMoisturePercent(m.weight, materialWaterWeight(m)),
+      0
+    ) / totalDry
   )
 }
 
@@ -615,23 +691,133 @@ export function dryPercentToWetBasis(dryPercent: number, moisturePercent: number
   return dryPercent / denom
 }
 
-export function createOxygenAirColumn(weight = 0, settings: CopperOxygenAirSettings = { oxygenPct: 70, nitrogenPct: 30 }): CopperMaterialColumn {
+export const DEFAULT_COPPER_OXYGEN_AIR_SETTINGS = { oxygenPct: 99.65, nitrogenPct: 0.35 } as const
+
+const STANDARD_AIR_RATIOS = { 'H(氢)': 0.19, 'O(氧)': 24.41, 'N(氮)': 75.4, 'Other(其他)': 0 } as const
+const DEFAULT_OXYGEN_RATIOS = {
+  'O(氧)': DEFAULT_COPPER_OXYGEN_AIR_SETTINGS.oxygenPct,
+  'N(氮)': DEFAULT_COPPER_OXYGEN_AIR_SETTINGS.nitrogenPct,
+  'Other(其他)': 0,
+} as const
+
+const LEGACY_STANDARD_AIR_RATIOS = [{ 'H(氢)': 0, 'O(氧)': 21, 'N(氮)': 79, 'C (碳)': 0, 'Other(其他)': 0 }] as const
+const LEGACY_OXYGEN_RATIOS = [
+  { 'H(氢)': 0, 'O(氧)': 100, 'N(氮)': 0, 'C (碳)': 0, 'Other(其他)': 0 },
+  { 'H(氢)': 0, 'O(氧)': 70, 'N(氮)': 30, 'C (碳)': 0, 'Other(其他)': 0 },
+] as const
+
+function ratioValue(ratios: Record<string, number> | undefined, key: string): number {
+  const value = ratios?.[key]
+  return Number.isFinite(value) ? Number(value) : 0
+}
+
+function ratiosMatch(
+  ratios: Record<string, number> | undefined,
+  expected: Readonly<Record<string, number>>,
+  tolerance = 0.0001
+): boolean {
+  return Object.entries(expected).every(([key, value]) => Math.abs(ratioValue(ratios, key) - value) <= tolerance)
+}
+
+function isLegacyDefaultGasRatios(
+  airRole: CopperMaterialColumn['airRole'],
+  ratios: Record<string, number> | undefined
+): boolean {
+  const expectedList = airRole === 'oxygen' ? LEGACY_OXYGEN_RATIOS : LEGACY_STANDARD_AIR_RATIOS
+  return expectedList.some((expected) => ratiosMatch(ratios, expected))
+}
+
+/** @deprecated 保留兼容；新流程请用 createProcessAirColumns 中的「氧气」列 */
+export function createOxygenAirColumn(
+  weight = 0,
+  settings: CopperOxygenAirSettings = DEFAULT_COPPER_OXYGEN_AIR_SETTINGS
+): CopperMaterialColumn {
   const oxygen = Math.max(0, settings.oxygenPct)
   const nitrogen = Math.max(0, settings.nitrogenPct)
   const total = oxygen + nitrogen
-  const normalizedOxygen = total > 0 ? (oxygen / total) * 100 : 0
+  const normalizedOxygen = total > 0 ? (oxygen / total) * 100 : DEFAULT_COPPER_OXYGEN_AIR_SETTINGS.oxygenPct
   const normalizedNitrogen = total > 0 ? (nitrogen / total) * 100 : 0
   return {
-    id: 'oxygen-enriched-air',
-    name: '富氧空气',
+    id: 'pure-oxygen',
+    name: '氧气',
     kind: 'gas',
+    airRole: 'oxygen',
     weight: Math.max(0, weight),
     ratios: {
       ...emptyCopperRatios(),
+      ...DEFAULT_OXYGEN_RATIOS,
       'O(氧)': normalizedOxygen,
       'N(氮)': normalizedNitrogen,
     },
     unitPrice: 0,
+  }
+}
+
+function createStandardAirColumn(
+  id: string,
+  name: string,
+  airRole: 'air' | 'secondary' | 'feed_leak',
+  weight = 0,
+  ratios: Readonly<Record<string, number>> = STANDARD_AIR_RATIOS
+): CopperMaterialColumn {
+  return {
+    id,
+    name,
+    kind: 'gas',
+    airRole,
+    weight: Math.max(0, weight),
+    ratios: { ...emptyCopperRatios(), ...ratios },
+    unitPrice: 0,
+  }
+}
+
+/** 投入-物料元素表气体列：空气、氧气、二次风、加料口漏风（t/h 默认 0，类型为气） */
+export function createProcessAirColumns(): CopperMaterialColumn[] {
+  return [
+    createStandardAirColumn('process-air', '空气', 'air', 0),
+    createOxygenAirColumn(0),
+    createStandardAirColumn('secondary-air', '二次风', 'secondary', 0),
+    createStandardAirColumn('feed-leak-air', '加料口漏风', 'feed_leak', 0),
+  ]
+}
+
+const LEGACY_OXYGEN_AIR_IDS = new Set(['oxygen-enriched-air', 'pure-oxygen'])
+
+/** 旧案例迁移：oxygen-enriched-air → pure-oxygen；补全加料口漏风列 */
+export function normalizeProcessAirColumns(
+  airColumns?: CopperMaterialColumn[] | null,
+  legacyOxygenAirColumn?: CopperMaterialColumn | null
+): CopperMaterialColumn[] {
+  const defaults = createProcessAirColumns()
+  const provided = [...(airColumns ?? [])]
+  if (legacyOxygenAirColumn && !provided.some((c) => LEGACY_OXYGEN_AIR_IDS.has(c.id) || c.airRole === 'oxygen')) {
+    provided.push(legacyOxygenAirColumn)
+  }
+  const legacyOxygen = provided.find(
+    (c) => c.id === 'oxygen-enriched-air' || c.airRole === 'oxygen' || LEGACY_OXYGEN_AIR_IDS.has(c.id)
+  )
+  return defaults.map((defaultColumn) => {
+    const match =
+      provided.find((column) => column.airRole === defaultColumn.airRole) ??
+      provided.find((column) => column.id === defaultColumn.id) ??
+      (defaultColumn.airRole === 'oxygen' ? legacyOxygen ?? null : null)
+    if (!match) return cloneProcessAirColumn(defaultColumn)
+    const mergedWeight = Math.max(0, match.weight ?? 0)
+    const mergedRatios = isLegacyDefaultGasRatios(defaultColumn.airRole, match.ratios)
+      ? { ...defaultColumn.ratios }
+      : { ...defaultColumn.ratios, ...match.ratios }
+    return cloneProcessAirColumn({
+      ...defaultColumn,
+      weight: mergedWeight,
+      ratios: mergedRatios,
+    })
+  })
+}
+
+function cloneProcessAirColumn(column: CopperMaterialColumn): CopperMaterialColumn {
+  return {
+    ...column,
+    ratios: { ...column.ratios },
   }
 }
 
@@ -806,10 +992,28 @@ export function deriveOrderedPhaseContents(
           !POOL_EXCLUDED_ELEMENTS.has(element) && fraction > 0 && (pool[element] ?? 0) > 0
       )
     })
+  for (const row of stoichRows) {
+    if (carbonOnlyRows.includes(row) || solverRows.includes(row)) continue
+    byRowId[row.id] = 0
+  }
+
   const specs = solverRows.map((row) => ({
     id: row.id,
     fractions: rowFractions(row),
   }))
+
+  if (specs.length === 0) {
+    const solver: PhaseSolverResult = {
+      valid: true,
+      status: 'ok',
+      amounts: {},
+      residual: {},
+      elementCount: 0,
+      phaseCount: 0,
+    }
+    return { byRowId, byBuiltinKey, solver }
+  }
+
   const solver = solvePhaseDistribution(specs, pool)
 
   if (solver.valid) {
@@ -1019,69 +1223,56 @@ function solventCompositionSlagBasisPerMetricTon(composition: CopperSolvent['com
   }
 }
 
-/**
- * 按 **产出炉渣渣型** 求解石灰 + 铁矿石 (t/h)。
- * 起算量取产出炉渣中的 Fe、Si、Ca，再叠加熔剂自身带入炉渣的 Fe、SiO₂、CaO，
- * 使 M_Fe_s / M_SiO2_s = targetFeSiO2、M_CaO_s / M_SiO2_s = targetCaOSiO2。
- */
+/** 按产出炉渣 Fe/SiO₂ 单指标求解当前熔剂行投料量。 */
 export function solveCopperSolvents({
   rawMaterials,
   targetFeSiO2,
-  targetCaOSiO2,
   solvents = DEFAULT_COPPER_SOLVENTS,
+  productModel,
 }: {
   rawMaterials: CopperMaterialColumn[]
   targetFeSiO2: number
-  targetCaOSiO2: number
+  targetCaOSiO2?: number
   solvents?: CopperSolvent[]
+  productModel?: CopperProductModel
 }): CopperSolventSolution {
-  if (solvents.length < 2) {
+  if (solvents.length === 0) {
     return {
       valid: false,
       solventWeights: {},
       feSiO2: 0,
       caOSiO2: 0,
-      message: '渣型迭代需要 2 个熔剂，请在配料总表添加熔剂行',
+      message: '渣型迭代需要至少 1 个熔剂，请在配料总表添加熔剂行',
     }
   }
-  const [lime, ironOre] = solvents
-  if (!lime || !ironOre) {
-    return { valid: false, solventWeights: {}, feSiO2: 0, caOSiO2: 0, message: '缺少熔剂配置' }
+  if (!Number.isFinite(targetFeSiO2) || targetFeSiO2 <= 0) {
+    return { valid: false, solventWeights: {}, feSiO2: 0, caOSiO2: 0, message: 'Fe/SiO₂ 目标值须为正数' }
   }
   const blend = calculateWeightedComposition(rawMaterials)
-  const baseSlag = calculateCopperProducts(blend).products.slag
+  const baseSlag = calculateCopperProducts(blend, productModel).products.slag
   const fe0 = baseSlag.elementWeights['Fe(铁)'] ?? 0
   const sio20 = baseSlag.elementWeights['SiO₂(二氧化硅)'] ?? 0
   const cao0 = baseSlag.elementWeights['CaO(氧化钙)'] ?? 0
+  const baseFeSiO2 = sio20 > 0 ? fe0 / sio20 : 0
+  const baseCaOSiO2 = sio20 > 0 ? cao0 / sio20 : 0
+  const zeroWeights = Object.fromEntries(solvents.map((solvent) => [solvent.name, 0]))
 
-  const iron = ironOre.composition
-  const limeComp = lime.composition
-  const oreVec = solventCompositionSlagBasisPerMetricTon(iron)
-  const limeVec = solventCompositionSlagBasisPerMetricTon(limeComp)
-
-  const a11 = oreVec.fe - targetFeSiO2 * oreVec.sio2
-  const a12 = limeVec.fe - targetFeSiO2 * limeVec.sio2
-  const a21 = oreVec.cao - targetCaOSiO2 * oreVec.sio2
-  const a22 = limeVec.cao - targetCaOSiO2 * limeVec.sio2
-  const b1 = targetFeSiO2 * sio20 - fe0
-  const b2 = targetCaOSiO2 * sio20 - cao0
-  const det = a11 * a22 - a12 * a21
-  if (Math.abs(det) < 1e-10) {
-    return { valid: false, solventWeights: {}, feSiO2: 0, caOSiO2: 0, message: '熔剂方程组不可解' }
-  }
-
-  const ironOreWeight = (b1 * a22 - a12 * b2) / det
-  const limeWeight = (a11 * b2 - b1 * a21) / det
-
-  const finish = (ironTon: number, limeTon: number, message?: string): CopperSolventSolution => {
-    const solvedIronOre = Math.max(0, ironTon)
-    const solvedLime = Math.max(0, limeTon)
-    const totalFe = fe0 + solvedIronOre * oreVec.fe + solvedLime * limeVec.fe
-    const totalSio2 = sio20 + solvedIronOre * oreVec.sio2 + solvedLime * limeVec.sio2
-    const totalCao = cao0 + solvedIronOre * oreVec.cao + solvedLime * limeVec.cao
+  const finish = (solvent: CopperSolvent | null, solventTon: number, message?: string): CopperSolventSolution => {
+    const weights = { ...zeroWeights }
+    if (solvent) weights[solvent.name] = Math.max(0, solventTon)
+    let totalFe = fe0
+    let totalSio2 = sio20
+    let totalCao = cao0
+    for (const item of solvents) {
+      const weight = weights[item.name] ?? 0
+      const vec = solventCompositionSlagBasisPerMetricTon(item.composition)
+      totalFe += weight * vec.fe
+      totalSio2 += weight * vec.sio2
+      totalCao += weight * vec.cao
+    }
     return {
       valid: true,
-      solventWeights: { [lime.name]: solvedLime, [ironOre.name]: solvedIronOre },
+      solventWeights: weights,
       feSiO2: totalSio2 > 0 ? totalFe / totalSio2 : 0,
       caOSiO2: totalSio2 > 0 ? totalCao / totalSio2 : 0,
       targetScope: 'slag',
@@ -1089,396 +1280,32 @@ export function solveCopperSolvents({
     }
   }
 
-  if (ironOreWeight >= -1e-8 && limeWeight >= -1e-8) {
-    return finish(ironOreWeight, limeWeight)
+  if (Math.abs(baseFeSiO2 - targetFeSiO2) <= 1e-8) {
+    return finish(null, 0)
   }
 
-  // 边界：克莱姆解出现负铁矿石且石灰非负时，常见于产出炉渣已接近目标 Fe/SiO₂、仅需加石灰调 CaO/SiO₂
-  if (ironOreWeight < 0 && limeWeight >= -1e-8) {
-    const denLimeOnly = limeVec.cao - targetCaOSiO2 * limeVec.sio2
-    if (Math.abs(denLimeOnly) > 1e-12) {
-      const yOnly = (targetCaOSiO2 * sio20 - cao0) / denLimeOnly
-      if (yOnly >= -1e-8) {
-        const achievedFe = sio20 > 0 ? fe0 / sio20 : 0
-        const hint =
-          Math.abs(achievedFe - targetFeSiO2) > 0.08
-            ? `已取铁矿石 0 t/h，仅用石灰满足 CaO/SiO₂；当前产出炉渣 Fe/SiO₂ ≈ ${achievedFe.toFixed(3)}，与目标 ${targetFeSiO2} 有偏差，可微调目标或原料。`
-            : undefined
-        return finish(0, yOnly, hint)
-      }
-    }
-  }
+  const candidates = solvents
+    .map((solvent) => {
+      const vec = solventCompositionSlagBasisPerMetricTon(solvent.composition)
+      const denominator = vec.fe - targetFeSiO2 * vec.sio2
+      if (Math.abs(denominator) <= 1e-12) return null
+      const weight = (targetFeSiO2 * sio20 - fe0) / denominator
+      if (!Number.isFinite(weight) || weight < -1e-8) return null
+      return { solvent, weight: Math.max(0, weight) }
+    })
+    .filter((item): item is { solvent: CopperSolvent; weight: number } => item != null)
+    .sort((a, b) => a.weight - b.weight)
 
-  if (limeWeight < 0 && ironOreWeight >= -1e-8) {
-    const denOreOnly = oreVec.fe - targetFeSiO2 * oreVec.sio2
-    if (Math.abs(denOreOnly) > 1e-12) {
-      const xOnly = (targetFeSiO2 * sio20 - fe0) / denOreOnly
-      if (xOnly >= -1e-8) {
-        const achievedCa = sio20 > 0 ? cao0 / sio20 : 0
-        const hint =
-          Math.abs(achievedCa - targetCaOSiO2) > 0.05
-            ? `已取石灰 0 t/h，仅用铁矿石满足 Fe/SiO₂；当前产出炉渣 CaO/SiO₂ ≈ ${achievedCa.toFixed(3)}，与目标 ${targetCaOSiO2} 有偏差。`
-            : undefined
-        return finish(xOnly, 0, hint)
-      }
-    }
+  const best = candidates[0]
+  if (best) {
+    return finish(best.solvent, best.weight)
   }
 
   return {
     valid: false,
-    solventWeights: { [lime.name]: Math.max(0, limeWeight), [ironOre.name]: Math.max(0, ironOreWeight) },
-    feSiO2: 0,
-    caOSiO2: 0,
-    message: '当前目标渣型需要负熔剂量，请调整目标范围或熔剂成分',
-  }
-}
-
-function buildSolventConfigsFromColumns(solventColumns: CopperMaterialColumn[]): CopperSolvent[] {
-  return solventColumns.map((column, index) => {
-    const fallback = DEFAULT_COPPER_SOLVENTS[index]
-    return {
-      id: fallback?.id ?? column.id,
-      name: column.name as '石灰' | '铁矿石',
-      unitPrice: column.unitPrice ?? fallback?.unitPrice ?? 0,
-      composition: elementRatiosToSolventComposition(column.ratios),
-    }
-  })
-}
-
-function withSolvedSolventWeights(
-  solventColumns: CopperMaterialColumn[],
-  solution: CopperSolventSolution | null
-): CopperMaterialColumn[] {
-  return solventColumns.map((column) => ({
-    ...column,
-    weight: solution?.valid ? solution.solventWeights[column.name] ?? 0 : column.weight,
-    ratios: { ...column.ratios },
-  }))
-}
-
-function emptyOxygenAirCalculation(settings: CopperOxygenAirSettings): CopperOxygenAirCalculation {
-  const oxygenSupplyCoefficient = Math.max(0, settings.oxygenSupplyCoefficient ?? DEFAULT_OXYGEN_SUPPLY_COEFFICIENT)
-  return {
-    phaseOxygenKmolh: 0,
-    fuelOxygenKmolh: 0,
-    theoreticalOxygenKmolh: 0,
-    actualOxygenKmolh: 0,
-    airVolumeNm3h: 0,
-    oxygenMass: 0,
-    nitrogenMass: 0,
-    airWeight: 0,
-    oxygenMassPct: 0,
-    nitrogenMassPct: 0,
-    oxygenSupplyCoefficient,
-  }
-}
-
-function phaseOxygenDemandKmolh(
-  rawMaterials: CopperMaterialColumn[],
-  phaseInputsByMaterialId: Record<string, Record<string, CopperPhaseInput>> = {}
-) {
-  return rawMaterials.reduce((sum, material) => {
-    const phaseContents = derivePhaseContentsFromElements(material.ratios, phaseInputsByMaterialId[material.id] ?? {})
-    const phaseMass = (phaseKey: CopperPhaseAssignmentKey) => material.weight * ((phaseContents[phaseKey] ?? 0) / 100)
-    const cu2s = (phaseMass('Cu2S') * 1000) / MOLAR_MASS_KG_PER_KMOL.Cu2S
-    const fes = (phaseMass('FeS') * 1000) / MOLAR_MASS_KG_PER_KMOL.FeS
-    const sulfur = (phaseMass('S') * 1000) / MOLAR_MASS_KG_PER_KMOL.S
-    const carbon = (phaseMass('C') * 1000) / MOLAR_MASS_KG_PER_KMOL.C
-    return (
-      sum +
-      cu2s * OXYGEN_DEMAND_COEFFICIENTS.Cu2S +
-      fes * OXYGEN_DEMAND_COEFFICIENTS.FeS +
-      sulfur * OXYGEN_DEMAND_COEFFICIENTS.S +
-      carbon * OXYGEN_DEMAND_COEFFICIENTS.C
-    )
-  }, 0)
-}
-
-function fuelOxygenDemandKmolh(fuel: CopperFuelMaterial) {
-  const fuelWeight = Math.max(0, fuel.weight)
-  const carbon = fuelWeight * ((fuel.ratios['C (碳)'] ?? 0) / 100)
-  const sulfur = fuelWeight * ((fuel.ratios['S (硫)'] ?? 0) / 100)
-  const o2 = fuelWeight * ((fuel.ratios['O(氧)'] ?? 0) / 100)
-  const carbonDemand = (carbon * 1000) / MOLAR_MASS_KG_PER_KMOL.C
-  const sulfurDemand = (sulfur * 1000) / MOLAR_MASS_KG_PER_KMOL.S
-  const oxygenCredit = (o2 * 1000) / MOLAR_MASS_KG_PER_KMOL.O2
-  return Math.max(0, carbonDemand + sulfurDemand - oxygenCredit)
-}
-
-function solveOxygenAirCalculation({
-  rawMaterials,
-  fuel,
-  settings,
-  phaseInputsByMaterialId,
-}: {
-  rawMaterials: CopperMaterialColumn[]
-  fuel: CopperFuelMaterial
-  settings: CopperOxygenAirSettings
-  phaseInputsByMaterialId?: Record<string, Record<string, CopperPhaseInput>>
-}): CopperOxygenAirCalculation {
-  const oxygen = Math.max(0, settings.oxygenPct)
-  const nitrogen = Math.max(0, settings.nitrogenPct)
-  const total = oxygen + nitrogen
-  if (total <= 0) return emptyOxygenAirCalculation(settings)
-
-  const oxygenMoleFraction = oxygen / total
-  if (oxygenMoleFraction <= 0) return emptyOxygenAirCalculation(settings)
-
-  const oxygenSupplyCoefficient = Math.max(0, settings.oxygenSupplyCoefficient ?? DEFAULT_OXYGEN_SUPPLY_COEFFICIENT)
-  const phaseOxygenKmolh = phaseOxygenDemandKmolh(rawMaterials, phaseInputsByMaterialId)
-  const fuelOxygenKmolh = fuelOxygenDemandKmolh(fuel)
-  const theoreticalOxygenKmolh = phaseOxygenKmolh + fuelOxygenKmolh
-  const actualOxygenKmolh = theoreticalOxygenKmolh * oxygenSupplyCoefficient
-  const totalAirKmolh = actualOxygenKmolh / oxygenMoleFraction
-  const nitrogenKmolh = Math.max(0, totalAirKmolh - actualOxygenKmolh)
-  const oxygenMass = (actualOxygenKmolh * MOLAR_MASS_KG_PER_KMOL.O2) / 1000
-  const nitrogenMass = (nitrogenKmolh * MOLAR_MASS_KG_PER_KMOL.N2) / 1000
-  const airWeight = oxygenMass + nitrogenMass
-  return {
-    phaseOxygenKmolh,
-    fuelOxygenKmolh,
-    theoreticalOxygenKmolh,
-    actualOxygenKmolh,
-    airVolumeNm3h: totalAirKmolh * NORMAL_M3_PER_KMOL,
-    oxygenMass,
-    nitrogenMass,
-    airWeight,
-    oxygenMassPct: airWeight > 0 ? (oxygenMass / airWeight) * 100 : 0,
-    nitrogenMassPct: airWeight > 0 ? (nitrogenMass / airWeight) * 100 : 0,
-    oxygenSupplyCoefficient,
-  }
-}
-
-function emptyIterativeBalanceResult(
-  input: {
-    rawMaterials: CopperMaterialColumn[]
-    solventColumns: CopperMaterialColumn[]
-    fuel: CopperFuelMaterial
-    heatSettings: CopperIterativeHeatSettings
-    oxygenAirSettings?: CopperOxygenAirSettings
-    phaseInputsByMaterialId?: Record<string, Record<string, CopperPhaseInput>>
-  },
-  message: string
-): CopperIterativeBalanceResult {
-  const oxygenAirSettings = input.oxygenAirSettings ?? { oxygenPct: 70, nitrogenPct: 30 }
-  const finalSolventColumns = input.solventColumns.map((column) => ({ ...column, ratios: { ...column.ratios } }))
-  const finalFuel = { ...input.fuel, ratios: { ...input.fuel.ratios } }
-  const finalOxygenAirCalculation = solveOxygenAirCalculation({
-    rawMaterials: input.rawMaterials,
-    fuel: finalFuel,
-    settings: oxygenAirSettings,
-    phaseInputsByMaterialId: input.phaseInputsByMaterialId,
-  })
-  const finalOxygenAirColumn = createOxygenAirColumn(finalOxygenAirCalculation.airWeight, oxygenAirSettings)
-  const finalFeedWithoutFuel = calculateWeightedComposition([...input.rawMaterials, ...finalSolventColumns, finalOxygenAirColumn])
-  const finalProducts = calculateCopperProducts(calculateWeightedComposition([...input.rawMaterials, ...finalSolventColumns, finalFuel, finalOxygenAirColumn]))
-  const finalHeatBalance = calculateCopperHeatBalance({
-    feed: finalFeedWithoutFuel,
-    products: calculateCopperProducts(finalFeedWithoutFuel),
-    fuel: finalFuel,
-    temperatures: {
-      feed: input.heatSettings.feedTemperature,
-      matte: input.heatSettings.matteTemperature,
-      slag: input.heatSettings.slagTemperature,
-      gas: input.heatSettings.gasTemperature,
-      dust: input.heatSettings.dustTemperature,
-    },
-    heatLossMJh: input.heatSettings.heatLossMJh,
-    otherHeatMJh: input.heatSettings.otherHeatMJh,
-  })
-  return {
-    valid: false,
-    converged: false,
-    message,
-    iterations: [],
-    finalSolventSolution: null,
-    finalSolventColumns,
-    finalFuel,
-    finalOxygenAirColumn,
-    finalOxygenAirCalculation,
-    finalFeedWithoutFuel,
-    finalFeed: calculateWeightedComposition([...input.rawMaterials, ...finalSolventColumns, finalFuel, finalOxygenAirColumn]),
-    finalProducts,
-    finalHeatBalance,
-  }
-}
-
-export function calculateCopperIterativeBalance({
-  rawMaterials,
-  solventColumns,
-  fuel,
-  targetFeSiO2,
-  targetCaOSiO2,
-  heatSettings,
-  oxygenAirSettings = { oxygenPct: 70, nitrogenPct: 30 },
-  phaseInputsByMaterialId = {},
-  maxIterations = 12,
-  tolerance = 0.001,
-}: {
-  rawMaterials: CopperMaterialColumn[]
-  solventColumns: CopperMaterialColumn[]
-  fuel: CopperFuelMaterial
-  targetFeSiO2: number
-  targetCaOSiO2: number
-  heatSettings: CopperIterativeHeatSettings
-  oxygenAirSettings?: CopperOxygenAirSettings
-  phaseInputsByMaterialId?: Record<string, Record<string, CopperPhaseInput>>
-  maxIterations?: number
-  tolerance?: number
-}): CopperIterativeBalanceResult {
-  if (rawMaterials.length === 0 || rawMaterials.every((material) => material.weight <= 0)) {
-    return emptyIterativeBalanceResult({ rawMaterials, solventColumns, fuel, heatSettings, oxygenAirSettings, phaseInputsByMaterialId }, '请先输入有效的原料投料量。')
-  }
-
-  const solvents = buildSolventConfigsFromColumns(solventColumns)
-  let previousSolventColumns = solventColumns.map((column) => ({ ...column, ratios: { ...column.ratios } }))
-  let previousFuelWeight = Math.max(0, fuel.weight)
-  let finalSolventSolution: CopperSolventSolution | null = null
-  let finalSolventColumns = previousSolventColumns
-  let finalFuel = { ...fuel, weight: previousFuelWeight, ratios: { ...fuel.ratios } }
-  let finalOxygenAirColumn = createOxygenAirColumn(0, oxygenAirSettings)
-  let finalOxygenAirCalculation = emptyOxygenAirCalculation(oxygenAirSettings)
-  let finalFeedWithoutFuel = calculateWeightedComposition([...rawMaterials, ...finalSolventColumns, finalOxygenAirColumn])
-  let finalHeatBalance = calculateCopperHeatBalance({
-    feed: finalFeedWithoutFuel,
-    products: calculateCopperProducts(finalFeedWithoutFuel),
-    fuel: finalFuel,
-    temperatures: {
-      feed: heatSettings.feedTemperature,
-      matte: heatSettings.matteTemperature,
-      slag: heatSettings.slagTemperature,
-      gas: heatSettings.gasTemperature,
-      dust: heatSettings.dustTemperature,
-    },
-    heatLossMJh: heatSettings.heatLossMJh,
-    otherHeatMJh: heatSettings.otherHeatMJh,
-  })
-  let finalFeed = calculateWeightedComposition([...rawMaterials, ...finalSolventColumns, finalFuel, finalOxygenAirColumn])
-  let finalProducts = calculateCopperProducts(finalFeed)
-  const iterations: CopperIterationTrace[] = []
-
-  for (let iteration = 1; iteration <= maxIterations; iteration += 1) {
-    const baseForSolvent = [...rawMaterials, { ...finalFuel, weight: previousFuelWeight }]
-    const solution = solveCopperSolvents({
-      rawMaterials: baseForSolvent,
-      targetFeSiO2,
-      targetCaOSiO2,
-      solvents,
-    })
-    if (!solution.valid) {
-      return {
-        valid: false,
-        converged: false,
-        message: solution.message ?? '迭代计算中熔剂未能求解。',
-        iterations,
-        finalSolventSolution: solution,
-        finalSolventColumns,
-        finalFuel,
-        finalOxygenAirColumn,
-        finalOxygenAirCalculation,
-        finalFeedWithoutFuel,
-        finalFeed,
-        finalProducts,
-        finalHeatBalance,
-      }
-    }
-
-    const nextSolventColumns = withSolvedSolventWeights(solventColumns, solution)
-    const feedWithoutFuel = calculateWeightedComposition([...rawMaterials, ...nextSolventColumns])
-    const heatProducts = calculateCopperProducts(feedWithoutFuel)
-    const heatFuel = { ...fuel, weight: previousFuelWeight, ratios: { ...fuel.ratios } }
-    const heatBalance = calculateCopperHeatBalance({
-      feed: feedWithoutFuel,
-      products: heatProducts,
-      fuel: heatFuel,
-      temperatures: {
-        feed: heatSettings.feedTemperature,
-        matte: heatSettings.matteTemperature,
-        slag: heatSettings.slagTemperature,
-        gas: heatSettings.gasTemperature,
-        dust: heatSettings.dustTemperature,
-      },
-      heatLossMJh: heatSettings.heatLossMJh,
-      otherHeatMJh: heatSettings.otherHeatMJh,
-    })
-    const nextFuel = {
-      ...fuel,
-      weight: heatBalance.requiredFuelWeight,
-      ratios: { ...fuel.ratios },
-    }
-    const nextOxygenAirCalculation = solveOxygenAirCalculation({
-      rawMaterials,
-      fuel: nextFuel,
-      settings: oxygenAirSettings,
-      phaseInputsByMaterialId,
-    })
-    const nextOxygenAirColumn = createOxygenAirColumn(nextOxygenAirCalculation.airWeight, oxygenAirSettings)
-    const feed = calculateWeightedComposition([...rawMaterials, ...nextSolventColumns, nextFuel, nextOxygenAirColumn])
-    const products = calculateCopperProducts(feed)
-    const solventDelta = nextSolventColumns.reduce((max, column) => {
-      const prev = previousSolventColumns.find((item) => item.id === column.id)?.weight ?? 0
-      return Math.max(max, Math.abs(column.weight - prev))
-    }, 0)
-    const fuelDelta = Math.abs(nextFuel.weight - previousFuelWeight)
-    const oxygenAirDelta = Math.abs(nextOxygenAirColumn.weight - finalOxygenAirColumn.weight)
-    const maxDelta = Math.max(solventDelta, fuelDelta, oxygenAirDelta)
-
-    iterations.push({
-      iteration,
-      limeWeight: solution.solventWeights['石灰'] ?? 0,
-      ironOreWeight: solution.solventWeights['铁矿石'] ?? 0,
-      fuelWeight: nextFuel.weight,
-      oxygenAirWeight: nextOxygenAirColumn.weight,
-      feSiO2: solution.feSiO2,
-      caOSiO2: solution.caOSiO2,
-      totalProductMass: products.totalProductMass,
-      maxDelta,
-    })
-
-    finalSolventSolution = solution
-    finalSolventColumns = nextSolventColumns
-    finalFuel = nextFuel
-    finalOxygenAirColumn = nextOxygenAirColumn
-    finalOxygenAirCalculation = nextOxygenAirCalculation
-    finalFeedWithoutFuel = calculateWeightedComposition([...rawMaterials, ...nextSolventColumns, nextOxygenAirColumn])
-    finalHeatBalance = heatBalance
-    finalFeed = feed
-    finalProducts = products
-
-    if (maxDelta <= tolerance) {
-      return {
-        valid: true,
-        converged: true,
-        iterations,
-        finalSolventSolution,
-        finalSolventColumns,
-        finalFuel,
-        finalOxygenAirColumn,
-        finalOxygenAirCalculation,
-        finalFeedWithoutFuel,
-        finalFeed,
-        finalProducts,
-        finalHeatBalance,
-      }
-    }
-
-    previousSolventColumns = nextSolventColumns
-    previousFuelWeight = nextFuel.weight
-  }
-
-  return {
-    valid: true,
-    converged: false,
-    message: `已达到最大迭代次数 ${maxIterations}，请复核收敛残差。`,
-    iterations,
-    finalSolventSolution,
-    finalSolventColumns,
-    finalFuel,
-    finalOxygenAirColumn,
-    finalOxygenAirCalculation,
-    finalFeedWithoutFuel,
-    finalFeed,
-    finalProducts,
-    finalHeatBalance,
+    solventWeights: zeroWeights,
+    feSiO2: baseFeSiO2,
+    caOSiO2: baseCaOSiO2,
+    message: `当前熔剂无法将产出炉渣 Fe/SiO₂ 从 ${baseFeSiO2.toFixed(3)} 调整至 ${targetFeSiO2}，请更换或添加含 SiO₂/Fe 的熔剂。`,
   }
 }
