@@ -39,6 +39,7 @@ export function BatchTableNumericReadonly({
   value,
   className,
   helpTitle,
+  helpTitleExclusive = false,
   applicable = true,
   emptyDisplay = '—',
 }: {
@@ -46,6 +47,7 @@ export function BatchTableNumericReadonly({
   value: BatchTableNumericValue
   className?: string
   helpTitle?: string
+  helpTitleExclusive?: boolean
   applicable?: boolean
   emptyDisplay?: string
 }) {
@@ -58,7 +60,9 @@ export function BatchTableNumericReadonly({
     )
   }
   const display = formatBatchTableDisplay(text)
-  const title = batchTableNumericTitle(text, helpTitle)
+  const title = helpTitleExclusive
+    ? helpTitle?.trim() || undefined
+    : batchTableNumericTitle(text, helpTitle)
   return (
     <span
       className={mergeClass('block w-full font-mono tabular-nums', className)}

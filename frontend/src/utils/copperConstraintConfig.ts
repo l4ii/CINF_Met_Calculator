@@ -1,5 +1,4 @@
 import rawConstraints from '../config/copperOxySideBlowConstraints.json' with { type: 'json' }
-import type { CopperElementKey } from './copperWorkflowCalc.ts'
 
 export type OxySideBlowProductKey =
   | 'smeltingSlag'
@@ -35,7 +34,38 @@ export interface CustomConstraintEntry {
 
 export interface OxySideBlowProductDef {
   name: string
+  /** 产物基础白名单（用户输入）；有效白名单 = 此项 ∪ 该产物在 elementDistributions 中的 W%/D% 元素 */
+  allowedElements: ConstraintElementKey[]
   phases: string[]
+}
+
+/** 占位元素键：白名单可列出但求解器跳过（无化验/入炉映射） */
+export const CONSTRAINT_PLACEHOLDER_ELEMENTS = new Set<ConstraintElementKey>(['Na(钠)'])
+
+/** 各产物在 W%/D% 约束中出现的元素 */
+export function wdConstraintElementsByProduct(
+  config: OxySideBlowConstraintConfig
+): Record<OxySideBlowProductKey, Set<ConstraintElementKey>> {
+  const map = {} as Record<OxySideBlowProductKey, Set<ConstraintElementKey>>
+  for (const pk of OXY_SIDE_BLOW_PRODUCT_KEYS) {
+    map[pk] = new Set()
+  }
+  for (const entry of config.elementDistributions) {
+    for (const rule of entry.rules) {
+      map[rule.product].add(entry.element)
+    }
+  }
+  return map
+}
+
+/** 产物有效元素白名单 = 基础 allowedElements ∪ W%/D% 约束涉及元素 */
+export function resolveProductEffectiveAllowedElements(
+  config: OxySideBlowConstraintConfig,
+  productKey: OxySideBlowProductKey
+): ConstraintElementKey[] {
+  const base = config.products[productKey].allowedElements ?? []
+  const wd = wdConstraintElementsByProduct(config)[productKey]
+  return [...new Set([...base, ...wd])]
 }
 
 export interface OxySideBlowConstraintConfig {

@@ -3,8 +3,10 @@ import { CONCENTRATE_DEFAULT_PHASE_FORMULAS, concentratePhaseFractionsForFormula
 import {
   COPPER_PHASE_OXYGEN_FACTORS,
   COPPER_PHASE_SULFUR_FACTORS,
+  normalizeCopperRatios,
   type CopperElementKey,
   type CopperPhaseAssignmentKey,
+  type CopperRatios,
 } from './copperWorkflowCalc.ts'
 import {
   INPUT_PHASE_DISPLAY,
@@ -46,6 +48,40 @@ export const DEFAULT_BUILTIN_PHASE_ORDER: CopperPhaseAssignmentKey[] = [
   ),
 ]
 
+export const SILICA_DEFAULT_PHASE_FORMULAS = ['SiO2', 'CaO', 'MgO', 'Fe', 'Other'] as const
+
+/** 煤中 H2O 计入含水行，不作为物相列参与干基 w% 合计。 */
+export const COAL_DEFAULT_PHASE_FORMULAS = [
+  'C',
+  'H',
+  'S',
+  'N',
+  'O',
+  'Fe2O3',
+  'SiO2',
+  'CaO',
+  'MgO',
+  'Other',
+] as const
+
+const ELEMENT_COMPONENT_PHASE_FRACTIONS: Partial<Record<string, Partial<Record<CopperElementKey, number>>>> = {
+  H: { 'H(氢)': 1 },
+  N: { 'N(氮)': 1 },
+  O: { 'O(氧)': 1 },
+}
+
+const FORMULA_TO_ASSAY_RATIO_KEY: Partial<Record<string, CopperElementKey>> = {
+  C: 'C (碳)',
+  H: 'H(氢)',
+  S: 'S (硫)',
+  N: 'N(氮)',
+  O: 'O(氧)',
+  SiO2: 'SiO₂(二氧化硅)',
+  CaO: 'CaO(氧化钙)',
+  MgO: 'MgO(氧化镁)',
+  Al2O3: 'Al₂O₃(三氧化二铝)',
+}
+
 export function createOtherMaterialPhaseRow(): MaterialPhaseAssistRow {
   return {
     id: 'Other',
@@ -53,6 +89,18 @@ export function createOtherMaterialPhaseRow(): MaterialPhaseAssistRow {
     formula: 'Other',
     displayLabel: 'Other',
     fractions: { 'Other(其他)': 1 },
+  }
+}
+
+function createElementComponentPhaseRow(formula: string): MaterialPhaseAssistRow | null {
+  const fractions = ELEMENT_COMPONENT_PHASE_FRACTIONS[formula]
+  if (!fractions) return null
+  return {
+    id: `custom:${formula}`,
+    kind: 'custom',
+    formula,
+    displayLabel: phaseStorageKeyToDisplayLabel(formula),
+    fractions,
   }
 }
 
@@ -76,6 +124,8 @@ export function createMaterialPhaseRowsFromFormulas(formulas: string[]): Materia
   const rows = formulas.flatMap((formula): MaterialPhaseAssistRow[] => {
     if (formula.trim().toLowerCase() === 'other') return [createOtherMaterialPhaseRow()]
     const trimmed = formula.trim()
+    const elementComponentRow = createElementComponentPhaseRow(trimmed)
+    if (elementComponentRow) return [elementComponentRow]
     const builtinKey = COPPER_BUILTIN_PHASE_DISPLAY_ORDER.find((key) => key.toLowerCase() === trimmed.toLowerCase())
     if (builtinKey) {
       return [
@@ -120,12 +170,37 @@ export function createConcentrateMaterialPhaseRows(): MaterialPhaseAssistRow[] {
   return createMaterialPhaseRowsFromFormulas([...CONCENTRATE_DEFAULT_PHASE_FORMULAS])
 }
 
+export function createSilicaMaterialPhaseRows(): MaterialPhaseAssistRow[] {
+  return createMaterialPhaseRowsFromFormulas([...SILICA_DEFAULT_PHASE_FORMULAS])
+}
+
+export function createCoalMaterialPhaseRows(): MaterialPhaseAssistRow[] {
+  return createMaterialPhaseRowsFromFormulas([...COAL_DEFAULT_PHASE_FORMULAS])
+}
+
+export function createDefaultMaterialPhaseRowsForMaterial(
+  material?: Pick<CopperMaterialColumn, 'id' | 'name' | 'kind'>
+): MaterialPhaseAssistRow[] {
+  const name = material?.name.trim() ?? ''
+  const isSilica = material?.id === 'silica' || material?.id === 'solvent-silica' || name.includes('石英石')
+  if (material?.kind === 'solvent' && isSilica) {
+    return createSilicaMaterialPhaseRows()
+  }
+  if (material?.kind === 'fuel') {
+    return createCoalMaterialPhaseRows()
+  }
+  return createDefaultMaterialPhaseRows()
+}
+
 function stripLegacyWaterRows(rows: MaterialPhaseAssistRow[]): MaterialPhaseAssistRow[] {
   return rows.filter((row) => row.id !== 'H2O' && row.formula !== 'H2O')
 }
 
-export function ensureMaterialPhaseRows(rows: MaterialPhaseAssistRow[] | undefined): MaterialPhaseAssistRow[] {
-  if (!rows || rows.length === 0) return createDefaultMaterialPhaseRows()
+export function ensureMaterialPhaseRows(
+  rows: MaterialPhaseAssistRow[] | undefined,
+  material?: Pick<CopperMaterialColumn, 'id' | 'name' | 'kind'>
+): MaterialPhaseAssistRow[] {
+  if (!rows || rows.length === 0) return createDefaultMaterialPhaseRowsForMaterial(material)
   let next = stripLegacyWaterRows([...rows])
   if (!next.some((row) => row.kind === 'other' || row.id === 'Other')) {
     next = [...next, createOtherMaterialPhaseRow()]
@@ -250,6 +325,45 @@ export function mapPhaseContentsToTableKeys(
     const key = materialPhaseRowTableKey(row)
     if (!key) continue
     out[key] = (out[key] ?? 0) + pct
+  }
+  return out
+}
+
+function componentPercentForFormula(formula: string, ratios: Record<CopperElementKey, number>): number {
+  if (formula === 'Fe') {
+    return Math.max(0, ratios['Fe(铁)'] ?? 0) + Math.max(0, ratios['FeO(氧化亚铁)'] ?? 0)
+  }
+  if (formula === 'Fe2O3') {
+    return Math.max(0, ratios['FeO(氧化亚铁)'] ?? 0) || Math.max(0, ratios['Fe(铁)'] ?? 0)
+  }
+  const ratioKey = FORMULA_TO_ASSAY_RATIO_KEY[formula]
+  return ratioKey ? Math.max(0, ratios[ratioKey] ?? 0) : 0
+}
+
+export function buildDefaultMaterialPhaseContentsByKey(
+  ratios: CopperRatios,
+  rows: MaterialPhaseAssistRow[]
+): Record<string, number> {
+  const normalized = normalizeCopperRatios(ratios)
+  const out: Record<string, number> = {}
+  let assigned = 0
+  const otherKeys: string[] = []
+
+  for (const row of ensureMaterialPhaseRows(rows)) {
+    const key = materialPhaseRowTableKey(row)
+    if (!key) continue
+    if (row.kind === 'other' || key === 'Other') {
+      otherKeys.push(key)
+      continue
+    }
+    const pct = componentPercentForFormula(row.formula || key, normalized)
+    out[key] = pct
+    assigned += pct
+  }
+
+  const other = Math.max(0, 100 - assigned)
+  for (const key of otherKeys.length > 0 ? otherKeys : ['Other']) {
+    out[key] = other
   }
   return out
 }

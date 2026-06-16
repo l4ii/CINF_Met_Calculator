@@ -1,4 +1,6 @@
 /** 配料总表固定列宽（px） */
+import { batchTableSampleText } from './batchTableNumeric.ts'
+
 export const BATCH_TABLE_CATEGORY_COL_WIDTH = 56
 
 /** 数据列最小/最大宽度（按表头与单元格内容估算） */
@@ -48,6 +50,8 @@ export const BATCH_TABLE_ASSIST_PHASE_COL_MIN = 44
 export const BATCH_TABLE_ASSIST_ADD_COL_MIN = 32
 /** 物相成分辅助表最少显示列数（含占位空列） */
 export const BATCH_PHASE_ASSIST_MIN_DISPLAY_COLUMNS = 13
+/** 物相成分辅助表计算前最少占位元素行数（左侧不显示元素名） */
+export const BATCH_PHASE_ASSIST_MIN_DISPLAY_ELEMENT_ROWS = 5
 
 /** 添加原料弹窗固定列宽 */
 export const LIBRARY_DIALOG_NAME_COL_WIDTH = 160
@@ -70,9 +74,18 @@ export type FitColWidthsOptions = {
 }
 
 /** 按表头与样本字符串估算单列宽度 */
-export function batchTableDataColWidth(header: string, samples: string[], sparse = false): number {
+export function batchTableDataColWidth(
+  header: string,
+  samples: Array<string | number>,
+  sparse = false
+): number {
   if (sparse) return BATCH_TABLE_SPARSE_COL_WIDTH
-  const texts = [header, ...samples.filter((s) => s && s !== '—')]
+  const texts = [
+    header,
+    ...samples
+      .map((s) => batchTableSampleText(s))
+      .filter((s) => s && s !== '—'),
+  ]
   const maxGlyphs = Math.max(2, ...texts.map((t) => Array.from(t).length))
   return Math.max(
     BATCH_TABLE_DATA_COL_MIN,
@@ -81,10 +94,10 @@ export function batchTableDataColWidth(header: string, samples: string[], sparse
 }
 
 /** 样本是否可视为无数据（全 0 / 空 / —） */
-export function isSparseDataColumn(samples: string[]): boolean {
+export function isSparseDataColumn(samples: Array<string | number>): boolean {
   if (samples.length === 0) return true
   return samples.every((s) => {
-    const t = s.trim()
+    const t = batchTableSampleText(s)
     if (!t || t === '—') return true
     const n = Number.parseFloat(t)
     return Number.isFinite(n) && Math.abs(n) < 5e-5
@@ -243,7 +256,7 @@ export type BatchElementColumnWidthMeta = {
 export function batchElementColumnWidthMeta(
   elementKeys: readonly string[],
   headerLabel: (element: string) => string,
-  samplesForElement: (element: string) => string[]
+  samplesForElement: (element: string) => Array<string | number>
 ): BatchElementColumnWidthMeta[] {
   return elementKeys.map((element) => {
     const samples = samplesForElement(element)
@@ -389,7 +402,8 @@ export function fitBatchTableToViewport(
 
   const nameIndex = options.nameColIndex
   if (excess > 0 && nameIndex != null && nameIndex >= 0 && nameIndex < widths.length) {
-    const nameShrink = Math.min(excess, widths[nameIndex] - BATCH_TABLE_NAME_COL_MIN)
+    const nameAbsMin = Math.max(0, absMins[nameIndex] ?? BATCH_TABLE_NAME_COL_MIN)
+    const nameShrink = Math.min(excess, widths[nameIndex] - nameAbsMin)
     if (nameShrink > 0) {
       widths[nameIndex] -= nameShrink
       excess -= nameShrink
@@ -629,4 +643,71 @@ export function oxyProductToneClass(dark: boolean, key: OxyProductToneKey): stri
 /** 产出表占比列高亮 */
 export function oxyProductShareHighlightClass(dark: boolean): string {
   return dark ? 'text-blue-300' : 'text-blue-700'
+}
+
+/** 物相成分辅助表 / 产出透视表共享样式 */
+export function assistStickyHeadClass(dark: boolean): string {
+  return `sticky left-0 z-30 px-0.5 py-1.5 text-center text-sm font-semibold ${
+    dark ? 'bg-gray-800 text-gray-300' : 'bg-gray-50 text-gray-600'
+  }`
+}
+
+export function assistStickyLabelClass(dark: boolean): string {
+  return `sticky left-0 z-10 px-0.5 py-1.5 text-center text-sm ${dark ? 'bg-gray-900' : 'bg-white'}`
+}
+
+export function assistTotalCellClass(dark: boolean): string {
+  return dark
+    ? 'bg-cyan-950/45 text-cyan-50 ring-1 ring-inset ring-cyan-800/45'
+    : 'bg-cyan-50 text-cyan-950 ring-1 ring-inset ring-cyan-200/80'
+}
+
+export function assistFirstDataRowClass(dark: boolean): string {
+  return dark
+    ? 'bg-amber-950/35 ring-1 ring-inset ring-amber-800/45'
+    : 'bg-amber-50/95 ring-1 ring-inset ring-amber-200/80'
+}
+
+export function assistColumnStripeClass(dark: boolean, index: number): string {
+  return index % 2 === 0
+    ? dark
+      ? 'bg-gray-800/55'
+      : 'bg-gray-100/90'
+    : dark
+      ? 'bg-gray-700/35'
+      : 'bg-slate-50'
+}
+
+/** 物相列元素单元格高亮；不用于合计列或 W% 行 */
+export function assistValueHighlightClass(dark: boolean, hasValue: boolean): string {
+  return hasValue
+    ? dark
+      ? 'bg-emerald-950/40 ring-1 ring-inset ring-emerald-800/50'
+      : 'bg-emerald-50 ring-1 ring-inset ring-emerald-200'
+    : ''
+}
+
+/** 产出结果透视表列宽（合计 + 六产物） */
+export function computeProductResultTableLayout(params: {
+  labelSamples: string[]
+  productHeaders: string[]
+  containerWidth?: number
+}): BatchTableColLayout {
+  const labelWidth = batchTableDataColWidth('项目', params.labelSamples, false)
+  const totalWidth = BATCH_TABLE_ASSIST_TOTAL_COL_MIN
+  const productColWidths = params.productHeaders.map((header) =>
+    batchTableDataColWidth(header, [], false)
+  )
+  const minWidths = [labelWidth, totalWidth, ...productColWidths]
+  const productStart = 2
+  const flexIndices = Array.from({ length: productColWidths.length }, (_, index) => productStart + index)
+  const absMins = [
+    labelWidth,
+    totalWidth,
+    ...productColWidths.map(() => BATCH_TABLE_PCT_ABS_MIN),
+  ]
+  return fitBatchTableToViewport(minWidths, params.containerWidth ?? 0, {
+    flexibleIndices: flexIndices,
+    absoluteMinWidths: absMins,
+  })
 }

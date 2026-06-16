@@ -188,15 +188,19 @@ export type FurnaceBlendPhaseColumnInput =
   | { weight: number; phases: PhasePercentMap; moisture?: number; waterWeight?: number }
   | { weight: number; oxygenWeightPct: { O2: number; N2: number } }
 
-/** 入炉混料物相：原料 + 熔剂 + 燃料 + 富氧空气按投料量加权（含 O₂/N₂ 行） */
+/** 入炉混料物相：原料 + 熔剂 + 燃料 + 富氧空气按非水质量加权（含 O₂/N₂ 行） */
 export function buildFurnaceBlendPhaseColumn(columns: FurnaceBlendPhaseColumnInput[]): {
   phases: PhasePercentMap
   gasWeightPct: { O2: number; N2: number }
   moisture: number
 } {
   const active = columns.filter((column) => column.weight > 0)
-  const totalWeight = active.reduce((sum, column) => sum + column.weight, 0)
-  if (totalWeight <= 0) {
+  const solidColumns = active.filter((column): column is Extract<FurnaceBlendPhaseColumnInput, { phases: PhasePercentMap }> => 'phases' in column)
+  const gasColumns = active.filter((column): column is Extract<FurnaceBlendPhaseColumnInput, { oxygenWeightPct: { O2: number; N2: number } }> => 'oxygenWeightPct' in column)
+  const solidWeight = solidColumns.reduce((sum, column) => sum + Math.max(0, column.weight), 0)
+  const gasWeight = gasColumns.reduce((sum, column) => sum + Math.max(0, column.weight), 0)
+  const nonWaterWeight = solidWeight + gasWeight
+  if (nonWaterWeight <= 0) {
     return {
       phases: Object.fromEntries(INPUT_PHASE_ROW_KEYS.map((key) => [key, 0])) as PhasePercentMap,
       gasWeightPct: { O2: 0, N2: 0 },
@@ -204,11 +208,15 @@ export function buildFurnaceBlendPhaseColumn(columns: FurnaceBlendPhaseColumnInp
     }
   }
 
-  const solidColumns = active.filter((column): column is Extract<FurnaceBlendPhaseColumnInput, { phases: PhasePercentMap }> => 'phases' in column)
-  const phases =
-    solidColumns.length > 0
-      ? buildBlendPhaseColumn(solidColumns.map((column) => ({ weight: column.weight, phases: column.phases })))
-      : (Object.fromEntries(INPUT_PHASE_ROW_KEYS.map((key) => [key, 0])) as PhasePercentMap)
+  const phases = Object.fromEntries(
+    INPUT_PHASE_ROW_KEYS.map((key) => [
+      key,
+      solidColumns.reduce(
+        (sum, column) => sum + Math.max(0, column.weight) * Math.max(0, column.phases[key] ?? 0) / 100,
+        0
+      ) / nonWaterWeight * 100,
+    ])
+  ) as PhasePercentMap
 
   let o2Sum = 0
   let n2Sum = 0
@@ -229,8 +237,8 @@ export function buildFurnaceBlendPhaseColumn(columns: FurnaceBlendPhaseColumnInp
 
   return {
     phases,
-    gasWeightPct: { O2: o2Sum / totalWeight, N2: n2Sum / totalWeight },
-    moisture: moistureSum / totalWeight,
+    gasWeightPct: { O2: o2Sum / nonWaterWeight, N2: n2Sum / nonWaterWeight },
+    moisture: moistureSum / Math.max(solidWeight, 1e-12),
   }
 }
 

@@ -1,4 +1,7 @@
 import { elementMassFraction, type FormulaComposition } from './atomicMass.ts'
+import { COPPER_ELEMENT_DISPLAY_ORDER } from './copperDisplayOrder.ts'
+import { batchTableHasResult } from './batchTableNumeric.ts'
+import { BATCH_PHASE_ASSIST_MIN_DISPLAY_ELEMENT_ROWS } from './copperBatchTableLayout.ts'
 import type { CopperElementKey } from './copperWorkflowCalc.ts'
 
 /** 物相成分表列（化合物口径） */
@@ -64,6 +67,66 @@ function addMass(target: Record<string, number>, key: string, mass: number) {
   target[key] = (target[key] ?? 0) + mass
 }
 
+const COMPOUND_KEY_SET = new Set<string>(COPPER_PHASE_TABLE_COMPOUND_KEYS)
+const ELEMENT_VIEW_KEY_SET = new Set<string>(COPPER_PHASE_TABLE_ELEMENT_VIEW_KEYS)
+
+/** 元素转换模式下的质量键：固定列保留 canonical 键，微量元素用符号 */
+function toElementViewMassKey(key: string): string {
+  if (ELEMENT_VIEW_KEY_SET.has(key)) return key
+  return key.replace(/\(.+\)/, '').trim() || key
+}
+
+function phaseAssistRowKeySortIndex(key: string): number {
+  const idx = COPPER_ELEMENT_DISPLAY_ORDER.findIndex(
+    (canonical) => canonical === key || canonical.replace(/\(.+\)/, '').trim() === key
+  )
+  return idx >= 0 ? idx : COPPER_ELEMENT_DISPLAY_ORDER.length + 1
+}
+
+export type PhaseAssistElementRowSlot =
+  | { kind: 'element'; key: string }
+  | { kind: 'placeholder'; id: string }
+
+/** 物相辅助表元素行：计算后有结果的微量元素行 */
+export function visiblePhaseAssistElementRowKeys(
+  displayTotals: Record<string, number>,
+  baseKeys: readonly string[],
+  hasPreview: boolean
+): string[] {
+  if (!hasPreview) return [...baseKeys]
+
+  const keys = new Set<string>(baseKeys)
+  for (const [key, mass] of Object.entries(displayTotals)) {
+    if (batchTableHasResult(mass)) keys.add(key)
+  }
+
+  return [...keys]
+    .filter((key) => batchTableHasResult(displayTotals[key] ?? 0))
+    .sort((a, b) => {
+      const order = phaseAssistRowKeySortIndex(a) - phaseAssistRowKeySortIndex(b)
+      return order !== 0 ? order : a.localeCompare(b, 'zh-CN')
+    })
+}
+
+/** 物相辅助表左侧元素行槽位：未计算时占位行，计算后展开有结果的元素行 */
+export function buildPhaseAssistElementRowSlots(
+  displayTotals: Record<string, number>,
+  baseKeys: readonly string[],
+  hasPreview: boolean,
+  minPlaceholderRows = BATCH_PHASE_ASSIST_MIN_DISPLAY_ELEMENT_ROWS
+): PhaseAssistElementRowSlot[] {
+  if (!hasPreview) {
+    return Array.from({ length: minPlaceholderRows }, (_, index) => ({
+      kind: 'placeholder' as const,
+      id: `phase-assist-element-placeholder-${index}`,
+    }))
+  }
+  return visiblePhaseAssistElementRowKeys(displayTotals, baseKeys, true).map((key) => ({
+    kind: 'element' as const,
+    key,
+  }))
+}
+
 /** 将物相表元素质量流量 (t/h) 转为化合物或纯元素显示 */
 export function decomposePhaseElementMasses(
   elements: Partial<Record<CopperElementKey, number>>,
@@ -74,6 +137,10 @@ export function decomposePhaseElementMasses(
     for (const key of COPPER_PHASE_TABLE_COMPOUND_KEYS) {
       const v = elements[key as CopperElementKey] ?? 0
       if (v > 0) out[key] = v
+    }
+    for (const [key, mass] of Object.entries(elements) as [CopperElementKey, number][]) {
+      if (!mass || mass <= 0 || COMPOUND_KEY_SET.has(key)) continue
+      out[key] = mass
     }
     return out
   }
@@ -100,16 +167,7 @@ export function decomposePhaseElementMasses(
 
   for (const [key, mass] of Object.entries(elements) as [CopperElementKey, number][]) {
     if (!mass || mass <= 0 || consumed.has(key)) continue
-    const displayKey =
-      key === 'SiO₂(二氧化硅)' || key === 'CaO(氧化钙)' || key === 'Al₂O₃(三氧化二铝)' ? null : key
-    if (displayKey) addMass(out, displayKey.replace(/\(.+\)/, '') === displayKey ? displayKey : displayKey, mass)
-    else addMass(out, key.replace(/\(.+\)/, '') || key, mass)
-  }
-
-  for (const [key, mass] of Object.entries(elements) as [CopperElementKey, number][]) {
-    if (!mass || mass <= 0 || consumed.has(key)) continue
-    const viewKey = key.replace(/\(.+\)/, '').trim() || key
-    addMass(out, viewKey, mass)
+    addMass(out, toElementViewMassKey(key), mass)
   }
 
   return out

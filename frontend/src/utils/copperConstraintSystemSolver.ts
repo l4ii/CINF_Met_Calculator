@@ -1,0 +1,232 @@
+import {
+  compileOxyConstraintSystem,
+  equationResidualRow,
+  evaluateScaledEquationResidual,
+  type CompiledEquation,
+} from './copperConstraintSystemCompiler.ts'
+import type { OxySideBlowConstraintConfig } from './copperConstraintConfig.ts'
+import {
+  buildSymbolTableFromUnknowns,
+  buildUnknownSpecs,
+  createInitialUnpacked,
+  packUnknowns,
+  unpackUnknowns,
+  type OxyConstraintBaseInput,
+} from './copperConstraintUnknowns.ts'
+
+export interface StrictSolverOptions {
+  tolerance?: number
+  maxIterations?: number
+  lmLambda?: number
+}
+
+export interface StrictSolverResult {
+  converged: boolean
+  x: number[]
+  iterations: number
+  maxRelativeResidual: number
+}
+
+function clampVector(values: number[]): number[] {
+  return values.map((value) => Math.max(0, value))
+}
+
+function residualVector(
+  x: number[],
+  equations: CompiledEquation[],
+  specs: ReturnType<typeof buildUnknownSpecs>,
+  baseInput: OxyConstraintBaseInput,
+  config: OxySideBlowConstraintConfig
+): number[] {
+  const unpacked = unpackUnknowns(x, specs, baseInput)
+  const table = buildSymbolTableFromUnknowns(unpacked, baseInput, config)
+  return equations.map((equation) => {
+    const scaled = evaluateScaledEquationResidual(
+      equation,
+      table,
+      config,
+      unpacked.distributionFeed.elementWeights,
+      unpacked.balanceFeed.elementWeights
+    )
+    return scaled.residual / scaled.scale
+  })
+}
+
+function maxRelativeResidualFromSolution(
+  x: number[],
+  equations: CompiledEquation[],
+  specs: ReturnType<typeof buildUnknownSpecs>,
+  baseInput: OxyConstraintBaseInput,
+  config: OxySideBlowConstraintConfig
+): number {
+  const unpacked = unpackUnknowns(x, specs, baseInput)
+  const table = buildSymbolTableFromUnknowns(unpacked, baseInput, config)
+  let max = 0
+  for (const equation of equations) {
+    const scaled = evaluateScaledEquationResidual(
+      equation,
+      table,
+      config,
+      unpacked.distributionFeed.elementWeights,
+      unpacked.balanceFeed.elementWeights
+    )
+    max = Math.max(max, scaled.relativeResidual)
+  }
+  return max
+}
+
+function numericalJacobian(
+  x: number[],
+  residuals: number[],
+  equations: CompiledEquation[],
+  specs: ReturnType<typeof buildUnknownSpecs>,
+  baseInput: OxyConstraintBaseInput,
+  config: OxySideBlowConstraintConfig
+): number[][] {
+  const n = x.length
+  const m = residuals.length
+  const jacobian = Array.from({ length: m }, () => new Array<number>(n).fill(0))
+  const eps = 1e-6
+
+  for (let col = 0; col < n; col += 1) {
+    const step = Math.max(eps, Math.abs(x[col]!) * eps)
+    const forward = [...x]
+    forward[col] = Math.max(0, forward[col]! + step)
+    const rForward = residualVector(forward, equations, specs, baseInput, config)
+    for (let row = 0; row < m; row += 1) {
+      jacobian[row]![col] = (rForward[row]! - residuals[row]!) / step
+    }
+  }
+  return jacobian
+}
+
+function solveNormalEquations(jtj: number[][], jtr: number[], lambda: number): number[] | null {
+  const n = jtj.length
+  const a = jtj.map((row, i) => row.map((value, j) => value + (i === j ? lambda : 0)))
+  const b = jtr.map((value) => -value)
+  return solveLinearSystem(a, b)
+}
+
+function solveLinearSystem(matrix: number[][], vector: number[], tolerance = 1e-12): number[] | null {
+  const n = matrix.length
+  if (n === 0 || vector.length !== n) return null
+  const a = matrix.map((row) => [...row])
+  const b = [...vector]
+
+  for (let col = 0; col < n; col += 1) {
+    let pivot = col
+    for (let row = col + 1; row < n; row += 1) {
+      if (Math.abs(a[row]![col]!) > Math.abs(a[pivot]![col]!)) pivot = row
+    }
+    if (Math.abs(a[pivot]![col]!) <= tolerance) return null
+    if (pivot !== col) {
+      ;[a[col], a[pivot]] = [a[pivot]!, a[col]!]
+      ;[b[col], b[pivot]] = [b[pivot]!, b[col]!]
+    }
+    for (let row = col + 1; row < n; row += 1) {
+      const factor = a[row]![col]! / a[col]![col]!
+      for (let k = col; k < n; k += 1) a[row]![k]! -= factor * a[col]![k]!
+      b[row]! -= factor * b[col]!
+    }
+  }
+
+  const x = new Array<number>(n).fill(0)
+  for (let row = n - 1; row >= 0; row -= 1) {
+    let sum = b[row]!
+    for (let col = row + 1; col < n; col += 1) sum -= a[row]![col]! * x[col]!
+    if (Math.abs(a[row]![row]!) <= tolerance) return null
+    x[row] = sum / a[row]![row]!
+  }
+  return x
+}
+
+export function solveOxyConstraintSystemStrict(
+  baseInput: OxyConstraintBaseInput,
+  config: OxySideBlowConstraintConfig,
+  options: StrictSolverOptions = {}
+): StrictSolverResult {
+  const tolerance = options.tolerance ?? config.solverParams?.tolerance ?? 1e-4
+  const maxIterations = options.maxIterations ?? config.solverParams?.newtonMaxIterations ?? 120
+  const specs = buildUnknownSpecs(config, baseInput)
+  const equations = compileOxyConstraintSystem(config)
+
+  let x = clampVector(packUnknowns(createInitialUnpacked(baseInput, config), specs))
+  let lambda = options.lmLambda ?? 1e-2
+  let converged = false
+  let iterations = 0
+  let maxRel = Number.POSITIVE_INFINITY
+
+  for (let iter = 0; iter < maxIterations; iter += 1) {
+    iterations = iter + 1
+    const residuals = residualVector(x, equations, specs, baseInput, config)
+    maxRel = maxRelativeResidualFromSolution(x, equations, specs, baseInput, config)
+    if (maxRel < tolerance) {
+      converged = true
+      break
+    }
+
+    const jacobian = numericalJacobian(x, residuals, equations, specs, baseInput, config)
+    const m = residuals.length
+    const n = x.length
+    const jtj = Array.from({ length: n }, () => new Array<number>(n).fill(0))
+    const jtr = new Array<number>(n).fill(0)
+    for (let row = 0; row < m; row += 1) {
+      for (let i = 0; i < n; i += 1) {
+        jtr[i]! += jacobian[row]![i]! * residuals[row]!
+        for (let j = 0; j < n; j += 1) {
+          jtj[i]![j]! += jacobian[row]![i]! * jacobian[row]![j]!
+        }
+      }
+    }
+
+    let dx = solveNormalEquations(jtj, jtr, lambda)
+    if (!dx) {
+      lambda *= 10
+      continue
+    }
+
+    let accepted = false
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const candidate = clampVector(x.map((value, index) => value + (dx[index] ?? 0)))
+      const candidateMax = maxRelativeResidualFromSolution(candidate, equations, specs, baseInput, config)
+      if (candidateMax < maxRel) {
+        x = candidate
+        maxRel = candidateMax
+        lambda = Math.max(lambda * 0.3, 1e-8)
+        accepted = true
+        break
+      }
+      lambda *= 5
+      dx = solveNormalEquations(jtj, jtr, lambda)
+      if (!dx) break
+    }
+
+    if (!accepted && maxRel >= Number.POSITIVE_INFINITY * 0) {
+      lambda = Math.min(lambda * 10, 1e8)
+    }
+  }
+
+  return { converged, x, iterations, maxRelativeResidual: maxRel }
+}
+
+export function buildResidualRowsFromSolution(
+  x: number[],
+  baseInput: OxyConstraintBaseInput,
+  config: OxySideBlowConstraintConfig
+) {
+  const specs = buildUnknownSpecs(config, baseInput)
+  const equations = compileOxyConstraintSystem(config)
+  const unpacked = unpackUnknowns(x, specs, baseInput)
+  const table = buildSymbolTableFromUnknowns(unpacked, baseInput, config)
+  return equations.map((equation) =>
+    equationResidualRow(
+      equation,
+      table,
+      config,
+      unpacked.distributionFeed.elementWeights,
+      unpacked.balanceFeed.elementWeights
+    )
+  )
+}
+
+export { compileOxyConstraintSystem }

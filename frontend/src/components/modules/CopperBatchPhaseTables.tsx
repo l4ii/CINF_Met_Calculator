@@ -29,8 +29,9 @@ export type PhaseTableColumn = {
   /** false 表示该物料尚未完成物相回填，只展示质量/含水，不展示物相结果 */
   phaseReady?: boolean
   oxygenAir?: { weightPct: { O2: number; N2: number }; volumePct: { O2: number; N2: number } }
-  productKey?: CopperProductKey | 'total' | 'loss'
+  productKey?: string
   productPhases?: Partial<Record<string, number>>
+  productPhaseRowKeys?: string[]
   productGasVolume?: Record<string, number>
   readOnly?: boolean
   moisture?: number
@@ -71,10 +72,6 @@ function dataCellClass(dark: boolean, kind: ColumnKind) {
   return `border-t px-1 py-1.5 align-middle text-center text-sm ${rowToneClass(dark, kind)}`
 }
 
-function formatCell(value: number) {
-  return Number(value.toFixed(4)).toString()
-}
-
 function phaseTableColumnCount(phaseRowKeys: string[]) {
   return phaseRowKeys.length + 4
 }
@@ -108,10 +105,15 @@ function isInputPhaseRow(column: PhaseTableColumn, rowKey: string) {
 }
 
 function isOutputPhaseRow(column: PhaseTableColumn, rowKey: string) {
-  if (column.kind !== 'product' || !column.productKey || column.productKey === 'total' || column.productKey === 'loss') {
+  if (column.kind !== 'product' || !column.productKey || column.productKey === 'total') {
     return false
   }
-  return PRODUCT_PHASE_ROWS[column.productKey].includes(rowKey)
+  if (column.productPhaseRowKeys && column.productPhaseRowKeys.length > 0) {
+    return column.productPhaseRowKeys.includes(rowKey)
+  }
+  if (column.productPhases && rowKey in column.productPhases) return true
+  if (!(column.productKey in PRODUCT_PHASE_ROWS)) return false
+  return PRODUCT_PHASE_ROWS[column.productKey as CopperProductKey].includes(rowKey)
 }
 
 function isPhaseRowApplicable(column: PhaseTableColumn, rowKey: string) {
@@ -183,6 +185,12 @@ export function columnTotal(column: PhaseTableColumn) {
   return INPUT_PHASE_ROW_KEYS.reduce((sum, key) => sum + (column.phases?.[key] ?? 0), 0)
 }
 
+function isColumnTotalInvalid(column: PhaseTableColumn) {
+  if (column.phaseReady === false) return false
+  if (column.kind === 'product' && column.weight <= 0) return false
+  return Math.abs(columnTotal(column) - 100) > 0.02
+}
+
 function phaseBoxClass(invalid: boolean) {
   return invalid ? 'border-red-500' : ''
 }
@@ -194,8 +202,9 @@ export function CopperBatchPhaseTables({
   outputColumns,
   tableWidth: _tableWidth,
   nameColWidth,
-  formatTableNumber,
+  formatTableNumber: _formatTableNumber,
   furnaceBlendWaterWeight,
+  title = '投入-物料物相表（w%）',
   inputDrafts,
   outputDrafts,
   invalidInputColumns,
@@ -213,6 +222,7 @@ export function CopperBatchPhaseTables({
   nameColWidth: number
   formatTableNumber: (v: number) => string
   furnaceBlendWaterWeight: number
+  title?: string
   rawColumnWidths?: Record<string, number>
   inputDrafts: Record<string, Record<string, string>>
   outputDrafts: Record<string, Record<string, string>>
@@ -232,6 +242,7 @@ export function CopperBatchPhaseTables({
     phaseRowKeys.length,
     viewportWidth
   )
+  const resolvedNameColWidth = colWidths[1] ?? nameColWidth
 
   const rawColumns = inputColumns.filter((column) => column.kind === 'raw')
   const solventColumns = inputColumns.filter((column) => column.kind === 'solvent')
@@ -253,7 +264,7 @@ export function CopperBatchPhaseTables({
     const map = column.kind === 'product' ? outputDrafts : inputDrafts
     const text = map[column.id]?.[rowKey]
     if (text != null) return text
-    return formatCell(fallback)
+    return fallback
   }
 
   const renderDashPhaseCells = (kind: ColumnKind) =>
@@ -291,7 +302,11 @@ export function CopperBatchPhaseTables({
     })
 
   const renderTotalCell = (column: PhaseTableColumn) => (
-    <td className={`${dataCellClass(darkMode, column.kind)} font-semibold`}>
+    <td
+      className={`${dataCellClass(darkMode, column.kind)} font-semibold ${
+        isColumnTotalInvalid(column) ? 'text-red-500 ring-1 ring-inset ring-red-400' : ''
+      }`}
+    >
       {column.phaseReady === false ? (
         <BatchTableNumericReadonly darkMode={darkMode} value="—" applicable={false} />
       ) : column.kind === 'product' && column.weight <= 0 ? (
@@ -299,7 +314,8 @@ export function CopperBatchPhaseTables({
       ) : (
         <BatchTableNumericReadonly
           darkMode={darkMode}
-          value={formatCell(columnTotal(column))}
+          value={columnTotal(column)}
+          helpTitle={isColumnTotalInvalid(column) ? '物相列合计应为 100%，请核对该行组成。' : undefined}
           className="text-sm font-semibold"
         />
       )}
@@ -311,7 +327,7 @@ export function CopperBatchPhaseTables({
       <BatchTableNumericCell
         darkMode={darkMode}
         applicable={column.weight > 0 || column.kind !== 'product'}
-        value={weight > 0 ? formatCell(weight) : column.kind === 'product' ? '—' : formatCell(weight)}
+        value={weight > 0 || column.kind !== 'product' ? weight : '—'}
       />
     </td>
   )
@@ -326,7 +342,7 @@ export function CopperBatchPhaseTables({
         <td rowSpan={2} className={categoryRowSpanCellClass(darkMode, column.kind)}>
           {categoryLabel}
         </td>
-        <td className={stickyCellClass(darkMode, column.kind, 'name')} style={nameColStyle(nameColWidth)}>
+        <td className={stickyCellClass(darkMode, column.kind, 'name')} style={nameColStyle(resolvedNameColWidth)}>
           <span className="block whitespace-nowrap text-center" title={column.subHeader || column.header}>
             {column.subHeader || column.header}
           </span>
@@ -336,13 +352,13 @@ export function CopperBatchPhaseTables({
         {renderTotalCell(column)}
       </tr>
       <tr>
-        <td className={stickyCellClass(darkMode, column.kind, 'name')} style={nameColStyle(nameColWidth)}>
+        <td className={stickyCellClass(darkMode, column.kind, 'name')} style={nameColStyle(resolvedNameColWidth)}>
           含水
         </td>
         <td className={dataCellClass(darkMode, column.kind)}>
           <BatchTableNumericReadonly
             darkMode={darkMode}
-            value={waterWeight > 0 ? formatTableNumber(waterWeight) : ''}
+            value={waterWeight > 0 ? waterWeight : ''}
             className="text-sm"
           />
         </td>
@@ -363,7 +379,7 @@ export function CopperBatchPhaseTables({
             产出
           </td>
         )}
-        <td className={stickyCellClass(darkMode, 'product', 'name')} style={nameColStyle(nameColWidth)}>
+        <td className={stickyCellClass(darkMode, 'product', 'name')} style={nameColStyle(resolvedNameColWidth)}>
           <span className="block whitespace-nowrap text-center" title={column.subHeader || column.header}>
             {column.subHeader || column.header}
           </span>
@@ -389,7 +405,7 @@ export function CopperBatchPhaseTables({
                 className="sticky left-0 px-2 py-1.5 text-center text-sm font-semibold"
                 style={{ width: viewportWidth || undefined }}
               >
-                投入-物料物相表（w%）
+                {title}
               </div>
             </th>
           </tr>
@@ -397,7 +413,7 @@ export function CopperBatchPhaseTables({
             <th className={`sticky left-0 z-30 px-2 py-1.5 text-center text-sm font-semibold ${theadCls}`}>类型</th>
             <th
               className={`sticky left-[56px] z-30 px-2 py-1.5 text-center text-sm font-semibold ${theadCls}`}
-              style={nameColStyle(nameColWidth)}
+              style={nameColStyle(resolvedNameColWidth)}
             >
               名称
             </th>
@@ -425,7 +441,7 @@ export function CopperBatchPhaseTables({
                   气
                 </td>
               )}
-              <td className={stickyCellClass(darkMode, 'oxygen', 'name')} style={nameColStyle(nameColWidth)}>
+              <td className={stickyCellClass(darkMode, 'oxygen', 'name')} style={nameColStyle(resolvedNameColWidth)}>
                 {column.subHeader || column.header}
               </td>
               {renderWeightCell(column, column.weight)}

@@ -1,4 +1,4 @@
-import { elementMassFraction } from './atomicMass.ts'
+import { COMPOUND_MOLAR_MASS, atomicMass, elementMassFraction } from './atomicMass.ts'
 import type { CopperElementKey, WeightedComposition } from './copperWorkflowCalc.ts'
 import { COPPER_ELEMENT_KEYS } from './copperWorkflowCalc.ts'
 
@@ -68,6 +68,85 @@ const CONSTRAINT_ELEMENT_BINDINGS: Record<ConstraintElementKey, ConstraintElemen
       buildBinding(row.feedKey, row.metalSymbol, row.oxideComposition),
     ])
   ),
+}
+
+const OXIDE_EQUIVALENT_OXYGEN_FRACTIONS: Partial<Record<CopperElementKey, number>> = {
+  'SiO₂(二氧化硅)': 1 - atomicMass('Si') / COMPOUND_MOLAR_MASS.SiO2,
+  'CaO(氧化钙)': 1 - atomicMass('Ca') / COMPOUND_MOLAR_MASS.CaO,
+  'MgO(氧化镁)': 1 - atomicMass('Mg') / COMPOUND_MOLAR_MASS.MgO,
+  'Al₂O₃(三氧化二铝)': 1 - (2 * atomicMass('Al')) / COMPOUND_MOLAR_MASS.Al2O3,
+  'FeO(氧化亚铁)': 1 - atomicMass('Fe') / COMPOUND_MOLAR_MASS.FeO,
+}
+
+const INPUT_OXIDE_EQUIVALENT_KEYS: CopperElementKey[] = [
+  'SiO₂(二氧化硅)',
+  'CaO(氧化钙)',
+  'MgO(氧化镁)',
+  'Al₂O₃(三氧化二铝)',
+]
+
+function finitePositive(value: number | undefined): number {
+  return Number.isFinite(value) ? Math.max(0, Number(value)) : 0
+}
+
+function oxideEquivalentOxygenMass(key: CopperElementKey, compoundMass: number): number {
+  const fraction = OXIDE_EQUIVALENT_OXYGEN_FRACTIONS[key] ?? 0
+  return finitePositive(compoundMass) * fraction
+}
+
+/**
+ * 前端可继续显示 SiO2/CaO/MgO/Al2O3 等氧化物当量；内部元素守恒时，
+ * 这些当量中携带的氧需要额外进入 O 池。FeO 输入则拆成 Fe + O。
+ */
+export function expandAssayDisplayMassForBalance(
+  source: Partial<Record<CopperElementKey, number>> | undefined
+): Partial<Record<CopperElementKey, number>> {
+  const out: Partial<Record<CopperElementKey, number>> = {}
+  for (const key of COPPER_ELEMENT_KEYS) {
+    const value = finitePositive(source?.[key])
+    if (value > 0) out[key] = value
+  }
+
+  const feo = finitePositive(source?.['FeO(氧化亚铁)'])
+  if (feo > 0) {
+    out['Fe(铁)'] = (out['Fe(铁)'] ?? 0) + feo * (atomicMass('Fe') / COMPOUND_MOLAR_MASS.FeO)
+    out['O(氧)'] = (out['O(氧)'] ?? 0) + oxideEquivalentOxygenMass('FeO(氧化亚铁)', feo)
+    out['FeO(氧化亚铁)'] = 0
+  }
+
+  for (const key of INPUT_OXIDE_EQUIVALENT_KEYS) {
+    const oxygen = oxideEquivalentOxygenMass(key, source?.[key] ?? 0)
+    if (oxygen > 0) out['O(氧)'] = (out['O(氧)'] ?? 0) + oxygen
+  }
+
+  return out
+}
+
+/**
+ * 从分子式得到的显示池通常同时含“氧化物当量”和真实 O。
+ * 展示 w% 时扣掉已经包含在氧化物当量里的氧，避免前端合计超过 100%。
+ */
+export function singleCountOxideDisplayMass(
+  source: Partial<Record<CopperElementKey, number>> | undefined
+): Partial<Record<CopperElementKey, number>> {
+  const out: Partial<Record<CopperElementKey, number>> = {}
+  for (const key of COPPER_ELEMENT_KEYS) {
+    const value = finitePositive(source?.[key])
+    if (value > 0) out[key] = value
+  }
+
+  const representedOxygen = (Object.keys(OXIDE_EQUIVALENT_OXYGEN_FRACTIONS) as CopperElementKey[]).reduce(
+    (sum, key) => sum + oxideEquivalentOxygenMass(key, source?.[key] ?? 0),
+    0
+  )
+  const directOxygen = finitePositive(source?.['O(氧)'])
+  if (directOxygen > 0 || representedOxygen > 0) {
+    const residualOxygen = Math.max(0, directOxygen - representedOxygen)
+    if (residualOxygen > 0) out['O(氧)'] = residualOxygen
+    else delete out['O(氧)']
+  }
+
+  return out
 }
 
 /** 约束元素键 → 入炉化验键绑定；未映射则视为与化验键同名 */

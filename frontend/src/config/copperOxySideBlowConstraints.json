@@ -10,6 +10,18 @@
   "products": {
     "smeltingSlag": {
       "name": "熔炼渣",
+      "allowedElements": [
+        "O(氧)",
+        "Fe(铁)",
+        "S(硅)",
+        "Ca(钙)",
+        "Mg(镁)",
+        "Al(铝)",
+        "Sn(锡)",
+        "Te(碲)",
+        "Na(钠)",
+        "Other(其他)"
+      ],
       "phases": [
         "Cu2S",
         "Cu2O",
@@ -38,6 +50,13 @@
     },
     "matte": {
       "name": "白铜锍",
+      "allowedElements": [
+        "Cu(铜)",
+        "S (硫)",
+        "O(氧)",
+        "Fe(铁)",
+        "Other(其他)"
+      ],
       "phases": [
         "Cu2S",
         "FeS",
@@ -59,6 +78,15 @@
     },
     "flueGas": {
       "name": "熔炼出炉烟气",
+      "allowedElements": [
+        "S (硫)",
+        "O(氧)",
+        "As(砷)",
+        "C (碳)",
+        "H(氢)",
+        "N(氮)",
+        "Hg(汞)"
+      ],
       "phases": [
         "SO2",
         "SO3",
@@ -72,6 +100,19 @@
     },
     "dust": {
       "name": "烟气含尘",
+      "allowedElements": [
+        "O(氧)",
+        "As(砷)",
+        "Pb(铅)",
+        "Zn(锌)",
+        "Ni(镍)",
+        "Se(硒)",
+        "Bi(铋)",
+        "Sb(锑)",
+        "Cd(镉)",
+        "Au(金)",
+        "Ag(银)"
+      ],
       "phases": [
         "Cu2S",
         "Cu2O",
@@ -99,16 +140,22 @@
     },
     "fugitive": {
       "name": "无组织排放",
+      "allowedElements": [
+        "O(氧)"
+      ],
       "phases": [
-        "SO2"
+        "O2"
       ]
     },
     "loss": {
       "name": "损失",
+      "allowedElements": [
+        "Cu(铜)",
+        "S (硫)"
+      ],
       "phases": [
         "Cu",
-        "S",
-        "Other"
+        "S"
       ]
     }
   },
@@ -134,7 +181,7 @@
         {
           "product": "loss",
           "type": "D%",
-          "value": 0.2504
+          "value": 0.25004
         }
       ]
     },

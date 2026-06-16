@@ -23,6 +23,7 @@ import {
   BatchTableNumericMassCell,
   BatchTableNumericReadonly,
 } from './BatchTableNumericCell'
+import { batchTableSampleText, formatBatchTableTooltip } from '../../utils/batchTableNumeric'
 import { calculateGasVolumePercents } from '../../utils/copperProductPhaseCalc'
 import {
   calculateKnownTotal,
@@ -182,12 +183,12 @@ function renderHorizontalPhaseCells(
               )
             }
             if (rowKind === 'pct') {
-              const helpTitle = `${phase.label} w% · 质量 ${formatTableNumber(phase.mass)} t/h`
+              const helpTitle = `${phase.label} w% · 质量 ${formatBatchTableTooltip(phase.mass)} t/h`
               return (
                 <td key={`${product.key}-pct-${phase.key}`} className={`${phaseCell} whitespace-nowrap px-1`}>
                   <BatchTableNumericReadonly
                     darkMode={darkMode}
-                    value={String(phase.pct)}
+                    value={phase.pct}
                     helpTitle={helpTitle}
                     className="text-sm"
                   />
@@ -195,7 +196,7 @@ function renderHorizontalPhaseCells(
               )
             }
             const volPct = volumePercents?.[phase.key as keyof typeof volumePercents] ?? null
-            const volValue = volPct != null && volPct > 1e-12 ? String(volPct) : '0'
+            const volValue = volPct != null && volPct > 1e-12 ? volPct : 0
             return (
               <td key={`${product.key}-vol-${phase.key}`} className={`${phaseCell} whitespace-nowrap px-1`}>
                 <BatchTableNumericReadonly
@@ -296,7 +297,7 @@ export function CopperBatchElementTable({
     side: 'single' | 'left' | 'right',
     boundary: 'top' | 'middle' | 'bottom'
   ) => string
-  ratioInputValue: (kind: DraftRatioKind, id: string, element: CopperElementKey, fallback: number) => string
+  ratioInputValue: (kind: DraftRatioKind, id: string, element: CopperElementKey, fallback: number) => string | number
   rawWeightDrafts: Record<string, string>
   waterWeightDrafts: Record<string, string>
   ratioDrafts: Record<string, string>
@@ -341,7 +342,7 @@ export function CopperBatchElementTable({
   const colCount = elementTableColumnCount(elementKeys.length)
   const elementAbsMinWidths = useMemo(() => {
     const collectSamples = (element: CopperElementKey) => {
-      const samples: string[] = []
+      const samples: Array<string | number> = []
       for (const material of rawMaterials) {
         samples.push(ratioInputValue('raw', material.id, element, material.ratios[element] ?? 0))
       }
@@ -356,7 +357,7 @@ export function CopperBatchElementTable({
         samples.push(ratioInputValue('gas', material.id, element, material.ratios[element] ?? 0))
       }
       samples.push(formatTableNumber(furnaceFeedRatios[element] ?? 0))
-      return samples.filter((sample) => sample.trim() !== '')
+      return samples.filter((sample) => batchTableSampleText(sample) !== '')
     }
     return batchElementColumnWidthMeta(elementKeys, elementHeaderLabel, collectSamples).map((meta) =>
       meta.sparse ? BATCH_TABLE_SPARSE_COL_WIDTH : BATCH_TABLE_PCT_COL_WIDTH
@@ -414,7 +415,7 @@ export function CopperBatchElementTable({
           <td key={element} className={cellCls}>
             <BatchTableNumericReadonly
               darkMode={darkMode}
-              value={formatTableNumber(ratios[element] ?? 0)}
+              value={ratios[element] ?? 0}
               className="text-sm"
             />
           </td>
@@ -514,7 +515,7 @@ export function CopperBatchElementTable({
       >
         <BatchTableNumericReadonly
           darkMode={darkMode}
-          value={formatTableNumber(total)}
+          value={total}
           helpTitle={overLimit ? '元素合计已超过 100%，请核对各元素含量' : undefined}
           className={`text-sm font-semibold ${overLimit ? 'text-red-500' : ''}`}
         />
@@ -537,7 +538,7 @@ export function CopperBatchElementTable({
               readOnly
               className={`${solveInputClass(darkMode, 'resolved')} cursor-default`}
               helpTitle="H₂O 化学计量分率，随含水 t/h 自动计算"
-              value={formatTableNumber(value ?? 0)}
+              value={value ?? 0}
             />
           </td>
         )
@@ -550,7 +551,7 @@ export function CopperBatchElementTable({
     tone: ElementTableTone,
     options: {
       waterWeightInput?: ReactNode
-      waterWeightDisplay?: string
+      waterWeightDisplay?: string | number
       readOnly?: boolean
     }
   ) => {
@@ -570,7 +571,7 @@ export function CopperBatchElementTable({
         <td className={`${dataCellClass(darkMode, tone)} font-semibold`}>
           <BatchTableNumericReadonly
             darkMode={darkMode}
-            value={formatTableNumber(waterTotal)}
+            value={waterTotal}
             className="text-sm font-semibold"
           />
         </td>
@@ -691,7 +692,7 @@ export function CopperBatchElementTable({
                     editable
                     className={solveInputClass(darkMode, solventWeightStatus(material.id))}
                     helpTitle="步骤4：熔剂投料量，可直接手动输入。"
-                    value={ratioDrafts[`solvent-weight:${material.id}`] ?? formatTableNumber(material.weight)}
+                    value={ratioDrafts[`solvent-weight:${material.id}`] ?? material.weight}
                     onChange={(next) => onSolventWeightChange(material.id, next)}
                     onBlur={() => onSolventWeightBlur(material.id)}
                   />
@@ -731,7 +732,7 @@ export function CopperBatchElementTable({
                   editable
                   className={solveInputClass(darkMode, fuelWeightStatus())}
                   helpTitle="步骤4：燃料煤投料量，可直接手动输入。"
-                  value={ratioDrafts['fuel-weight:fuel-coal'] ?? formatTableNumber(fuelColumn.weight)}
+                  value={ratioDrafts['fuel-weight:fuel-coal'] ?? fuelColumn.weight}
                   onChange={onFuelWeightChange}
                   onBlur={onFuelWeightBlur}
                 />
@@ -772,7 +773,7 @@ export function CopperBatchElementTable({
                   editable
                   className={solveInputClass(darkMode, oxygenAirInputStatus)}
                   helpTitle="步骤4：气体投料量，可直接手动输入（空气 t/h 可为 0）。"
-                  value={ratioDrafts[`gas-weight:${column.id}`] ?? formatTableNumber(column.weight)}
+                  value={ratioDrafts[`gas-weight:${column.id}`] ?? column.weight}
                   onChange={(next) => onGasWeightChange(column.id, next)}
                   onBlur={() => onGasWeightBlur(column.id)}
                 />
@@ -792,7 +793,7 @@ export function CopperBatchElementTable({
               <td className={`${dataCellClass(darkMode, 'total')} font-semibold`}>
                 <BatchTableNumericReadonly
                   darkMode={darkMode}
-                  value={formatTableNumber(feedTotalWeight)}
+                  value={feedTotalWeight}
                   className="text-sm font-semibold"
                 />
               </td>
@@ -800,7 +801,7 @@ export function CopperBatchElementTable({
                 <td key={`blend-${element}`} className={dataCellClass(darkMode, 'total')}>
                   <BatchTableNumericReadonly
                     darkMode={darkMode}
-                    value={formatTableNumber(furnaceFeedRatios[element] ?? 0)}
+                    value={furnaceFeedRatios[element] ?? 0}
                     className="text-sm"
                   />
                 </td>
@@ -810,7 +811,7 @@ export function CopperBatchElementTable({
               </td>
             </tr>
             {renderMaterialWaterRow('blend-water', 'total', {
-              waterWeightDisplay: formatTableNumber(furnaceBlendWaterWeight),
+              waterWeightDisplay: furnaceBlendWaterWeight,
             })}
           </Fragment>
           {showProductRows &&
@@ -844,7 +845,7 @@ export function CopperBatchElementTable({
                       <td rowSpan={block.rowSpan} className={productOutputCellClass(darkMode, 'resolved', 'single', 'top')}>
                         <BatchTableNumericReadonly
                           darkMode={darkMode}
-                          value={formatTableNumber(product.mass)}
+                          value={product.mass}
                           className="text-sm"
                         />
                       </td>
@@ -902,7 +903,7 @@ export function CopperBatchElementTable({
                     <td className={productOutputCellClass(darkMode, 'resolved', 'single', 'top')}>
                       <BatchTableNumericReadonly
                         darkMode={darkMode}
-                        value={formatTableNumber(product.mass)}
+                        value={product.mass}
                         className="text-sm"
                       />
                     </td>
@@ -913,7 +914,7 @@ export function CopperBatchElementTable({
                       >
                         <BatchTableNumericReadonly
                           darkMode={darkMode}
-                          value={formatTableNumber(product.composition[element] ?? 0)}
+                          value={product.composition[element] ?? 0}
                           className="text-sm"
                         />
                       </td>
@@ -921,9 +922,7 @@ export function CopperBatchElementTable({
                     <td className={productOutputCellClass(darkMode, 'resolved', 'single', 'bottom')}>
                       <BatchTableNumericReadonly
                         darkMode={darkMode}
-                        value={formatTableNumber(
-                          calculateKnownTotal(product.composition) + (product.composition['Other(其他)'] ?? 0)
-                        )}
+                        value={calculateKnownTotal(product.composition) + (product.composition['Other(其他)'] ?? 0)}
                         className="text-sm"
                       />
                     </td>

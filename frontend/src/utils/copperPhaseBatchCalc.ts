@@ -18,7 +18,6 @@ import { materialPhaseRowDisplayLabel } from './copperPhaseAssist.ts'
 import { getBuiltinPhaseFractions } from './copperPhaseTableCalc.ts'
 import {
   COPPER_PHASE_TABLE_COMPOUND_KEYS,
-  type CopperPhaseTableCompoundKey,
 } from './copperElementDisplay.ts'
 
 export type PhaseUnknownValues = Pick<Record<CopperElementKey, number>, 'O(氧)' | 'C (碳)' | 'Other(其他)'>
@@ -191,6 +190,8 @@ export type PhasePivotRow = {
   rowId: string
   label: string
   phasePercent: number | null
+  /** 物相干基质量流量 t/h（由求解结果 phasePercent 与投料量计算，非表格显示值反推） */
+  phaseMassTh: number | null
   elements: Partial<Record<string, number>>
 }
 
@@ -209,13 +210,16 @@ export function buildPhasePivotRows(
           rowId: row.id,
           label: materialPhaseRowDisplayLabel(row),
           phasePercent: null,
+          phaseMassTh: null,
           elements: {},
         }
       }
+      const phaseMassTh = feedRateTh > 0 ? (phasePercent / 100) * feedRateTh : null
       return {
         rowId: row.id,
         label: materialPhaseRowDisplayLabel(row),
         phasePercent,
+        phaseMassTh,
         elements: phaseRowElementContributions(row, phasePercent, feedRateTh),
       }
     })
@@ -223,17 +227,18 @@ export function buildPhasePivotRows(
 
 /** 物相 w% 与元素质量流量合计（干基下应约 100% / ≈ 投料量） */
 export function sumPhasePivotTotals(pivotRows: PhasePivotRow[]) {
-  const elements = Object.fromEntries(
-    COPPER_PHASE_TABLE_ELEMENT_KEYS.map((key) => [key, 0])
-  ) as Record<CopperPhaseTableCompoundKey, number>
+  const elements: Record<string, number> = {}
   let phaseTotal = 0
+  let totalMassTh = 0
   for (const row of pivotRows) {
     if (row.phasePercent != null) phaseTotal += row.phasePercent
-    for (const key of COPPER_PHASE_TABLE_ELEMENT_KEYS) {
-      elements[key] += row.elements[key] ?? 0
+    if (row.phaseMassTh != null && row.phaseMassTh > 0) totalMassTh += row.phaseMassTh
+    for (const [key, value] of Object.entries(row.elements)) {
+      if (!value || value <= 0) continue
+      elements[key] = (elements[key] ?? 0) + value
     }
   }
-  return { phaseTotal, elements }
+  return { phaseTotal, totalMassTh, elements }
 }
 
 /** 干基物相 w% 闭合（求解校验用） */
