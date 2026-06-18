@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   INPUT_PHASE_ROW_KEYS,
   phaseStorageKeyToDisplayLabel,
@@ -6,7 +6,7 @@ import {
   type PhasePercentMap,
 } from '../../utils/copperPhaseTableCalc'
 import { PRODUCT_PHASE_ROWS } from '../../utils/copperProductPhaseCalc'
-import { batchPhaseTableColWidths } from '../../utils/copperBatchTableLayout'
+import { batchPhaseTableColWidths, batchTableDataColWidth } from '../../utils/copperBatchTableLayout'
 import { CopperBatchTableColGroup } from './CopperBatchTableColGroup'
 import { BatchTableNumericCell, BatchTableNumericReadonly } from './BatchTableNumericCell'
 import type { CopperProductKey } from '../../utils/copperProcessCalc'
@@ -69,7 +69,7 @@ function categoryRowSpanCellClass(dark: boolean, kind: ColumnKind) {
 }
 
 function dataCellClass(dark: boolean, kind: ColumnKind) {
-  return `border-t px-1 py-1.5 align-middle text-center text-sm ${rowToneClass(dark, kind)}`
+  return `border-t px-0.5 py-1.5 align-middle text-center text-sm ${rowToneClass(dark, kind)}`
 }
 
 function phaseTableColumnCount(phaseRowKeys: string[]) {
@@ -195,6 +195,14 @@ function phaseBoxClass(invalid: boolean) {
   return invalid ? 'border-red-500' : ''
 }
 
+function phaseColumnSamples(rowKey: string, columns: PhaseTableColumn[]) {
+  return columns.flatMap((column) => {
+    if (!isPhaseRowApplicable(column, rowKey)) return []
+    const value = getCellValue(column, rowKey)
+    return value == null ? [] : [value]
+  })
+}
+
 export function CopperBatchPhaseTables({
   darkMode,
   phaseRowKeys,
@@ -237,10 +245,17 @@ export function CopperBatchPhaseTables({
   const [viewportWidth, setViewportWidth] = useState(0)
   const theadCls = darkMode ? 'bg-gray-800 text-gray-300' : 'bg-gray-50 text-gray-600'
   const colCount = phaseTableColumnCount(phaseRowKeys)
+  const phaseColumnWidths = useMemo(() => {
+    const columns = [...inputColumns, ...outputColumns]
+    return phaseRowKeys.map((rowKey) =>
+      batchTableDataColWidth(phaseColLabel(rowKey), phaseColumnSamples(rowKey, columns), false)
+    )
+  }, [inputColumns, outputColumns, phaseRowKeys])
   const { widths: colWidths, tableWidth: resolvedTableWidth } = batchPhaseTableColWidths(
     nameColWidth,
     phaseRowKeys.length,
-    viewportWidth
+    viewportWidth,
+    phaseColumnWidths
   )
   const resolvedNameColWidth = colWidths[1] ?? nameColWidth
 

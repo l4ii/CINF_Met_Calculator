@@ -114,11 +114,6 @@ export function expandAssayDisplayMassForBalance(
     out['FeO(氧化亚铁)'] = 0
   }
 
-  for (const key of INPUT_OXIDE_EQUIVALENT_KEYS) {
-    const oxygen = oxideEquivalentOxygenMass(key, source?.[key] ?? 0)
-    if (oxygen > 0) out['O(氧)'] = (out['O(氧)'] ?? 0) + oxygen
-  }
-
   return out
 }
 

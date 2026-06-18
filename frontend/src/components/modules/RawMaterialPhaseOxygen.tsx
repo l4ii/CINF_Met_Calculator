@@ -1023,9 +1023,15 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                               <td className="px-3 py-2 text-right">
                                 <BatchTableNumericReadonly darkMode={darkMode} value={b.weight} className="text-right text-sm" />
                               </td>
-                              <td className="px-3 py-2 text-right font-mono">{blendTotalWeight > 0 ? ((b.weight / blendTotalWeight) * 100).toFixed(2) : '0.00'}%</td>
-                              <td className="px-3 py-2 text-right font-mono">{(b.unitPriceYuanPerTon / 10000).toFixed(2)}{isEn ? ' x10k' : '万'}</td>
-                              <td className="px-3 py-2 text-right font-mono">{(b.weight * b.unitPriceYuanPerTon).toFixed(0)}</td>
+                              <td className="px-3 py-2 text-right">
+                                <BatchTableNumericReadonly darkMode={darkMode} value={blendTotalWeight > 0 ? (b.weight / blendTotalWeight) * 100 : 0} className="inline text-right text-sm" />%
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                <BatchTableNumericReadonly darkMode={darkMode} value={b.unitPriceYuanPerTon / 10000} className="inline text-right text-sm" />{isEn ? ' x10k' : '万'}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                <BatchTableNumericReadonly darkMode={darkMode} value={b.weight * b.unitPriceYuanPerTon} className="text-right text-sm" />
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -1070,7 +1076,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                                   <BatchTableNumericReadonly darkMode={darkMode} value={row.achieved} className="text-right text-sm" />
                                 </td>
                                 <td className={`px-3 py-2 text-right font-mono ${severity}`}>
-                                  {row.relErrPct >= 0 ? '+' : ''}{row.relErrPct.toFixed(1)}%
+                                  {row.relErrPct >= 0 ? '+' : ''}{row.relErrPct.toFixed(2)}%
                                 </td>
                               </tr>
                             )
@@ -1701,7 +1707,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                           ? 'text-red-500'
                           : dark ? 'text-gray-300' : 'text-gray-700'
                       }`}>
-                        {(Number(sol.cost) || 0).toFixed(0)}
+                        <BatchTableNumericReadonly darkMode={darkMode} value={Number(sol.cost) || 0} className="text-sm" />
                       </td>
                       <td className="text-center py-2 pl-4 pr-3">
                         {appliedSolvent && Math.abs((appliedSolvent.limestone ?? 0) - (sol.limestone ?? 0)) < 1e-4 && Math.abs((appliedSolvent.ironOre ?? 0) - (sol.ironOre ?? 0)) < 1e-4 ? (

@@ -35,10 +35,9 @@
         "SeO2",
         "Bi2O3",
         "Sb2O3",
-        "Fe2SiO4",
         "CaSiO3",
         "MgSiO3",
-        "Mullite",
+        "3Al2O3•2SiO2",
         "SnO",
         "SiO2",
         "Cd",
@@ -141,10 +140,11 @@
     "fugitive": {
       "name": "无组织排放",
       "allowedElements": [
+        "S (硫)",
         "O(氧)"
       ],
       "phases": [
-        "O2"
+        "SO2"
       ]
     },
     "loss": {
@@ -329,7 +329,7 @@
       "element": "S(硅)",
       "rules": [
         {
-          "product": "flueGas",
+          "product": "dust",
           "type": "D%",
           "value": 0.2
         }
@@ -444,8 +444,13 @@
   "customConstraints": [
     {
       "expr": "Input.煤 / Input.混合铜精矿",
-      "target": 0.13,
-      "note": "【解读】燃料煤干重 ÷ 混合铜精矿干重。【业务】煤/精矿比，典型约 0.13。【执行】硬约束：同次求解将燃料煤干重设为目标煤/精矿比，并同步重构入炉混料元素量。"
+      "target": 0.013038157348,
+      "note": "【解读】燃料煤干重 ÷ 混合铜精矿干重。【业务】煤/精矿比来自参考表 x2/B3=0.01303。【执行】派生约束：煤不作为牛顿未知量，直接由投入-物料元素表的混合铜精矿干量乘以固定系数得到。"
+    },
+    {
+      "expr": "Input.煤.H2O / Input.煤湿基",
+      "target": 0.02,
+      "note": "【解读】煤中含水质量 ÷ 煤湿基质量。【业务】煤含水固定为湿基 2%，即干煤 98%、水 2%。【执行】派生约束：由煤干基质量自动计算 H2O=干煤×2/98，并进入含水守恒。"
     },
     {
       "expr": "Input.加料口漏风 / 5.73",
@@ -483,11 +488,6 @@
       "note": "【解读】熔炼渣 Fe₃O₄ 质量 ÷ 熔炼渣总质量。【业务】磁性铁占渣量 15%。【执行】强制矫正 Fe₃O₄ 质量分数。"
     },
     {
-      "expr": "Output.熔炼渣.Fe2SiO4 / Output.熔炼渣.FeO",
-      "target": 19.325,
-      "note": "【解读】熔炼渣 Fe2SiO4 质量 ÷ FeO 质量。【业务】硅酸铁/氧化亚铁质量比 = 19.325。【执行】强制矫正 Fe2SiO4/FeO 物相比。"
-    },
-    {
       "expr": "Output.烟气含尘.Cu2S / Output.烟气含尘.Cu2O",
       "target": 4,
       "note": "【解读】烟尘 Cu₂S ÷ Cu₂O 质量比。【业务】烟尘中铜以硫化态为主，比值为 4。【执行】强制矫正烟尘 Cu₂S/Cu₂O。"
@@ -506,31 +506,11 @@
       "expr": "OutputE.白铜锍.Fe / ((-0.825 * GMC / 100 + 0.633) * Output.白铜锍)",
       "target": 1,
       "note": "【解读】白铜锍 Fe 质量 ÷ (经验式 Fe%×锍总质量)。Fe% = -0.825×GMC/100+0.633。【业务】锍铁含量随 GMC 变化。【执行】强制矫正白铜锍物相（applyMatteGmcPhases）。"
-    },
-    {
-      "expr": "Output.熔炼出炉烟气.As2O3.As / (Output.熔炼出炉烟气.As2O3.As + Output.烟气含尘.As2O3.As)",
-      "target": 0.6,
-      "note": "【解读】烟气 As₂O₃ 中 As ÷ (烟气+烟尘) As 总量。【业务】砷 60% 入烟气、40% 入烟尘。【执行】强制分割 As 于烟气/烟尘 As₂O₃ 相。"
-    },
-    {
-      "expr": "Output.烟气含尘 / Input.混合铜精矿",
-      "target": 0.02,
-      "note": "【解读】烟尘总质量 ÷ 入炉精矿质量。【业务】烟尘率为精矿的 2%。【执行】强制将烟尘总量缩放至 2%×精矿。"
-    },
-    {
-      "expr": "Output.烟气含尘.PbO.Pb / Output.烟气含尘.PbS.Pb",
-      "target": 5,
-      "note": "【解读】烟尘 PbO 中 Pb ÷ PbS 中 Pb。【业务】烟尘铅 5/6 氧化态、1/6 硫化态，元素质量比 5。【执行】按 PbO/PbS 中 Pb 质量分数换算物相质量。"
-    },
-    {
-      "expr": "Output.烟气含尘.ZnO.Zn / Output.烟气含尘.ZnS.Zn",
-      "target": 5,
-      "note": "【解读】烟尘 ZnO 中 Zn ÷ ZnS 中 Zn。【业务】烟尘锌 5/6 氧化态、1/6 硫化态。【执行】按 ZnO/ZnS 中 Zn 质量分数换算物相质量。"
     }
   ],
   "solverParams": {
     "wPercentIterations": 40,
-    "newtonMaxIterations": 50,
+    "newtonMaxIterations": 100,
     "tolerance": 0.0001
   }
 }

@@ -33,6 +33,9 @@ export type PhaseMaterialCalcResult = {
   message?: string
 }
 
+export type ConstraintPhasePercentMap = Record<string, number>
+export type ConstraintPhaseMassMap = Record<string, number>
+
 /** 物相区表头元素列（化合物口径） */
 export const COPPER_PHASE_TABLE_ELEMENT_KEYS = [...COPPER_PHASE_TABLE_COMPOUND_KEYS] as const
 
@@ -125,6 +128,74 @@ export function phaseContentsToInputPhaseMap(
   const closureOther = Math.max(0, unknowns['Other(其他)'] ?? 0)
   if (closureOther > 0) raw.Other = Math.max(raw.Other ?? 0, closureOther)
   return normalizePhasePercents(raw)
+}
+
+function materialPhaseRowConstraintKey(row: MaterialPhaseAssistRow): string | null {
+  if (row.kind === 'builtin' && row.builtinKey) return row.builtinKey
+  if (row.kind === 'custom') {
+    const formula = row.formula.trim()
+    if (formula) return formula
+    const fromId = row.id.startsWith('custom:') ? row.id.slice('custom:'.length).trim() : row.id.trim()
+    return fromId || null
+  }
+  if (row.kind === 'other') return 'Other'
+  return null
+}
+
+/** 行级物相 w% → 约束求解物相 canonical 键（保留 CuFeS2/FeS2 等自定义公式物相） */
+export function phaseContentsToConstraintPhaseMap(
+  phaseContents: Record<string, number>,
+  rows: MaterialPhaseAssistRow[] = [],
+  unknowns: Partial<PhaseUnknownValues> = {}
+): ConstraintPhasePercentMap {
+  const raw: ConstraintPhasePercentMap = {}
+  for (const row of rows) {
+    if (row.kind === 'draft') continue
+    const pct = Math.max(0, phaseContents[row.id] ?? 0)
+    if (pct <= 0) continue
+    const key = materialPhaseRowConstraintKey(row)
+    if (!key) continue
+    raw[key] = (raw[key] ?? 0) + pct
+  }
+
+  const assignedWithoutOther = Object.entries(raw).reduce(
+    (sum, [key, pct]) => sum + (key === 'Other' ? 0 : Math.max(0, pct)),
+    0
+  )
+  const closureOther = Math.max(0, unknowns['Other(其他)'] ?? 0)
+  const inferredOther = Math.max(0, 100 - assignedWithoutOther)
+  raw.Other = Math.max(0, raw.Other ?? 0, closureOther, inferredOther)
+
+  const total = Object.values(raw).reduce((sum, pct) => sum + Math.max(0, pct), 0)
+  if (total <= 0) return {}
+  if (Math.abs(total - 100) <= 1e-9) return raw
+  const scale = 100 / total
+  return Object.fromEntries(
+    Object.entries(raw).map(([key, pct]) => [key, Math.max(0, pct) * scale])
+  )
+}
+
+/** 混合铜精矿约束输入物相质量流：各原料物相 w% 按投料量直接折算为 t/h */
+export function buildBlendPhaseMassFromMaterialResults(
+  results: PhaseMaterialCalcResult[],
+  rowsByMaterial: Record<string, MaterialPhaseAssistRow[]>
+): ConstraintPhaseMassMap {
+  const masses: ConstraintPhaseMassMap = {}
+  for (const item of results) {
+    const weight = Math.max(0, item.weight)
+    if (weight <= 0) continue
+    const phases = phaseContentsToConstraintPhaseMap(
+      item.phaseContents,
+      rowsByMaterial[item.materialId] ?? [],
+      item.unknowns
+    )
+    for (const [phase, pct] of Object.entries(phases)) {
+      const mass = (Math.max(0, pct) / 100) * weight
+      if (mass <= 0) continue
+      masses[phase] = (masses[phase] ?? 0) + mass
+    }
+  }
+  return masses
 }
 
 /** 混料物相：各原料物相 w% 按投料量加权求和后再归一化为 100% */

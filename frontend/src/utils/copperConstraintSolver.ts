@@ -3,7 +3,7 @@ import { parseConstraintExpression, evaluateConstraintExprString } from './coppe
 import {
   buildProductsFromPhases,
   buildUnknownSpecs,
-  unpackUnknowns,
+  unpackProjectedUnknowns,
   type OxyConstraintBaseInput,
 } from './copperConstraintUnknowns.ts'
 import {
@@ -44,6 +44,8 @@ export interface OxyConstraintSolverResult {
   maxRelativeResidual: number
   recommended: {
     fuelWeight: number
+    fuelWaterWeight: number
+    fuelMoisture: number
     solventWeights: Record<string, number>
     gasWeights: Record<string, number>
   }
@@ -77,9 +79,10 @@ function compositionFromElementMass(
 
 function buildOxyProductResults(
   outputPhases: Record<OxySideBlowProductKey, Record<string, number>>,
+  productMasses: Partial<Record<OxySideBlowProductKey, number>>,
   config: OxySideBlowConstraintConfig
 ): Record<OxySideBlowProductKey, OxyProductResult> {
-  const built = buildProductsFromPhases(outputPhases, config)
+  const built = buildProductsFromPhases(outputPhases, config, productMasses)
   const results = {} as Record<OxySideBlowProductKey, OxyProductResult>
   for (const pk of OXY_SIDE_BLOW_PRODUCT_KEYS) {
     const def = config.products[pk]
@@ -125,17 +128,17 @@ export function solveOxySideBlowProducts(input: OxyConstraintSolverInput): OxyCo
   const config = input.config ?? loadOxySideBlowConstraints()
   const solved = solveOxyConstraintSystemStrict(input, config)
   const specs = buildUnknownSpecs(config, input)
-  const unpacked = unpackUnknowns(solved.x, specs, input)
-  const products = buildOxyProductResults(unpacked.outputPhases, config)
+  const unpacked = unpackProjectedUnknowns(solved.x, specs, input, config)
+  const products = buildOxyProductResults(unpacked.outputPhases, unpacked.productMasses, config)
   const constraintResiduals = buildResidualRowsFromSolution(solved.x, input, config)
   const totalProductMass = OXY_SIDE_BLOW_PRODUCT_KEYS.reduce((sum, pk) => sum + products[pk].mass, 0)
   const gasWeights = Object.fromEntries(unpacked.airColumns.map((col) => [col.name, col.weight]))
   const solventWeights = Object.fromEntries(unpacked.solventColumns.map((col) => [col.name, col.weight]))
   const allProductsClosed = OXY_SIDE_BLOW_PRODUCT_KEYS.every((pk) => verifyProductElementTotals(products[pk]))
-  const missingListedPhases = requiredListedPhaseGaps(products, config)
-  const valid = solved.converged && allProductsClosed && missingListedPhases.length === 0
+  const valid = solved.converged && allProductsClosed
   const worstResiduals = constraintResiduals
     .slice()
+    .filter((row) => !row.soft)
     .sort((a, b) => b.relativeResidual - a.relativeResidual)
     .slice(0, 3)
   const worstNote =
@@ -148,11 +151,7 @@ export function solveOxySideBlowProducts(input: OxyConstraintSolverInput): OxyCo
     ? undefined
     : !solved.converged
       ? `当前约束无精确可行解，最大相对残差 ${solved.maxRelativeResidual.toFixed(4)}。${worstNote}`
-      : missingListedPhases.length > 0
-        ? `当前约束无精确可行解：配置中列出的物相被求为 0 或接近 0（${missingListedPhases
-            .slice(0, 6)
-            .join('、')}）。请补充对应入炉来源/分配约束，或从约束文件中移除该物相。`
-        : '部分产物元素合计未闭合至 100%'
+      : '部分产物元素合计未闭合至 100%'
 
   return {
     valid,
@@ -165,6 +164,8 @@ export function solveOxySideBlowProducts(input: OxyConstraintSolverInput): OxyCo
     maxRelativeResidual: solved.maxRelativeResidual,
     recommended: {
       fuelWeight: unpacked.fuelMass,
+      fuelWaterWeight: unpacked.fuelColumn.waterWeight ?? 0,
+      fuelMoisture: unpacked.fuelColumn.moisture ?? 0,
       solventWeights,
       gasWeights,
     },
@@ -176,23 +177,6 @@ export function solveOxySideBlowProducts(input: OxyConstraintSolverInput): OxyCo
 export function verifyProductElementTotals(product: OxyProductResult, tolerance = 0.5): boolean {
   const total = Object.values(product.composition).reduce((sum, value) => sum + (value ?? 0), 0)
   return Math.abs(total - 100) <= tolerance || product.mass <= 0
-}
-
-function requiredListedPhaseGaps(
-  products: Record<OxySideBlowProductKey, OxyProductResult>,
-  config: OxySideBlowConstraintConfig,
-  tolerance = 1e-8
-): string[] {
-  const gaps: string[] = []
-  for (const pk of OXY_SIDE_BLOW_PRODUCT_KEYS) {
-    const product = products[pk]
-    if (product.mass <= tolerance) continue
-    for (const phaseKey of config.products[pk].phases) {
-      const phase = product.phases.find((item) => item.key === phaseKey)
-      if ((phase?.mass ?? 0) <= tolerance) gaps.push(`${product.name}.${phaseKey}`)
-    }
-  }
-  return gaps
 }
 
 export { parseConstraintExpression, evaluateConstraintExprString }

@@ -10,7 +10,7 @@ import {
   buildUnknownSpecs,
   createInitialUnpacked,
   packUnknowns,
-  unpackUnknowns,
+  unpackProjectedUnknowns,
   type OxyConstraintBaseInput,
 } from './copperConstraintUnknowns.ts'
 
@@ -31,6 +31,16 @@ function clampVector(values: number[]): number[] {
   return values.map((value) => Math.max(0, value))
 }
 
+function projectVector(
+  values: number[],
+  specs: ReturnType<typeof buildUnknownSpecs>,
+  baseInput: OxyConstraintBaseInput,
+  config: OxySideBlowConstraintConfig
+): number[] {
+  const unpacked = unpackProjectedUnknowns(clampVector(values), specs, baseInput, config)
+  return clampVector(packUnknowns(unpacked, specs))
+}
+
 function residualVector(
   x: number[],
   equations: CompiledEquation[],
@@ -38,7 +48,7 @@ function residualVector(
   baseInput: OxyConstraintBaseInput,
   config: OxySideBlowConstraintConfig
 ): number[] {
-  const unpacked = unpackUnknowns(x, specs, baseInput)
+  const unpacked = unpackProjectedUnknowns(x, specs, baseInput, config)
   const table = buildSymbolTableFromUnknowns(unpacked, baseInput, config)
   return equations.map((equation) => {
     const scaled = evaluateScaledEquationResidual(
@@ -52,6 +62,16 @@ function residualVector(
   })
 }
 
+function residualObjective(
+  x: number[],
+  equations: CompiledEquation[],
+  specs: ReturnType<typeof buildUnknownSpecs>,
+  baseInput: OxyConstraintBaseInput,
+  config: OxySideBlowConstraintConfig
+): number {
+  return residualVector(x, equations, specs, baseInput, config).reduce((sum, value) => sum + value * value, 0)
+}
+
 function maxRelativeResidualFromSolution(
   x: number[],
   equations: CompiledEquation[],
@@ -59,7 +79,7 @@ function maxRelativeResidualFromSolution(
   baseInput: OxyConstraintBaseInput,
   config: OxySideBlowConstraintConfig
 ): number {
-  const unpacked = unpackUnknowns(x, specs, baseInput)
+  const unpacked = unpackProjectedUnknowns(x, specs, baseInput, config)
   const table = buildSymbolTableFromUnknowns(unpacked, baseInput, config)
   let max = 0
   for (const equation of equations) {
@@ -92,7 +112,8 @@ function numericalJacobian(
     const step = Math.max(eps, Math.abs(x[col]!) * eps)
     const forward = [...x]
     forward[col] = Math.max(0, forward[col]! + step)
-    const rForward = residualVector(forward, equations, specs, baseInput, config)
+    const projectedForward = projectVector(forward, specs, baseInput, config)
+    const rForward = residualVector(projectedForward, equations, specs, baseInput, config)
     for (let row = 0; row < m; row += 1) {
       jacobian[row]![col] = (rForward[row]! - residuals[row]!) / step
     }
@@ -148,9 +169,10 @@ export function solveOxyConstraintSystemStrict(
   const tolerance = options.tolerance ?? config.solverParams?.tolerance ?? 1e-4
   const maxIterations = options.maxIterations ?? config.solverParams?.newtonMaxIterations ?? 120
   const specs = buildUnknownSpecs(config, baseInput)
-  const equations = compileOxyConstraintSystem(config)
+  const hardEquations = compileOxyConstraintSystem(config)
+  const objectiveEquations = compileOxyConstraintSystem(config, { includeSoftCustom: true })
 
-  let x = clampVector(packUnknowns(createInitialUnpacked(baseInput, config), specs))
+  let x = projectVector(packUnknowns(createInitialUnpacked(baseInput, config), specs), specs, baseInput, config)
   let lambda = options.lmLambda ?? 1e-2
   let converged = false
   let iterations = 0
@@ -158,14 +180,15 @@ export function solveOxyConstraintSystemStrict(
 
   for (let iter = 0; iter < maxIterations; iter += 1) {
     iterations = iter + 1
-    const residuals = residualVector(x, equations, specs, baseInput, config)
-    maxRel = maxRelativeResidualFromSolution(x, equations, specs, baseInput, config)
+    const residuals = residualVector(x, objectiveEquations, specs, baseInput, config)
+    const objective = residuals.reduce((sum, value) => sum + value * value, 0)
+    maxRel = maxRelativeResidualFromSolution(x, hardEquations, specs, baseInput, config)
     if (maxRel < tolerance) {
       converged = true
       break
     }
 
-    const jacobian = numericalJacobian(x, residuals, equations, specs, baseInput, config)
+    const jacobian = numericalJacobian(x, residuals, objectiveEquations, specs, baseInput, config)
     const m = residuals.length
     const n = x.length
     const jtj = Array.from({ length: n }, () => new Array<number>(n).fill(0))
@@ -187,9 +210,10 @@ export function solveOxyConstraintSystemStrict(
 
     let accepted = false
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      const candidate = clampVector(x.map((value, index) => value + (dx[index] ?? 0)))
-      const candidateMax = maxRelativeResidualFromSolution(candidate, equations, specs, baseInput, config)
-      if (candidateMax < maxRel) {
+      const candidate = projectVector(x.map((value, index) => value + (dx[index] ?? 0)), specs, baseInput, config)
+      const candidateObjective = residualObjective(candidate, objectiveEquations, specs, baseInput, config)
+      const candidateMax = maxRelativeResidualFromSolution(candidate, hardEquations, specs, baseInput, config)
+      if (candidateObjective < objective) {
         x = candidate
         maxRel = candidateMax
         lambda = Math.max(lambda * 0.3, 1e-8)
@@ -215,18 +239,19 @@ export function buildResidualRowsFromSolution(
   config: OxySideBlowConstraintConfig
 ) {
   const specs = buildUnknownSpecs(config, baseInput)
-  const equations = compileOxyConstraintSystem(config)
-  const unpacked = unpackUnknowns(x, specs, baseInput)
+  const equations = compileOxyConstraintSystem(config, { includeSoftCustom: true })
+  const unpacked = unpackProjectedUnknowns(x, specs, baseInput, config)
   const table = buildSymbolTableFromUnknowns(unpacked, baseInput, config)
-  return equations.map((equation) =>
-    equationResidualRow(
+  return equations.map((equation) => {
+    const row = equationResidualRow(
       equation,
       table,
       config,
       unpacked.distributionFeed.elementWeights,
       unpacked.balanceFeed.elementWeights
     )
-  )
+    return { ...row, soft: equation.soft }
+  })
 }
 
 export { compileOxyConstraintSystem }

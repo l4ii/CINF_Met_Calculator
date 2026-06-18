@@ -384,12 +384,12 @@ export default function ProductDisplay({ darkMode, language = 'zh' }: ProductDis
                         {productResult.trace.iterations.map((it) => (
                           <tr key={it.iter} className={dark ? 'border-b border-gray-700' : 'border-b border-gray-100'}>
                             <td className={`py-1.5 px-2 ${dark ? 'text-gray-300' : 'text-gray-700'}`}>{it.iter}</td>
-                            <td className="text-right py-1.5 px-2 font-mono">{it.oxygenUtilization.toFixed(3)}</td>
+                            <td className="text-right py-1.5 px-2 font-mono">{it.oxygenUtilization.toFixed(2)}</td>
                             <td className="text-right py-1.5 px-2 font-mono">{it.pO2_atm.toExponential(2)}</td>
                             <td className="text-right py-1.5 px-2 font-mono">{it.pS2_atm.toExponential(2)}</td>
                             <td className="text-right py-1.5 px-2 font-mono">{it.matteGradeSb.toFixed(2)}</td>
-                            <td className="text-right py-1.5 px-2 font-mono">{it.slagFeO_SiO2.toFixed(3)}</td>
-                            <td className="text-right py-1.5 px-2 font-mono">{it.slagCaO_SiO2.toFixed(3)}</td>
+                            <td className="text-right py-1.5 px-2 font-mono">{it.slagFeO_SiO2.toFixed(2)}</td>
+                            <td className="text-right py-1.5 px-2 font-mono">{it.slagCaO_SiO2.toFixed(2)}</td>
                             <td className="text-right py-1.5 px-2 font-mono">{it.o2UsedKmol.toFixed(2)}</td>
                           </tr>
                         ))}

@@ -13,8 +13,8 @@ import {
 } from '../../utils/copperBatchTableLayout.ts'
 import {
   buildProductResultPivotData,
-  productResultColumnHeaders,
 } from '../../utils/copperProductResultTable.ts'
+import { elementSymbolLabel } from '../../utils/copperElementDisplay.ts'
 import { phaseStorageKeyToDisplayLabel } from '../../utils/copperPhaseTableCalc.ts'
 import { calculateGasVolumePercents } from '../../utils/copperProductPhaseCalc.ts'
 import { formatBatchTableTooltip } from '../../utils/batchTableNumeric.ts'
@@ -36,17 +36,24 @@ export function CopperProductionResultTable({
   darkMode,
   result,
   empty = false,
+  mode = 'both',
+  phaseTitle = '产物物相组成',
+  elementTitle = '产出元素组成',
 }: {
   darkMode: boolean
   result?: OxyConstraintSolverResult | null
   empty?: boolean
+  mode?: 'both' | 'phase' | 'element'
+  phaseTitle?: string
+  elementTitle?: string
 }) {
   const border = darkMode ? 'border-gray-600' : 'border-gray-200'
   const head = darkMode ? 'bg-gray-800 text-gray-300' : 'bg-gray-50 text-gray-600'
   const config = useMemo(() => loadOxySideBlowConstraints(), [])
   const showEmpty = empty || !result
-  const columns = productResultColumnHeaders(config)
   const pivotRows = showEmpty ? [] : buildProductResultPivotData(result!, config)
+  const elementRows = pivotRows.filter((row) => row.kind === 'element')
+  const elementColumnCount = Math.max(elementRows.length, 1)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const [viewportWidth, setViewportWidth] = useState(0)
@@ -61,17 +68,19 @@ export function CopperProductionResultTable({
     return () => ro.disconnect()
   }, [])
 
-  const labelSamples = ['t/h', '占比%', 'w%', ...columns.map((col) => col.label)]
+  const labelSamples = showEmpty
+    ? ['名称']
+    : OXY_SIDE_BLOW_PRODUCT_KEYS.map((pk) => result!.products[pk].name || OXY_PRODUCT_KEY_TO_CN[pk])
   const { widths: colWidths, tableWidth: resolvedTableWidth } = computeProductResultTableLayout({
     labelSamples,
-    productHeaders: columns.map((col) => col.label),
+    productHeaders: elementRows.length > 0 ? elementRows.map((row) => elementSymbolLabel(row.label)) : ['元素'],
     containerWidth: viewportWidth,
   })
 
-  const colCount = 2 + columns.length
+  const colCount = 2 + elementColumnCount
   const warnPanel = darkMode ? 'bg-amber-950/40 text-amber-200 border-amber-800' : 'bg-amber-50 text-amber-900 border-amber-200'
 
-  const renderPivotTable = () => (
+  const renderProductElementTable = () => (
     <div ref={containerRef} className={`overflow-auto rounded-lg border ${border}`}>
       <table className="table-fixed w-full border-collapse text-sm" style={{ width: resolvedTableWidth }}>
         <CopperBatchTableColGroup widths={colWidths} />
@@ -82,84 +91,93 @@ export function CopperProductionResultTable({
                 className="sticky left-0 px-2 py-1.5 text-center text-sm font-semibold"
                 style={{ width: viewportWidth || undefined }}
               >
-                产出元素组成
+                {elementTitle}
               </div>
             </th>
           </tr>
           <tr>
-            <th className={assistStickyHeadClass(darkMode)}>项目</th>
+            <th className={assistStickyHeadClass(darkMode)}>名称</th>
             <th className={`px-0.5 py-1.5 text-center text-sm font-semibold ${assistTotalCellClass(darkMode)}`}>
-              合计
+              t/h
             </th>
-            {columns.map((col, index) => (
-              <th
-                key={col.key}
-                className={`px-0.5 py-1.5 text-center text-sm font-semibold ${assistColumnStripeClass(darkMode, index)}`}
-              >
-                {col.label}
-              </th>
-            ))}
+            <th colSpan={elementColumnCount} className="px-0.5 py-1.5 text-center text-sm font-semibold">
+              元素 w%
+            </th>
           </tr>
         </thead>
         <tbody>
-          {(showEmpty
-            ? [
-                { kind: 'mass' as const, label: 't/h', values: {}, total: null },
-                { kind: 'share' as const, label: '占比%', values: {}, total: null },
-                { kind: 'wClose' as const, label: 'w%', values: {}, total: null },
-              ]
-            : pivotRows
-          ).map((row) => {
-            const isWRow = row.kind === 'wClose'
+          {OXY_SIDE_BLOW_PRODUCT_KEYS.map((pk) => {
+            const product = showEmpty
+              ? { name: OXY_PRODUCT_KEY_TO_CN[pk], mass: 0 }
+              : result!.products[pk]
             return (
-              <tr key={`${row.kind}-${row.label}`}>
-                <td
-                  className={`${assistStickyLabelClass(darkMode)} border-t font-medium ${
-                    isWRow ? assistFirstDataRowClass(darkMode) : ''
-                  }`}
-                >
-                  {row.label}
-                </td>
-                <td
-                  className={`border-t px-0.5 py-1.5 text-center align-middle text-sm font-mono font-semibold ${assistTotalCellClass(
-                    darkMode
-                  )} ${assistValueHighlightClass(darkMode, pivotCellHasValue(row.kind, row.total))} ${
-                    isWRow ? assistFirstDataRowClass(darkMode) : ''
-                  }`}
-                >
-                  {showEmpty ? (
-                    '—'
-                  ) : (
-                    <BatchTableNumericReadonly
-                      darkMode={darkMode}
-                      value={row.total ?? '—'}
-                      helpTitle={`${row.label} 合计`}
-                      className="inline text-sm font-semibold"
-                    />
-                  )}
-                </td>
-                {columns.map((col, index) => {
-                  const value = showEmpty ? null : row.values[col.key]
-                  const hasValue = pivotCellHasValue(row.kind, value)
-                  const cellCls = `border-t px-0.5 py-1.5 text-center align-middle text-sm font-mono ${
-                    isWRow ? assistFirstDataRowClass(darkMode) : assistColumnStripeClass(darkMode, index)
-                  } ${assistValueHighlightClass(darkMode, hasValue)}`
-                  return (
-                    <td key={`${row.kind}-${col.key}`} className={cellCls}>
-                      {showEmpty || value == null ? (
-                        '—'
-                      ) : (
-                        <BatchTableNumericReadonly
-                          darkMode={darkMode}
-                          value={value}
-                          helpTitle={`${col.label} · ${row.label}`}
-                          className="inline text-sm"
-                        />
-                      )}
-                    </td>
-                  )
-                })}
-              </tr>
+              <Fragment key={`product-element-${pk}`}>
+                <tr>
+                  <td
+                    rowSpan={2}
+                    className={`${assistStickyLabelClass(darkMode)} border-t font-semibold`}
+                  >
+                    {product.name}
+                  </td>
+                  <td
+                    rowSpan={2}
+                    className={`border-t px-0.5 py-1.5 text-center align-middle text-sm font-mono ${assistTotalCellClass(
+                      darkMode
+                    )}`}
+                  >
+                    {showEmpty ? (
+                      '—'
+                    ) : (
+                      <BatchTableNumericReadonly
+                        darkMode={darkMode}
+                        value={product.mass}
+                        helpTitle={`${product.name} 总质量`}
+                        className="inline text-sm"
+                      />
+                    )}
+                  </td>
+                  {Array.from({ length: elementColumnCount }, (_, index) => {
+                    const row = elementRows[index]
+                    return (
+                      <td
+                        key={`${pk}-element-label-${index}`}
+                        className={`border-t px-0.5 py-1.5 text-center align-middle text-sm font-medium ${assistColumnStripeClass(
+                          darkMode,
+                          index
+                        )}`}
+                      >
+                        {row ? elementSymbolLabel(row.label) : '—'}
+                      </td>
+                    )
+                  })}
+                </tr>
+                <tr>
+                  {Array.from({ length: elementColumnCount }, (_, index) => {
+                    const row = elementRows[index]
+                    const value = row ? row.values[pk] : null
+                    const hasValue = pivotCellHasValue('element', value)
+                    return (
+                      <td
+                        key={`${pk}-element-value-${index}`}
+                        className={`border-t px-0.5 py-1.5 text-center align-middle text-sm font-mono ${assistFirstDataRowClass(
+                          darkMode
+                        )} ${assistValueHighlightClass(darkMode, hasValue)}`}
+                      >
+                        {showEmpty || !row || value == null ? (
+                          '—'
+                        ) : (
+                          <BatchTableNumericReadonly
+                            darkMode={darkMode}
+                            value={value}
+                            helpTitle={`${product.name} · ${elementSymbolLabel(row.label)} w%`}
+                            className="inline text-sm"
+                          />
+                        )}
+                      </td>
+                    )
+                  })}
+                </tr>
+              </Fragment>
             )
           })}
         </tbody>
@@ -204,7 +222,7 @@ export function CopperProductionResultTable({
                 className="sticky left-0 px-2 py-1.5 text-center text-sm font-semibold"
                 style={{ width: phaseViewportWidth || undefined }}
               >
-                产物物相组成
+                {phaseTitle}
               </div>
             </th>
           </tr>
@@ -336,20 +354,24 @@ export function CopperProductionResultTable({
     </div>
   )
 
+  const showPhase = mode === 'both' || mode === 'phase'
+  const showElement = mode === 'both' || mode === 'element'
+  const showWarnings = mode === 'both'
+
   return (
     <div className="space-y-3">
-      {result && !result.converged && (
+      {showWarnings && result && !result.converged && (
         <div className={`rounded-lg border px-3 py-2 text-sm ${warnPanel}`}>
           部分自定义约束未收敛：{result.message ?? '请检查配料或约束配置。'}
         </div>
       )}
-      {result && result.valid === false && result.converged && (
+      {showWarnings && result && result.valid === false && result.converged && (
         <div className={`rounded-lg border px-3 py-2 text-sm ${warnPanel}`}>
           {result.message ?? '产物元素合计未闭合至 100%。'}
         </div>
       )}
-      {renderPhaseTables()}
-      {renderPivotTable()}
+      {showPhase && renderPhaseTables()}
+      {showElement && renderProductElementTable()}
     </div>
   )
 }

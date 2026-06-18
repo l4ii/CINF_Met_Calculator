@@ -250,9 +250,11 @@ function resolveRef(path: string[], table: ConstraintSymbolTable): number {
     if (rest.length === 0) return table.inputMass[name] ?? 0
     if (rest.length === 1) {
       const token = rest[0]!
+      const phaseMass = table.inputPhaseMass?.[name]?.[token]
+      if (phaseMass !== undefined) return phaseMass
       const elementMass = resolveElementMass(table.inputElementMass[name], token)
       if (elementMass) return elementMass
-      return table.inputPhaseMass?.[name]?.[token] ?? 0
+      return 0
     }
     if (rest.length >= 2) {
       const phase = rest[0]!
@@ -332,6 +334,7 @@ export function buildConstraintSymbolTable(params: {
     { mass: number; phases: Record<string, number>; elementMass: Partial<Record<CopperElementKey, number>> }
   >
 }): ConstraintSymbolTable {
+  const fuelWaterMass = params.inputPhaseMass?.煤?.H2O ?? params.inputPhaseMass?.燃料煤?.H2O ?? 0
   const outputMass: Record<string, number> = {}
   const outputPhaseMass: Record<string, Record<string, number>> = {}
   const outputElementMass: Record<string, Partial<Record<CopperElementKey, number>>> = {}
@@ -349,6 +352,7 @@ export function buildConstraintSymbolTable(params: {
       混料: params.blendMass,
       煤: params.fuelMass,
       燃料煤: params.fuelMass,
+      煤湿基: params.fuelMass + fuelWaterMass,
       ...(params.gasMass ?? {}),
     },
     inputElementMass: {
@@ -357,7 +361,17 @@ export function buildConstraintSymbolTable(params: {
       煤: params.fuelElementMass,
       ...(params.gasElementMass ?? {}),
     },
-    inputPhaseMass: params.inputPhaseMass,
+    inputPhaseMass: {
+      ...(params.inputPhaseMass ?? {}),
+      煤: {
+        ...(params.inputPhaseMass?.煤 ?? {}),
+        H2O: fuelWaterMass,
+      },
+      燃料煤: {
+        ...(params.inputPhaseMass?.燃料煤 ?? {}),
+        H2O: fuelWaterMass,
+      },
+    },
     outputMass,
     outputPhaseMass,
     outputElementMass,

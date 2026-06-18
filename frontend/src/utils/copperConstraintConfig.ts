@@ -1,4 +1,6 @@
 import rawConstraints from '../config/copperOxySideBlowConstraints.json' with { type: 'json' }
+import { phaseFractionsFromFormula } from './chemicalFormula.ts'
+import { COPPER_BUILTIN_PHASE_FRACTIONS } from './copperPhaseStoichiometry.ts'
 
 export type OxySideBlowProductKey =
   | 'smeltingSlag'
@@ -28,13 +30,15 @@ export interface ElementDistributionEntry {
 export interface CustomConstraintEntry {
   expr: string
   target: number
+  /** true 表示仅作为初值/复核参考，不进入严格方程组 */
+  soft?: boolean
   /** 约束逻辑说明：解读、业务含义、求解器执行方式 */
   note?: string
 }
 
 export interface OxySideBlowProductDef {
   name: string
-  /** 产物基础白名单（用户输入）；有效白名单 = 此项 ∪ 该产物在 elementDistributions 中的 W%/D% 元素 */
+  /** 用户录入的显示提示；求解白名单以 phases 的化学组成推导为准 */
   allowedElements: ConstraintElementKey[]
   phases: string[]
 }
@@ -58,14 +62,25 @@ export function wdConstraintElementsByProduct(
   return map
 }
 
-/** 产物有效元素白名单 = 基础 allowedElements ∪ W%/D% 约束涉及元素 */
+function phaseElementKeys(phaseKey: string): ConstraintElementKey[] {
+  if (phaseKey === 'Other') return ['Other(其他)']
+  const builtin = COPPER_BUILTIN_PHASE_FRACTIONS[phaseKey] ?? {}
+  const fractions =
+    Object.keys(builtin).length > 0
+      ? builtin
+      : phaseFractionsFromFormula(phaseKey)
+  return Object.entries(fractions)
+    .filter(([, fraction]) => Number.isFinite(fraction) && fraction > 0)
+    .map(([key]) => key)
+}
+
+/** 产物有效元素白名单 = 该产物 phases 真正包含的元素/氧化物当量 */
 export function resolveProductEffectiveAllowedElements(
   config: OxySideBlowConstraintConfig,
   productKey: OxySideBlowProductKey
 ): ConstraintElementKey[] {
-  const base = config.products[productKey].allowedElements ?? []
-  const wd = wdConstraintElementsByProduct(config)[productKey]
-  return [...new Set([...base, ...wd])]
+  const phases = config.products[productKey].phases ?? []
+  return [...new Set(phases.flatMap(phaseElementKeys))]
 }
 
 export interface OxySideBlowConstraintConfig {

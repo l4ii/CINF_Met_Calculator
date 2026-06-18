@@ -16,10 +16,10 @@ const NAME_COL_GLYPH_PX = 15
 const DATA_COL_GLYPH_PX = 8.5
 const DATA_COL_CHROME_PX = 14
 
-/** 2 位小数 w% 列绝对下限（约 "99.99"，紧凑 padding） */
+/** 2 位小数 w% 列绝对下限（约 "100.00"，紧凑 padding） */
 export const BATCH_TABLE_PCT_ABS_MIN = Math.max(
   BATCH_TABLE_DATA_COL_MIN,
-  Math.ceil(5 * DATA_COL_GLYPH_PX) + 10
+  Math.ceil(6 * DATA_COL_GLYPH_PX) + 8
 )
 /** 2 位小数 w% 列名义最小宽 */
 export const BATCH_TABLE_PCT_COL_WIDTH = BATCH_TABLE_PCT_ABS_MIN
@@ -253,10 +253,10 @@ export type BatchElementColumnWidthMeta = {
 }
 
 /** 按表头 + 单元格样本估算各元素列宽（含稀疏列标记） */
-export function batchElementColumnWidthMeta(
-  elementKeys: readonly string[],
-  headerLabel: (element: string) => string,
-  samplesForElement: (element: string) => Array<string | number>
+export function batchElementColumnWidthMeta<T extends string>(
+  elementKeys: readonly T[],
+  headerLabel: (element: T) => string,
+  samplesForElement: (element: T) => Array<string | number>
 ): BatchElementColumnWidthMeta[] {
   return elementKeys.map((element) => {
     const samples = samplesForElement(element)

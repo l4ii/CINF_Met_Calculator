@@ -116,11 +116,6 @@ export const COPPER_BUILTIN_PHASE_FRACTIONS: Record<string, Partial<Record<strin
     'As(砷)': elementMassFraction({ As: 2, S: 3 }, 'As'),
     'S (硫)': elementMassFraction({ As: 2, S: 3 }, 'S'),
   },
-  Fe2SiO4: {
-    'Fe(铁)': elementMassFraction({ Fe: 2, Si: 1, O: 4 }, 'Fe'),
-    'SiO₂(二氧化硅)': elementMassFraction({ Fe: 2, Si: 1, O: 4 }, 'Si') * (MM.SiO2 / atomicMass('Si')),
-    'O(氧)': elementMassFraction({ Fe: 2, Si: 1, O: 4 }, 'O'),
-  },
   CaSiO3: {
     'CaO(氧化钙)': elementMassFraction({ Ca: 1, Si: 1, O: 3 }, 'Ca') * (MM.CaO / atomicMass('Ca')),
     'SiO₂(二氧化硅)': elementMassFraction({ Ca: 1, Si: 1, O: 3 }, 'Si') * (MM.SiO2 / atomicMass('Si')),
@@ -131,7 +126,7 @@ export const COPPER_BUILTIN_PHASE_FRACTIONS: Record<string, Partial<Record<strin
     'SiO₂(二氧化硅)': elementMassFraction({ Mg: 1, Si: 1, O: 3 }, 'Si') * (MM.SiO2 / atomicMass('Si')),
     'O(氧)': elementMassFraction({ Mg: 1, Si: 1, O: 3 }, 'O'),
   },
-  Mullite: {
+  '3Al2O3•2SiO2': {
     'Al₂O₃(三氧化二铝)':
       elementMassFraction({ Al: 6, Si: 2, O: 13 }, 'Al') * (MM.Al2O3 / (2 * atomicMass('Al'))),
     'SiO₂(二氧化硅)': elementMassFraction({ Al: 6, Si: 2, O: 13 }, 'Si') * (MM.SiO2 / atomicMass('Si')),

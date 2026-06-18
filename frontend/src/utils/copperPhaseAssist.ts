@@ -1,4 +1,5 @@
 import { validatePhaseFormulaInput } from './chemicalFormula.ts'
+import { atomicMass, COMPOUND_MOLAR_MASS } from './atomicMass.ts'
 import { CONCENTRATE_DEFAULT_PHASE_FORMULAS, concentratePhaseFractionsForFormula } from './copperConcentratePhaseNorm.ts'
 import {
   COPPER_PHASE_OXYGEN_FACTORS,
@@ -334,7 +335,11 @@ function componentPercentForFormula(formula: string, ratios: Record<CopperElemen
     return Math.max(0, ratios['Fe(铁)'] ?? 0) + Math.max(0, ratios['FeO(氧化亚铁)'] ?? 0)
   }
   if (formula === 'Fe2O3') {
-    return Math.max(0, ratios['FeO(氧化亚铁)'] ?? 0) || Math.max(0, ratios['Fe(铁)'] ?? 0)
+    const storedOxide = Math.max(0, ratios['FeO(氧化亚铁)'] ?? 0)
+    if (storedOxide > 0) return storedOxide
+    const fe = Math.max(0, ratios['Fe(铁)'] ?? 0)
+    const feFraction = (2 * atomicMass('Fe')) / COMPOUND_MOLAR_MASS.Fe2O3
+    return feFraction > 0 ? fe / feFraction : fe
   }
   const ratioKey = FORMULA_TO_ASSAY_RATIO_KEY[formula]
   return ratioKey ? Math.max(0, ratios[ratioKey] ?? 0) : 0

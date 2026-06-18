@@ -16,7 +16,7 @@ import { evaluateConstraintExprString, type ConstraintSymbolTable } from './copp
 import type { CopperElementKey } from './copperWorkflowCalc.ts'
 import { COPPER_ELEMENT_KEYS } from './copperWorkflowCalc.ts'
 
-export type EquationKind = 'D%' | 'W%' | 'custom' | 'balance' | 'mass_balance' | 'water_balance' | 'allowlist'
+export type EquationKind = 'D%' | 'W%' | 'custom' | 'balance' | 'product_mass_balance'
 
 export interface CompiledEquation {
   id: string
@@ -24,10 +24,15 @@ export interface CompiledEquation {
   target: number
   label: string
   expr?: string
+  soft?: boolean
   constraintElement?: ConstraintElementKey
   productKey?: OxySideBlowProductKey
   feedKey?: CopperElementKey
   ruleValue?: number | string
+}
+
+export interface CompileOxyConstraintSystemOptions {
+  includeSoftCustom?: boolean
 }
 
 function expandAllowedPoolKeys(allowedElements: string[]): Set<CopperElementKey> {
@@ -43,13 +48,14 @@ function expandAllowedPoolKeys(allowedElements: string[]): Set<CopperElementKey>
   return set
 }
 
-function productPoolElementMass(
-  table: ConstraintSymbolTable,
+function productCanCarryConstraintElement(
+  config: OxySideBlowConstraintConfig,
   productKey: OxySideBlowProductKey,
-  feedKey: CopperElementKey
-): number {
-  const productName = OXY_PRODUCT_KEY_TO_CN[productKey]
-  return table.outputElementMass[productName]?.[feedKey] ?? 0
+  constraintElement: ConstraintElementKey
+): boolean {
+  const allowed = expandAllowedPoolKeys(resolveProductEffectiveAllowedElements(config, productKey))
+  const binding = resolveConstraintElementBinding(constraintElement)
+  return allowed.has(binding.poolKey)
 }
 
 function resolveConfigNumber(value: number | string, variables: Record<string, number> | undefined): number {
@@ -72,6 +78,14 @@ function productTotalMass(table: ConstraintSymbolTable, productKey: OxySideBlowP
   return table.outputMass[OXY_PRODUCT_KEY_TO_CN[productKey]] ?? 0
 }
 
+function productPhaseMass(table: ConstraintSymbolTable, productKey: OxySideBlowProductKey): number {
+  const productName = OXY_PRODUCT_KEY_TO_CN[productKey]
+  return Object.values(table.outputPhaseMass[productName] ?? {}).reduce(
+    (sum, value) => sum + Math.max(0, value),
+    0
+  )
+}
+
 function totalProductElementCompoundMass(
   table: ConstraintSymbolTable,
   feedKey: CopperElementKey
@@ -82,11 +96,15 @@ function totalProductElementCompoundMass(
   }, 0)
 }
 
-export function compileOxyConstraintSystem(config: OxySideBlowConstraintConfig): CompiledEquation[] {
+export function compileOxyConstraintSystem(
+  config: OxySideBlowConstraintConfig,
+  options: CompileOxyConstraintSystemOptions = {}
+): CompiledEquation[] {
   const equations: CompiledEquation[] = []
 
   for (const entry of config.elementDistributions) {
     for (const rule of entry.rules) {
+      if (!productCanCarryConstraintElement(config, rule.product, entry.element)) continue
       if (rule.type === 'D%') {
         equations.push({
           id: `D:${entry.element}:${rule.product}`,
@@ -112,29 +130,15 @@ export function compileOxyConstraintSystem(config: OxySideBlowConstraintConfig):
   }
 
   for (const [index, constraint] of config.customConstraints.entries()) {
+    if (constraint.soft && !options.includeSoftCustom) continue
     equations.push({
       id: `custom:${index}`,
       kind: 'custom',
       target: constraint.target,
       label: constraint.expr,
       expr: constraint.expr,
+      soft: Boolean(constraint.soft),
     })
-  }
-
-  for (const productKey of OXY_SIDE_BLOW_PRODUCT_KEYS) {
-    const allowed = expandAllowedPoolKeys(resolveProductEffectiveAllowedElements(config, productKey))
-    const productName = OXY_PRODUCT_KEY_TO_CN[productKey]
-    for (const feedKey of COPPER_ELEMENT_KEYS) {
-      if (allowed.has(feedKey)) continue
-      equations.push({
-        id: `allowlist:${productKey}:${feedKey}`,
-        kind: 'allowlist',
-        target: 0,
-        label: `白名单 ${productName} 不含 ${feedKey}`,
-        productKey,
-        feedKey,
-      })
-    }
   }
 
   for (const feedKey of COPPER_ELEMENT_KEYS) {
@@ -147,19 +151,15 @@ export function compileOxyConstraintSystem(config: OxySideBlowConstraintConfig):
     })
   }
 
-  equations.push({
-    id: 'mass:total',
-    kind: 'mass_balance',
-    target: 0,
-    label: '质量守恒 总产出 = 原料+熔剂+煤+工艺气',
-  })
-
-  equations.push({
-    id: 'water:flueGasH2O',
-    kind: 'water_balance',
-    target: 0,
-    label: '含水守恒 熔炼出炉烟气.H2O = 原料+熔剂+煤含水',
-  })
+  for (const productKey of OXY_SIDE_BLOW_PRODUCT_KEYS) {
+    equations.push({
+      id: `product_mass:${productKey}`,
+      kind: 'product_mass_balance',
+      target: 0,
+      label: `产物质量闭合 ${OXY_PRODUCT_KEY_TO_CN[productKey]} = Σ物相`,
+      productKey,
+    })
+  }
 
   return equations
 }
@@ -201,23 +201,9 @@ export function evaluateEquationResidual(
       const allocated = totalProductElementCompoundMass(table, equation.feedKey)
       return allocated - feedMass
     }
-    case 'mass_balance': {
-      const totalOutput = OXY_SIDE_BLOW_PRODUCT_KEYS.reduce(
-        (sum, pk) => sum + productTotalMass(table, pk),
-        0
-      )
-      const totalInput = table.inputMass['总投入'] ?? table.inputMass['混料'] ?? 0
-      return totalOutput - totalInput
-    }
-    case 'water_balance': {
-      const productName = OXY_PRODUCT_KEY_TO_CN.flueGas
-      const h2o = table.outputPhaseMass[productName]?.H2O ?? 0
-      const water = table.inputMass['含水'] ?? 0
-      return h2o - water
-    }
-    case 'allowlist': {
-      if (!equation.productKey || !equation.feedKey) return 0
-      return productPoolElementMass(table, equation.productKey, equation.feedKey)
+    case 'product_mass_balance': {
+      if (!equation.productKey) return 0
+      return productTotalMass(table, equation.productKey) - productPhaseMass(table, equation.productKey)
     }
     default:
       return 0
@@ -250,22 +236,14 @@ function equationScale(
       return Math.max((percent / 100) * productMass, productMass * 1e-6, 1e-6)
     }
     case 'custom':
-      return Math.max(Math.abs(equation.target), 1)
+      return equation.soft ? Math.max(Math.abs(equation.target), 1e-6) : Math.max(Math.abs(equation.target), 1)
     case 'balance': {
       if (!equation.feedKey) return 1
       return Math.max(balanceFeedElementWeights[equation.feedKey] ?? 0, 1e-6)
     }
-    case 'mass_balance': {
-      return Math.max(table.inputMass['总投入'] ?? table.inputMass['混料'] ?? 0, 1e-6)
-    }
-    case 'water_balance': {
-      const productName = OXY_PRODUCT_KEY_TO_CN.flueGas
-      return Math.max(table.inputMass['含水'] ?? table.outputPhaseMass[productName]?.H2O ?? 0, 1e-6)
-    }
-    case 'allowlist': {
+    case 'product_mass_balance': {
       if (!equation.productKey) return 1
-      const productMass = productTotalMass(table, equation.productKey)
-      return Math.max(productMass * 1e-6, 1e-6)
+      return Math.max(productTotalMass(table, equation.productKey), productPhaseMass(table, equation.productKey), 1e-6)
     }
     default:
       return 1
@@ -303,7 +281,7 @@ export function evaluateScaledEquationResidual(
     residual,
     target,
     scale,
-    relativeResidual: relativeResidual(residual, target, scale),
+    relativeResidual: relativeResidual(residual, 0, scale),
   }
 }
 
@@ -335,7 +313,7 @@ export function equationResidualRow(
     value,
     target: compareTarget,
     residual,
-    relativeResidual: relativeResidual(residual, compareTarget, scale),
+    relativeResidual: relativeResidual(residual, 0, scale),
     applicable: true as const,
   }
 }

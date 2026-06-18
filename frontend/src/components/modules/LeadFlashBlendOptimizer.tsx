@@ -554,10 +554,18 @@ export default function LeadFlashBlendOptimizer({ darkMode, language = 'zh' }: L
                     <td className="py-2 px-3 text-right">
                       <BatchTableNumericReadonly darkMode={dark} value={item.weight} className="text-right text-sm" />
                     </td>
-                    <td className="py-2 px-3 text-right font-mono">{item.sharePct.toFixed(2)}</td>
-                    <td className="py-2 px-3 text-right font-mono">{item.unitPrice.toFixed(0)}</td>
-                    <td className="py-2 px-3 text-right font-mono">{item.cost.toFixed(0)}</td>
-                    <td className="py-2 pl-3 text-right font-mono">{item.annualUsage.toFixed(0)}</td>
+                    <td className="py-2 px-3 text-right">
+                      <BatchTableNumericReadonly darkMode={dark} value={item.sharePct} className="text-right text-sm" />
+                    </td>
+                    <td className="py-2 px-3 text-right">
+                      <BatchTableNumericReadonly darkMode={dark} value={item.unitPrice} className="text-right text-sm" />
+                    </td>
+                    <td className="py-2 px-3 text-right">
+                      <BatchTableNumericReadonly darkMode={dark} value={item.cost} className="text-right text-sm" />
+                    </td>
+                    <td className="py-2 pl-3 text-right">
+                      <BatchTableNumericReadonly darkMode={dark} value={item.annualUsage} className="text-right text-sm" />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -583,7 +591,7 @@ export default function LeadFlashBlendOptimizer({ darkMode, language = 'zh' }: L
                   <div key={err.element} className="flex items-center justify-between gap-3">
                     <span>{err.element}: {err.minPct}-{err.maxPct}%</span>
                     <span className={`font-mono ${Math.abs(err.deviationPct) > 1e-6 ? 'text-amber-600' : dark ? 'text-emerald-300' : 'text-emerald-700'}`}>
-                      {err.value.toFixed(3)}%
+                      {err.value.toFixed(2)}%
                     </span>
                   </div>
                 ))}

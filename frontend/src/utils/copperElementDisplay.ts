@@ -42,10 +42,13 @@ export const COPPER_PHASE_TABLE_ELEMENT_VIEW_KEYS = [
   'Mg',
   'Sb(锑)',
   'O(氧)',
+  'H(氢)',
   'N(氮)',
   'C (碳)',
   'Other(其他)',
 ] as const
+
+export type CopperElementDisplayMode = 'compound' | 'element'
 
 export type CopperPhaseTableDisplayKey = CopperPhaseTableCompoundKey | (typeof COPPER_PHASE_TABLE_ELEMENT_VIEW_KEYS)[number]
 
@@ -62,9 +65,71 @@ const OXIDE_DECOMPOSE: Array<{
 
 const MG_OXIDE_KEY = 'MgO(氧化镁)' as CopperElementKey
 
+const ELEMENT_TABLE_ELEMENT_VIEW_KEYS = [
+  'Cu(铜)',
+  'S (硫)',
+  'Fe(铁)',
+  'Si',
+  'Ca',
+  'Mg',
+  'Ag(银)',
+  'Au(金)',
+  'Pb(铅)',
+  'As(砷)',
+  'Zn(锌)',
+  'Al',
+  'Sb(锑)',
+  'Ni(镍)',
+  'Se(硒)',
+  'Bi(铋)',
+  'Hg(汞)',
+  'Sn(锡)',
+  'Te(碲)',
+  'Cd(镉)',
+  'H(氢)',
+  'O(氧)',
+  'N(氮)',
+  'C (碳)',
+  'Other(其他)',
+] as const
+
+const ELEMENT_TABLE_ELEMENT_VIEW_ORDER = new Map<string, number>(
+  ELEMENT_TABLE_ELEMENT_VIEW_KEYS.map((key, index) => [key, index])
+)
+
+const OXIDE_TO_ELEMENT_VIEW_KEY: Partial<Record<CopperElementKey, string>> = {
+  'SiO₂(二氧化硅)': 'Si',
+  'CaO(氧化钙)': 'Ca',
+  'Al₂O₃(三氧化二铝)': 'Al',
+  'MgO(氧化镁)': 'Mg',
+}
+
+const ELEMENT_VIEW_TO_OXIDE_KEY: Record<string, { key: CopperElementKey; composition: FormulaComposition; element: string }> = {
+  Si: { key: 'SiO₂(二氧化硅)', composition: { Si: 1, O: 2 }, element: 'Si' },
+  Ca: { key: 'CaO(氧化钙)', composition: { Ca: 1, O: 1 }, element: 'Ca' },
+  Al: { key: 'Al₂O₃(三氧化二铝)', composition: { Al: 2, O: 3 }, element: 'Al' },
+  Mg: { key: 'MgO(氧化镁)', composition: { Mg: 1, O: 1 }, element: 'Mg' },
+}
+
+const ELEMENT_VIEW_CANONICAL_KEY = new Map<string, CopperElementKey>(
+  COPPER_ELEMENT_DISPLAY_ORDER.flatMap((key) => [
+    [key, key],
+    [key.replace(/\(.+\)/, '').trim(), key],
+  ])
+)
+
 function addMass(target: Record<string, number>, key: string, mass: number) {
   if (mass <= 0) return
   target[key] = (target[key] ?? 0) + mass
+}
+
+function oxideOxygenContribution(ratios: Partial<Record<CopperElementKey, number>>): number {
+  let oxygen = 0
+  for (const { key, composition } of Object.values(ELEMENT_VIEW_TO_OXIDE_KEY)) {
+    const mass = ratios[key] ?? 0
+    if (mass > 0) oxygen += mass * elementMassFraction(composition, 'O')
+  }
+  return oxygen
 }
 
 const COMPOUND_KEY_SET = new Set<string>(COPPER_PHASE_TABLE_COMPOUND_KEYS)
@@ -173,14 +238,86 @@ export function decomposePhaseElementMasses(
   return out
 }
 
+export function elementSymbolLabel(key: string): string {
+  return key.replace(/\s*\(.+\)/g, '').trim()
+}
+
 export function phaseTableHeaderLabel(key: string, mode: 'compound' | 'element'): string {
   if (mode === 'compound') {
-    return key.replace(/\(.+\)/, '')
+    return elementSymbolLabel(key)
   }
   if (key === 'Si' || key === 'Ca' || key === 'Al' || key === 'Mg') return key
-  return key.replace(/\(.+\)/, '')
+  return elementSymbolLabel(key)
 }
 
 export function getPhaseTableColumnKeys(mode: 'compound' | 'element') {
   return mode === 'compound' ? [...COPPER_PHASE_TABLE_COMPOUND_KEYS] : [...COPPER_PHASE_TABLE_ELEMENT_VIEW_KEYS]
+}
+
+export function elementTableHeaderLabel(key: string, mode: CopperElementDisplayMode): string {
+  return phaseTableHeaderLabel(key, mode)
+}
+
+export function decomposeElementTableRatios(
+  ratios: Partial<Record<CopperElementKey, number>>,
+  mode: CopperElementDisplayMode
+): Record<string, number> {
+  if (mode === 'compound') return { ...ratios } as Record<string, number>
+  return decomposePhaseElementMasses(ratios, mode)
+}
+
+function elementViewSortIndex(key: string): number {
+  return ELEMENT_TABLE_ELEMENT_VIEW_ORDER.get(key) ?? ELEMENT_TABLE_ELEMENT_VIEW_KEYS.length + 1
+}
+
+export function buildElementTableDisplayKeys(
+  sourceKeys: readonly CopperElementKey[],
+  mode: CopperElementDisplayMode
+): string[] {
+  if (mode === 'compound') return [...sourceKeys]
+
+  const keys = new Set<string>()
+  for (const sourceKey of sourceKeys) {
+    const convertedKey = OXIDE_TO_ELEMENT_VIEW_KEY[sourceKey]
+    if (convertedKey) {
+      keys.add(convertedKey)
+      keys.add('O(氧)')
+      continue
+    }
+    keys.add(toElementViewMassKey(sourceKey))
+  }
+
+  return [...keys].sort((a, b) => {
+    const order = elementViewSortIndex(a) - elementViewSortIndex(b)
+    return order !== 0 ? order : a.localeCompare(b, 'zh-CN')
+  })
+}
+
+export function elementTableDisplayEditTarget(
+  displayKey: string,
+  mode: CopperElementDisplayMode
+): CopperElementKey | null {
+  if (mode === 'compound') return displayKey as CopperElementKey
+  return ELEMENT_VIEW_TO_OXIDE_KEY[displayKey]?.key ?? ELEMENT_VIEW_CANONICAL_KEY.get(displayKey) ?? null
+}
+
+export function elementTableDisplayValueToStorageValue(
+  displayKey: string,
+  displayValue: number,
+  currentRatios: Partial<Record<CopperElementKey, number>>,
+  mode: CopperElementDisplayMode
+): number {
+  if (mode === 'compound') return displayValue
+
+  const oxide = ELEMENT_VIEW_TO_OXIDE_KEY[displayKey]
+  if (oxide) {
+    const fraction = elementMassFraction(oxide.composition, oxide.element)
+    return fraction > 0 ? displayValue / fraction : displayValue
+  }
+
+  if (displayKey === 'O(氧)') {
+    return Math.max(0, displayValue - oxideOxygenContribution(currentRatios))
+  }
+
+  return displayValue
 }
