@@ -1,6 +1,7 @@
 import { useEffect, useState, type ClipboardEvent, type ReactNode } from 'react'
 import { inputSm } from '../../theme/uiTheme'
 import {
+  batchTableCopyText,
   batchTableNumericTitle,
   formatBatchTableDisplay,
   isBatchTableEmptyValue,
@@ -34,6 +35,29 @@ function mergeClass(...parts: Array<string | false | undefined>) {
   return parts.filter(Boolean).join(' ')
 }
 
+function copyTextToClipboard(text: string): Promise<void> {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    return navigator.clipboard.writeText(text)
+  }
+  if (typeof document === 'undefined') {
+    return Promise.reject(new Error('Clipboard unavailable'))
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  textarea.style.top = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  try {
+    if (!document.execCommand('copy')) throw new Error('Copy failed')
+    return Promise.resolve()
+  } finally {
+    textarea.remove()
+  }
+}
+
 export function BatchTableNumericReadonly({
   darkMode,
   value,
@@ -51,7 +75,15 @@ export function BatchTableNumericReadonly({
   applicable?: boolean
   emptyDisplay?: string
 }) {
+  const [copied, setCopied] = useState(false)
   const text = normalizeBatchValue(value)
+
+  useEffect(() => {
+    if (!copied) return
+    const timer = window.setTimeout(() => setCopied(false), 900)
+    return () => window.clearTimeout(timer)
+  }, [copied])
+
   if (!applicable || isBatchTableEmptyValue(text)) {
     return (
       <span className={mergeClass('font-mono tabular-nums', className, darkMode ? 'text-gray-500' : 'text-gray-400')}>
@@ -60,13 +92,34 @@ export function BatchTableNumericReadonly({
     )
   }
   const display = formatBatchTableDisplay(text)
-  const title = helpTitleExclusive
+  const copyText = batchTableCopyText(text)
+  const baseTitle = helpTitleExclusive
     ? helpTitle?.trim() || undefined
     : batchTableNumericTitle(text, helpTitle)
+  const title = copied ? '已复制' : baseTitle
+  const handleCopyClick = () => {
+    if (!copyText) return
+    void copyTextToClipboard(copyText).then(
+      () => setCopied(true),
+      () => setCopied(false)
+    )
+  }
   return (
     <span
-      className={mergeClass('block w-full font-mono tabular-nums', className)}
+      className={mergeClass(
+        'block w-full cursor-copy select-none rounded-sm font-mono tabular-nums transition-colors',
+        copied && (darkMode ? 'bg-emerald-900/40 text-emerald-200' : 'bg-emerald-50 text-emerald-700'),
+        className
+      )}
       title={title}
+      role="button"
+      tabIndex={0}
+      onClick={handleCopyClick}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        handleCopyClick()
+      }}
       onCopy={(event: ClipboardEvent<HTMLSpanElement>) => writeBatchTableCopyText(event, text)}
     >
       {display}

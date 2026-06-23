@@ -41,10 +41,10 @@ export const INPUT_PHASE_EXTRA_DISPLAY: Record<'Other', string> = {
   Other: 'Other',
 }
 
-/** 物相总表/导出等存储键 → 带化学下标的显示名（O₂/N₂ 在总表中仍显示为 O/N） */
+/** Storage key -> display label. Gas rows use O2/N2 to avoid colliding with element O/N. */
 export function phaseStorageKeyToDisplayLabel(key: string): string {
-  if (key === 'O2') return 'O'
-  if (key === 'N2') return 'N'
+  if (key === 'O2') return 'O2'
+  if (key === 'N2') return 'N2'
   const inputDisplay = INPUT_PHASE_DISPLAY[key as CopperPhaseAssignmentKey]
   if (inputDisplay) return inputDisplay
   const extraDisplay = INPUT_PHASE_EXTRA_DISPLAY[key as 'Other']

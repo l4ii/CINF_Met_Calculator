@@ -239,6 +239,7 @@ export function decomposePhaseElementMasses(
 }
 
 export function elementSymbolLabel(key: string): string {
+  if (key === 'S(硅)') return 'Si'
   return key.replace(/\s*\(.+\)/g, '').trim()
 }
 

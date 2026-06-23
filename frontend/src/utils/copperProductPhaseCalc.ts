@@ -235,20 +235,28 @@ export function calculateProductPhaseComposition(
 }
 
 export function calculateGasVolumePercents(phases: ProductPhasePercentMap) {
-  const so2 = (phases.SO2 ?? 0) / MM.SO2
-  const co2 = (phases.CO2 ?? 0) / MM.CO2
-  const o2 = (phases.O2 ?? 0) / MM.O2
-  const n2 = (phases.N2 ?? 0) / MM.N2
-  const other = (phases.Other ?? 0) / 28
-  const total = so2 + co2 + o2 + n2 + other
-  if (total <= 0) return { SO2: 0, CO2: 0, O2: 0, N2: 0, Other: 0 }
-  return {
-    SO2: (so2 / total) * 100,
-    CO2: (co2 / total) * 100,
-    O2: (o2 / total) * 100,
-    N2: (n2 / total) * 100,
-    Other: (other / total) * 100,
+  const gasMolarMass: Record<string, number> = {
+    SO2: MM.SO2,
+    SO3: atomicMass('S') + 3 * atomicMass('O'),
+    CO2: MM.CO2,
+    O2: MM.O2,
+    N2: MM.N2,
+    H2O: 2 * atomicMass('H') + atomicMass('O'),
+    As2O3: MM.As2O3,
+    Hg: atomicMass('Hg'),
+    Other: 28,
   }
+  const moles = Object.fromEntries(
+    Object.entries(phases).map(([key, massPct]) => {
+      const molarMass = gasMolarMass[key] ?? 28
+      return [key, molarMass > 0 ? Math.max(0, massPct ?? 0) / molarMass : 0]
+    })
+  )
+  const total = Object.values(moles).reduce((sum, value) => sum + value, 0)
+  if (total <= 0) return Object.fromEntries(Object.keys(phases).map((key) => [key, 0]))
+  return Object.fromEntries(
+    Object.entries(moles).map(([key, value]) => [key, (value / total) * 100])
+  )
 }
 
 const PHASE_TO_ELEMENT_MASS: Record<string, Partial<Record<CopperElementKey, (mass: number) => number>>> = {

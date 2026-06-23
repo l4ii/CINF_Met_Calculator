@@ -125,13 +125,13 @@ export type ProductTableColumn = {
 }
 
 type ProductOutputBlock =
-  | { kind: 'phaseGrid'; product: ProductTableColumn; rowSpan: number; showVolumeRow: boolean }
+  | { kind: 'phaseGrid'; product: ProductTableColumn; rowSpan: number }
   | { kind: 'elements'; product: ProductTableColumn }
 
 function countProductOutputRows(products: ProductTableColumn[]) {
   return products.reduce((sum, product) => {
     if (product.displayMode === 'phases' && product.phases && product.phases.length > 0) {
-      return sum + (product.key === 'flueGas' ? 3 : 2)
+      return sum + 2
     }
     return sum + 1
   }, 0)
@@ -144,8 +144,7 @@ function buildProductOutputBlocks(products: ProductTableColumn[]): ProductOutput
       blocks.push({
         kind: 'phaseGrid',
         product,
-        rowSpan: product.key === 'flueGas' ? 3 : 2,
-        showVolumeRow: product.key === 'flueGas',
+        rowSpan: 2,
       })
     } else {
       blocks.push({ kind: 'elements', product })
@@ -157,7 +156,7 @@ function buildProductOutputBlocks(products: ProductTableColumn[]): ProductOutput
 function renderHorizontalPhaseCells(
   darkMode: boolean,
   product: ProductTableColumn,
-  rowKind: 'label' | 'pct' | 'volume',
+  rowKind: 'label' | 'pct',
   productOutputCellClass: (
     dark: boolean,
     status: SolveInputStatus,
@@ -168,7 +167,7 @@ function renderHorizontalPhaseCells(
   const phases = product.phases ?? []
   const phaseCell = productOutputCellClass(darkMode, 'resolved', 'single', 'middle')
   const volumePercents =
-    rowKind === 'volume' && phases.length > 0
+    product.key === 'flueGas' && rowKind === 'pct' && phases.length > 0
       ? calculateGasVolumePercents(Object.fromEntries(phases.map((phase) => [phase.key, phase.pct])))
       : null
 
@@ -185,30 +184,21 @@ function renderHorizontalPhaseCells(
               )
             }
             if (rowKind === 'pct') {
-              const helpTitle = `${phase.label} w% · 质量 ${formatBatchTableTooltip(phase.mass)} t/h`
+              const displayPct = volumePercents?.[phase.key as keyof typeof volumePercents] ?? phase.pct
+              const pctKind = product.key === 'flueGas' ? 'v%' : 'w%'
+              const helpTitle = `${phase.label} ${pctKind} · 质量 ${formatBatchTableTooltip(phase.mass)} t/h`
               return (
                 <td key={`${product.key}-pct-${phase.key}`} className={`${phaseCell} whitespace-nowrap px-1`}>
                   <BatchTableNumericReadonly
                     darkMode={darkMode}
-                    value={phase.pct}
+                    value={displayPct}
                     helpTitle={helpTitle}
                     className="text-sm"
                   />
                 </td>
               )
             }
-            const volPct = volumePercents?.[phase.key as keyof typeof volumePercents] ?? null
-            const volValue = volPct != null && volPct > 1e-12 ? volPct : 0
-            return (
-              <td key={`${product.key}-vol-${phase.key}`} className={`${phaseCell} whitespace-nowrap px-1`}>
-                <BatchTableNumericReadonly
-                  darkMode={darkMode}
-                  value={volValue}
-                  helpTitle={`${phase.label} v%`}
-                  className="text-sm"
-                />
-              </td>
-            )
+            return null
           })}
         </tr>
       </tbody>
@@ -1017,20 +1007,6 @@ export function CopperBatchElementTable({
                       </td>
                     </tr>,
                   ]
-                  if (block.showVolumeRow) {
-                    rows.push(
-                      <tr key={`${rowKeyBase}-volume`}>
-                        <td colSpan={phaseRegionColSpan} className={phaseRegionCell}>
-                          {renderHorizontalPhaseCells(
-                            darkMode,
-                            product,
-                            'volume',
-                            productOutputCellClass
-                          )}
-                        </td>
-                      </tr>
-                    )
-                  }
                   return rows
                 }
 

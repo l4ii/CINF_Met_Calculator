@@ -2,6 +2,7 @@ import {
   compileOxyConstraintSystem,
   equationResidualRow,
   evaluateScaledEquationResidual,
+  formatCompiledEquation,
   type CompiledEquation,
 } from './copperConstraintSystemCompiler.ts'
 import type { OxySideBlowConstraintConfig } from './copperConstraintConfig.ts'
@@ -25,6 +26,8 @@ export interface StrictSolverResult {
   x: number[]
   iterations: number
   maxRelativeResidual: number
+  equations: CompiledEquation[]
+  objectiveEquationCount: number
 }
 
 function clampVector(values: number[]): number[] {
@@ -230,7 +233,14 @@ export function solveOxyConstraintSystemStrict(
     }
   }
 
-  return { converged, x, iterations, maxRelativeResidual: maxRel }
+  return {
+    converged,
+    x,
+    iterations,
+    maxRelativeResidual: maxRel,
+    equations: hardEquations,
+    objectiveEquationCount: objectiveEquations.length,
+  }
 }
 
 export function buildResidualRowsFromSolution(
@@ -255,3 +265,4 @@ export function buildResidualRowsFromSolution(
 }
 
 export { compileOxyConstraintSystem }
+export { formatCompiledEquation }

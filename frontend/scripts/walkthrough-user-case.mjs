@@ -1,6 +1,6 @@
 /**
  * 铜冶炼富氧侧吹 — 用户案例演算脚本
- * 输入：四矿干量/水分 + 内置化验 + 默认熔剂/煤/气
+ * 输入：四矿干量/含水 t/h + 内置化验 + 默认熔剂/煤/气
  * 输出：walkthrough-user-case-output.json（供演算文档生成）
  */
 import { writeFileSync } from 'node:fs'
@@ -33,12 +33,13 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const OUTPUT_PATH = join(__dirname, 'walkthrough-user-case-output.json')
+const EQUATIONS_PATH = join(__dirname, 'walkthrough-user-case-equations.txt')
 
 const USER_CASE = [
-  { id: 'cu-conc-internal', dry: 37.14, moisture: 4.58 },
-  { id: 'cu-conc-domestic', dry: 27.45, moisture: 2.88 },
-  { id: 'cu-conc-import', dry: 127.69, moisture: 11.67 },
-  { id: 'cu-conc-border', dry: 6.38, moisture: 0.67 },
+  { id: 'cu-conc-internal', dry: 37.14, water: 4.58 },
+  { id: 'cu-conc-domestic', dry: 27.45, water: 2.88 },
+  { id: 'cu-conc-import', dry: 127.69, water: 11.67 },
+  { id: 'cu-conc-border', dry: 6.38, water: 0.67 },
 ]
 
 function libraryMaterial(id) {
@@ -81,14 +82,15 @@ const materialPhaseRows = {}
 
 const rawMaterials = USER_CASE.map((row, index) => {
   const lib = libraryMaterial(row.id)
-  const waterWeight = row.dry * (row.moisture / 100)
+  const waterWeight = Math.max(0, row.water)
+  const moisture = deriveDryBasisMoisturePercent(row.dry, waterWeight)
   return {
     id: `raw-${index + 1}`,
     name: lib.name,
     kind: 'raw',
     weight: row.dry,
     waterWeight,
-    moisture: row.moisture,
+    moisture,
     ratios: { ...lib.ratios },
     unitPrice: lib.unitPrice,
     libraryId: lib.id,
@@ -271,7 +273,7 @@ for (let pass = 0; pass < 2 && !solverResult.converged; pass += 1) {
 
 const furnaceFeedAfterSolve = activeFurnaceFeed
 
-const gmc = config.variables.GMC ?? 75
+const gmc = config.variables?.GMC ?? 75
 const fuelRatioTarget = resolveFuelConcentrateRatioTarget(config)
 const initialFuelEstimate = concentrateMass * fuelRatioTarget
 const matteSPercent = -0.125 * (gmc / 100) + 0.292
@@ -326,9 +328,9 @@ const output = {
         libraryId: row.id,
         name: lib.name,
         dryTh: row.dry,
-        moisturePct: row.moisture,
-        waterTh: round(row.dry * (row.moisture / 100), 4),
-        wetTh: round(row.dry * (1 + row.moisture / 100), 4),
+        waterTh: round(row.water, 4),
+        moisturePct: round(deriveDryBasisMoisturePercent(row.dry, row.water), 4),
+        wetTh: round(row.dry + row.water, 4),
       }
     }),
     concentrateMass: round(concentrateMass, 4),
@@ -410,6 +412,9 @@ const output = {
     valid: solverResult.valid,
     converged: solverResult.converged,
     iterations: solverResult.iterations,
+    equationCount: solverResult.equationCount,
+    objectiveEquationCount: solverResult.objectiveEquationCount,
+    equations: solverResult.equations,
     totalProductMass: round(solverResult.totalProductMass, 2),
     products: productsOut,
     elementDistributions: config.elementDistributions,
@@ -448,7 +453,20 @@ const output = {
 }
 
 writeFileSync(OUTPUT_PATH, JSON.stringify(output, null, 2), 'utf8')
+writeFileSync(
+  EQUATIONS_PATH,
+  [
+    '铜冶炼富氧侧吹 - 四矿案例产出求解方程',
+    `生成时间：${output.generatedAt}`,
+    `方程总数：${output.chapter6_solver.equationCount}`,
+    '',
+    ...output.chapter6_solver.equations.map((equation) => equation.expr),
+    '',
+  ].join('\n'),
+  'utf8'
+)
 console.log(`Wrote ${OUTPUT_PATH}`)
+console.log(`Wrote ${EQUATIONS_PATH}`)
 console.log(
   JSON.stringify(
     {

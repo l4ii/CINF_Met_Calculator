@@ -1,7 +1,12 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { OxyConstraintSolverResult } from '../../utils/copperConstraintSolver.ts'
-import { loadOxySideBlowConstraints, OXY_PRODUCT_KEY_TO_CN, OXY_SIDE_BLOW_PRODUCT_KEYS } from '../../utils/copperConstraintConfig.ts'
+import {
+  loadOxySideBlowConstraints,
+  OXY_PRODUCT_KEY_TO_CN,
+  OXY_SIDE_BLOW_PRODUCT_KEYS,
+  type OxySideBlowConstraintConfig,
+} from '../../utils/copperConstraintConfig.ts'
 import {
   assistColumnStripeClass,
   assistFirstDataRowClass,
@@ -39,6 +44,7 @@ export function CopperProductionResultTable({
   mode = 'both',
   phaseTitle = '产物物相组成',
   elementTitle = '产出元素组成',
+  config,
 }: {
   darkMode: boolean
   result?: OxyConstraintSolverResult | null
@@ -46,12 +52,13 @@ export function CopperProductionResultTable({
   mode?: 'both' | 'phase' | 'element'
   phaseTitle?: string
   elementTitle?: string
+  config?: OxySideBlowConstraintConfig
 }) {
   const border = darkMode ? 'border-gray-600' : 'border-gray-200'
   const head = darkMode ? 'bg-gray-800 text-gray-300' : 'bg-gray-50 text-gray-600'
-  const config = useMemo(() => loadOxySideBlowConstraints(), [])
+  const resolvedConfig = useMemo(() => config ?? loadOxySideBlowConstraints(), [config])
   const showEmpty = empty || !result
-  const pivotRows = showEmpty ? [] : buildProductResultPivotData(result!, config)
+  const pivotRows = showEmpty ? [] : buildProductResultPivotData(result!, resolvedConfig)
   const elementRows = pivotRows.filter((row) => row.kind === 'element')
   const elementColumnCount = Math.max(elementRows.length, 1)
 
@@ -96,13 +103,31 @@ export function CopperProductionResultTable({
             </th>
           </tr>
           <tr>
-            <th className={assistStickyHeadClass(darkMode)}>名称</th>
-            <th className={`px-0.5 py-1.5 text-center text-sm font-semibold ${assistTotalCellClass(darkMode)}`}>
+            <th rowSpan={2} className={assistStickyHeadClass(darkMode)}>
+              名称
+            </th>
+            <th
+              rowSpan={2}
+              className={`px-0.5 py-1.5 text-center text-sm font-semibold ${assistTotalCellClass(darkMode)}`}
+            >
               t/h
             </th>
             <th colSpan={elementColumnCount} className="px-0.5 py-1.5 text-center text-sm font-semibold">
               元素 w%
             </th>
+          </tr>
+          <tr>
+            {Array.from({ length: elementColumnCount }, (_, index) => {
+              const row = elementRows[index]
+              return (
+                <th
+                  key={`product-element-head-${index}`}
+                  className={`border-l px-1 py-1.5 text-center text-sm font-semibold ${border}`}
+                >
+                  {row ? elementSymbolLabel(row.label) : '—'}
+                </th>
+              )
+            })}
           </tr>
         </thead>
         <tbody>
@@ -111,73 +136,49 @@ export function CopperProductionResultTable({
               ? { name: OXY_PRODUCT_KEY_TO_CN[pk], mass: 0 }
               : result!.products[pk]
             return (
-              <Fragment key={`product-element-${pk}`}>
-                <tr>
-                  <td
-                    rowSpan={2}
-                    className={`${assistStickyLabelClass(darkMode)} border-t font-semibold`}
-                  >
-                    {product.name}
-                  </td>
-                  <td
-                    rowSpan={2}
-                    className={`border-t px-0.5 py-1.5 text-center align-middle text-sm font-mono ${assistTotalCellClass(
-                      darkMode
-                    )}`}
-                  >
-                    {showEmpty ? (
-                      '—'
-                    ) : (
-                      <BatchTableNumericReadonly
-                        darkMode={darkMode}
-                        value={product.mass}
-                        helpTitle={`${product.name} 总质量`}
-                        className="inline text-sm"
-                      />
-                    )}
-                  </td>
-                  {Array.from({ length: elementColumnCount }, (_, index) => {
-                    const row = elementRows[index]
-                    return (
-                      <td
-                        key={`${pk}-element-label-${index}`}
-                        className={`border-t px-0.5 py-1.5 text-center align-middle text-sm font-medium ${assistColumnStripeClass(
-                          darkMode,
-                          index
-                        )}`}
-                      >
-                        {row ? elementSymbolLabel(row.label) : '—'}
-                      </td>
-                    )
-                  })}
-                </tr>
-                <tr>
-                  {Array.from({ length: elementColumnCount }, (_, index) => {
-                    const row = elementRows[index]
-                    const value = row ? row.values[pk] : null
-                    const hasValue = pivotCellHasValue('element', value)
-                    return (
-                      <td
-                        key={`${pk}-element-value-${index}`}
-                        className={`border-t px-0.5 py-1.5 text-center align-middle text-sm font-mono ${assistFirstDataRowClass(
-                          darkMode
-                        )} ${assistValueHighlightClass(darkMode, hasValue)}`}
-                      >
-                        {showEmpty || !row || value == null ? (
-                          '—'
-                        ) : (
-                          <BatchTableNumericReadonly
-                            darkMode={darkMode}
-                            value={value}
-                            helpTitle={`${product.name} · ${elementSymbolLabel(row.label)} w%`}
-                            className="inline text-sm"
-                          />
-                        )}
-                      </td>
-                    )
-                  })}
-                </tr>
-              </Fragment>
+              <tr key={`product-element-${pk}`}>
+                <td className={`${assistStickyLabelClass(darkMode)} border-t font-semibold`}>{product.name}</td>
+                <td
+                  className={`border-t px-0.5 py-1.5 text-center align-middle text-sm font-mono ${assistTotalCellClass(
+                    darkMode
+                  )}`}
+                >
+                  {showEmpty ? (
+                    '—'
+                  ) : (
+                    <BatchTableNumericReadonly
+                      darkMode={darkMode}
+                      value={product.mass}
+                      helpTitle={`${product.name} 总质量`}
+                      className="inline text-sm"
+                    />
+                  )}
+                </td>
+                {Array.from({ length: elementColumnCount }, (_, index) => {
+                  const row = elementRows[index]
+                  const value = row ? row.values[pk] : null
+                  const hasValue = pivotCellHasValue('element', value)
+                  return (
+                    <td
+                      key={`${pk}-element-value-${index}`}
+                      className={`border-t px-0.5 py-1.5 text-center align-middle text-sm font-mono ${assistFirstDataRowClass(
+                        darkMode
+                      )} ${assistValueHighlightClass(darkMode, hasValue)}`}
+                    >
+                      {showEmpty || !row || value == null ? (
+                        '—'
+                      ) : (
+                        <BatchTableNumericReadonly
+                          darkMode={darkMode}
+                          value={value}
+                          helpTitle={`${product.name} · ${elementSymbolLabel(row.label)} w%`}
+                          className="inline text-sm"
+                        />
+                      )}
+                    </td>
+                  )
+                })}
+              </tr>
             )
           })}
         </tbody>
@@ -232,7 +233,7 @@ export function CopperProductionResultTable({
               t/h
             </th>
             <th colSpan={maxPhaseCols} className="px-0.5 py-1.5 text-center text-sm font-semibold">
-              物相 w%
+              物相百分比
             </th>
           </tr>
         </thead>
@@ -242,9 +243,9 @@ export function CopperProductionResultTable({
               ? { name: OXY_PRODUCT_KEY_TO_CN[pk], mass: 0, phases: [] as Array<{ key: string; pct: number; mass: number }> }
               : result!.products[pk]
             const phases = product.phases
-            const showVolumeRow = pk === 'flueGas'
+            const showGasVolumePct = pk === 'flueGas'
             const volumePercents =
-              showVolumeRow && phases.length > 0
+              showGasVolumePct && phases.length > 0
                 ? calculateGasVolumePercents(Object.fromEntries(phases.map((phase) => [phase.key, phase.pct])))
                 : null
 
@@ -252,13 +253,13 @@ export function CopperProductionResultTable({
               <Fragment key={pk}>
                 <tr>
                   <td
-                    rowSpan={showVolumeRow ? 3 : 2}
+                    rowSpan={2}
                     className={`${assistStickyLabelClass(darkMode)} border-t font-semibold`}
                   >
                     {product.name}
                   </td>
                   <td
-                    rowSpan={showVolumeRow ? 3 : 2}
+                    rowSpan={2}
                     className={`border-t px-0.5 py-1.5 text-center align-middle text-sm font-mono ${assistTotalCellClass(
                       darkMode
                     )}`}
@@ -292,7 +293,12 @@ export function CopperProductionResultTable({
                 <tr>
                   {Array.from({ length: maxPhaseCols }, (_, i) => {
                     const phase = phases[i]
-                    const hasValue = phase != null && phase.pct > 0
+                    const displayPct =
+                      phase && volumePercents
+                        ? volumePercents[phase.key as keyof typeof volumePercents] ?? 0
+                        : phase?.pct ?? 0
+                    const pctKind = showGasVolumePct ? 'v%' : 'w%'
+                    const hasValue = phase != null && displayPct > 0
                     return (
                       <td
                         key={`${pk}-pct-${i}`}
@@ -303,8 +309,8 @@ export function CopperProductionResultTable({
                         {phase ? (
                           <BatchTableNumericReadonly
                             darkMode={darkMode}
-                            value={phase.pct}
-                            helpTitle={`${phaseLabel(phase.key)} w% · 质量 ${formatBatchTableTooltip(phase.mass)} t/h`}
+                            value={displayPct}
+                            helpTitle={`${phaseLabel(phase.key)} ${pctKind} · 质量 ${formatBatchTableTooltip(phase.mass)} t/h`}
                             className="inline text-sm"
                           />
                         ) : (
@@ -314,38 +320,6 @@ export function CopperProductionResultTable({
                     )
                   })}
                 </tr>
-                {showVolumeRow && (
-                  <tr>
-                    {Array.from({ length: maxPhaseCols }, (_, i) => {
-                      const phase = phases[i]
-                      const volPct =
-                        phase && volumePercents
-                          ? volumePercents[phase.key as keyof typeof volumePercents]
-                          : null
-                      const volValue = volPct != null && volPct > 1e-12 ? volPct : phase ? 0 : null
-                      return (
-                        <td
-                          key={`${pk}-vol-${i}`}
-                          className={`border-t px-0.5 py-1.5 text-center align-middle text-sm font-mono ${assistColumnStripeClass(
-                            darkMode,
-                            i
-                          )}`}
-                        >
-                          {phase && volValue != null ? (
-                            <BatchTableNumericReadonly
-                              darkMode={darkMode}
-                              value={volValue}
-                              helpTitle={`${phaseLabel(phase.key)} v%`}
-                              className="inline text-sm"
-                            />
-                          ) : (
-                            '—'
-                          )}
-                        </td>
-                      )
-                    })}
-                  </tr>
-                )}
               </Fragment>
             )
           })}

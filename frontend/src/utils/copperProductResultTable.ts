@@ -8,6 +8,7 @@ import {
   type OxySideBlowProductKey,
 } from './copperConstraintConfig.ts'
 import { resolveConstraintElementBinding } from './copperConstraintElementBridge.ts'
+import { sortOxyConstraintElementKeys } from './copperConstraintElementOrder.ts'
 import type { OxyConstraintSolverResult, OxyProductResult } from './copperConstraintSolver.ts'
 import { COPPER_ELEMENT_DISPLAY_ORDER } from './copperDisplayOrder.ts'
 import type { CopperElementKey } from './copperWorkflowCalc.ts'
@@ -48,14 +49,7 @@ export function buildProductAllowedElementRows(
       union.add(el)
     }
   }
-  const ordered = [...union].sort((a, b) => {
-    const ai = COPPER_ELEMENT_DISPLAY_ORDER.findIndex((k) => k === a || poolKeysForConstraintKey(a).includes(k))
-    const bi = COPPER_ELEMENT_DISPLAY_ORDER.findIndex((k) => k === b || poolKeysForConstraintKey(b).includes(k))
-    const aIdx = ai >= 0 ? ai : COPPER_ELEMENT_DISPLAY_ORDER.length + 1
-    const bIdx = bi >= 0 ? bi : COPPER_ELEMENT_DISPLAY_ORDER.length + 1
-    if (aIdx !== bIdx) return aIdx - bIdx
-    return a.localeCompare(b, 'zh-CN')
-  })
+  const ordered = sortOxyConstraintElementKeys(union)
   return ordered.map((constraintKey) => ({
     constraintKey,
     label: constraintKey,

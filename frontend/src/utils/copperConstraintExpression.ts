@@ -306,7 +306,10 @@ export function evaluateConstraintExpression(ast: ExprNode, table: ConstraintSym
       if (ast.op === '+') return left + right
       if (ast.op === '-') return left - right
       if (ast.op === '*') return left * right
-      if (ast.op === '/') return right !== 0 ? left / right : 0
+      if (ast.op === '/') {
+        const denom = Math.abs(right) > 1e-12 ? right : right < 0 ? -1e-12 : 1e-12
+        return left / denom
+      }
       return 0
     }
     default:

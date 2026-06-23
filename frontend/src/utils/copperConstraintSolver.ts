@@ -1,4 +1,10 @@
-import { loadOxySideBlowConstraints, OXY_SIDE_BLOW_PRODUCT_KEYS, type OxySideBlowConstraintConfig, type OxySideBlowProductKey } from './copperConstraintConfig.ts'
+import {
+  loadOxySideBlowConstraints,
+  OXY_PRODUCT_KEY_TO_CN,
+  OXY_SIDE_BLOW_PRODUCT_KEYS,
+  type OxySideBlowConstraintConfig,
+  type OxySideBlowProductKey,
+} from './copperConstraintConfig.ts'
 import { parseConstraintExpression, evaluateConstraintExprString } from './copperConstraintExpression.ts'
 import {
   buildProductsFromPhases,
@@ -8,6 +14,7 @@ import {
 } from './copperConstraintUnknowns.ts'
 import {
   buildResidualRowsFromSolution,
+  formatCompiledEquation,
   solveOxyConstraintSystemStrict,
 } from './copperConstraintSystemSolver.ts'
 import type { CopperElementKey } from './copperWorkflowCalc.ts'
@@ -58,6 +65,14 @@ export interface OxyConstraintSolverResult {
     applicable?: boolean
     soft?: boolean
   }>
+  equations: Array<{
+    id: string
+    kind: string
+    expr: string
+    soft?: boolean
+  }>
+  equationCount: number
+  objectiveEquationCount: number
   elementBalanceResiduals?: Array<{ element: CopperElementKey; feed: number; allocated: number; residual: number }>
 }
 
@@ -134,7 +149,10 @@ export function solveOxySideBlowProducts(input: OxyConstraintSolverInput): OxyCo
   const totalProductMass = OXY_SIDE_BLOW_PRODUCT_KEYS.reduce((sum, pk) => sum + products[pk].mass, 0)
   const gasWeights = Object.fromEntries(unpacked.airColumns.map((col) => [col.name, col.weight]))
   const solventWeights = Object.fromEntries(unpacked.solventColumns.map((col) => [col.name, col.weight]))
-  const allProductsClosed = OXY_SIDE_BLOW_PRODUCT_KEYS.every((pk) => verifyProductElementTotals(products[pk]))
+  const productClosureIssues = OXY_SIDE_BLOW_PRODUCT_KEYS
+    .map((pk) => ({ pk, total: productElementTotal(products[pk]) }))
+    .filter((row) => !verifyProductElementTotals(products[row.pk]))
+  const allProductsClosed = productClosureIssues.length === 0
   const valid = solved.converged && allProductsClosed
   const worstResiduals = constraintResiduals
     .slice()
@@ -147,11 +165,21 @@ export function solveOxySideBlowProducts(input: OxyConstraintSolverInput): OxyCo
           .map((row) => `${row.expr}（相对残差 ${row.relativeResidual.toFixed(3)}）`)
           .join('；')}`
       : ''
+  const equationCount = solved.equations.length
+  const objectiveEquationCount = solved.objectiveEquationCount
+  const equations = solved.equations.map((equation, index) => ({
+    id: equation.id,
+    kind: equation.kind,
+    expr: formatCompiledEquation(equation, index + 1),
+    soft: equation.soft,
+  }))
   const message = valid
     ? undefined
     : !solved.converged
-      ? `当前约束无精确可行解，最大相对残差 ${solved.maxRelativeResidual.toFixed(4)}。${worstNote}`
-      : '部分产物元素合计未闭合至 100%'
+      ? `已列举 ${equationCount} 条硬方程并求解；当前约束无精确可行解，最大相对残差 ${solved.maxRelativeResidual.toFixed(4)}。${worstNote}`
+      : `部分产物元素合计未闭合至 100%：${productClosureIssues
+          .map((row) => `${OXY_PRODUCT_KEY_TO_CN[row.pk]} 合计 ${Number(row.total.toFixed(3)).toString()}%`)
+          .join('；')}`
 
   return {
     valid,
@@ -170,12 +198,19 @@ export function solveOxySideBlowProducts(input: OxyConstraintSolverInput): OxyCo
       gasWeights,
     },
     constraintResiduals,
+    equations,
+    equationCount,
+    objectiveEquationCount,
     elementBalanceResiduals: computeGlobalElementBalanceResiduals(unpacked.balanceFeed, products),
   }
 }
 
+export function productElementTotal(product: OxyProductResult): number {
+  return Object.values(product.composition).reduce((sum, value) => sum + (value ?? 0), 0)
+}
+
 export function verifyProductElementTotals(product: OxyProductResult, tolerance = 0.5): boolean {
-  const total = Object.values(product.composition).reduce((sum, value) => sum + (value ?? 0), 0)
+  const total = productElementTotal(product)
   return Math.abs(total - 100) <= tolerance || product.mass <= 0
 }
 

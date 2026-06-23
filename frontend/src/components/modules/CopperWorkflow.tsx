@@ -1,4 +1,4 @@
-﻿import {
+import {
   Fragment,
   useCallback,
   useEffect,
@@ -33,10 +33,29 @@ import {
   computePhaseAssistTableLayout,
   formatProductSharePercent,
 } from '../../utils/copperBatchTableLayout'
-import { OXY_SIDE_BLOW_PRODUCT_KEYS, loadOxySideBlowConstraints } from '../../utils/copperConstraintConfig.ts'
+import {
+  OXY_PRODUCT_KEY_TO_CN,
+  OXY_SIDE_BLOW_PRODUCT_KEYS,
+  loadOxySideBlowConstraints,
+  type ConstraintElementKey,
+  type CustomConstraintEntry,
+  type DistributionRuleType,
+  type ElementDistributionEntry,
+  type OxySideBlowConstraintConfig,
+  type OxySideBlowProductKey,
+} from '../../utils/copperConstraintConfig.ts'
 import {
   buildProductResultPivotData,
 } from '../../utils/copperProductResultTable.ts'
+import {
+  autoFillOxyProductConstraintConfig,
+  firstBlockingConstraintMessage,
+  migrateOxyProductConstraintDefaults,
+  productCanCarryConstraintElement,
+  resolveConstraintRuleValue,
+  validateOxyProductConstraintConfig,
+} from '../../utils/copperConstraintValidation.ts'
+import { sortOxyConstraintElementKeys } from '../../utils/copperConstraintElementOrder.ts'
 import { CopperBatchTableColGroup } from './CopperBatchTableColGroup'
 import {
   CopperBatchElementTable,
@@ -95,6 +114,7 @@ import {
   phaseTableHeaderLabel,
   type CopperElementDisplayMode,
 } from '../../utils/copperElementDisplay.ts'
+import { formulaToDisplayLabel } from '../../utils/chemicalFormula.ts'
 import {
   buildBlendPhaseMassFromMaterialResults,
   buildPhasePivotRows,
@@ -166,7 +186,11 @@ import {
   type CopperProductModel,
   type CopperProductResult,
 } from '../../utils/copperProcessCalc'
-import { solveOxySideBlowProducts, type OxyConstraintSolverResult } from '../../utils/copperConstraintSolver.ts'
+import {
+  parseConstraintExpression,
+  solveOxySideBlowProducts,
+  type OxyConstraintSolverResult,
+} from '../../utils/copperConstraintSolver.ts'
 import {
   oxyProductPhasePercentMaps,
   oxyProductTableColumns,
@@ -255,6 +279,252 @@ function normalizeBatchTableView(value: unknown, _productFilledBack = false): Ba
 }
 
 type CopperSmeltMethodId = 'oxy-side-blast' | 'flash'
+type ProductConstraintCellValues = Partial<Record<DistributionRuleType, number | string>>
+type ProductConstraintRow = {
+  element: ConstraintElementKey
+}
+type CustomConstraintDraft = {
+  expr: string
+  target: string
+}
+type ProductConstraintValueDrafts = Record<string, string>
+
+const FIXED_MATTE_COPPER_GRADE = 75
+const FUEL_WET_BASIS_WATER_EXPR = 'Input.煤.H2O / Input.煤湿基'
+const OXY_DISTRIBUTION_RULE_TYPES: DistributionRuleType[] = ['W%', 'D%']
+const OXY_DISTRIBUTION_RULE_LABELS: Record<DistributionRuleType, string> = { 'W%': 'W', 'D%': 'D' }
+const OXY_DISTRIBUTION_RULE_OPTIONS: (DistributionRuleType | '')[] = ['', ...OXY_DISTRIBUTION_RULE_TYPES]
+
+function productConstraintCellDraftKey(
+  productKey: OxySideBlowProductKey,
+  element: string,
+  type: DistributionRuleType
+) {
+  return `${productKey}::${element}::${type}`
+}
+
+function cloneOxyConstraintConfig(config: OxySideBlowConstraintConfig): OxySideBlowConstraintConfig {
+  return {
+    ...config,
+    _variableNotes: config._variableNotes ? { ...config._variableNotes } : undefined,
+    variables: config.variables ? { ...config.variables } : undefined,
+    products: Object.fromEntries(
+      Object.entries(config.products).map(([key, product]) => [
+        key,
+        {
+          ...product,
+          allowedElements: [...product.allowedElements],
+          phases: [...product.phases],
+        },
+      ])
+    ) as OxySideBlowConstraintConfig['products'],
+    elementDistributions: config.elementDistributions.map((entry) => ({
+      element: entry.element,
+      rules: entry.rules.map((rule) => ({ ...rule })),
+    })),
+    customConstraints: config.customConstraints.map((entry) => ({ ...entry })),
+    solverParams: config.solverParams ? { ...config.solverParams } : undefined,
+  }
+}
+
+function normalizeProductConstraintFixedValues(config: OxySideBlowConstraintConfig): OxySideBlowConstraintConfig {
+  const next = cloneOxyConstraintConfig(config)
+  delete next._variableNotes
+  delete next.variables
+  for (const entry of next.elementDistributions) {
+    for (const rule of entry.rules) {
+      if (rule.value === 'GMC') rule.value = FIXED_MATTE_COPPER_GRADE
+    }
+  }
+  for (const constraint of next.customConstraints) {
+    constraint.expr = constraint.expr.replace(/\bGMC\b/g, String(FIXED_MATTE_COPPER_GRADE))
+  }
+  return next
+}
+
+const DEFAULT_OXY_CONSTRAINT_CONFIG = normalizeProductConstraintFixedValues(loadOxySideBlowConstraints())
+const PRODUCT_INPUT_PHASE_BLEND_NAME = '\u6df7\u5408\u94dc\u7cbe\u77ff'
+
+function createDefaultProductConstraintConfig(): OxySideBlowConstraintConfig {
+  return autoFillOxyProductConstraintConfig(DEFAULT_OXY_CONSTRAINT_CONFIG).config
+}
+
+function normalizeOxyConstraintConfig(config: OxySideBlowConstraintConfig | null | undefined): OxySideBlowConstraintConfig {
+  const normalized = config
+    ? migrateOxyProductConstraintDefaults(normalizeProductConstraintFixedValues(config), DEFAULT_OXY_CONSTRAINT_CONFIG)
+    : createDefaultProductConstraintConfig()
+  return autoFillOxyProductConstraintConfig(normalized).config
+}
+
+function normalizeConstraintRuleValue(value: string): number | string | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const normalized = trimmed.replace(',', '.')
+  const numeric = Number(normalized)
+  return /^-?(?:\d+\.?\d*|\.\d+)$/.test(normalized) && Number.isFinite(numeric) ? numeric : trimmed
+}
+
+function formatConstraintRuleValue(value: number | string | null | undefined, digits = 8) {
+  if (value == null) return ''
+  if (typeof value === 'number') return Number(value.toFixed(digits)).toString()
+  return value
+}
+
+function formatConstraintDisplayValue(value: number | string | null | undefined) {
+  return formatConstraintRuleValue(value, 2)
+}
+
+function formatCustomConstraintDisplayValue(value: number | string | null | undefined) {
+  return formatConstraintRuleValue(value, 15)
+}
+
+function displayConstraintExpression(expr: string) {
+  return expr.replace(/[A-Z][a-z]?(?:\d+[A-Z]?[a-z]?)*\d*/g, (token) => formulaToDisplayLabel(token))
+}
+
+function visibleCustomConstraints(config: OxySideBlowConstraintConfig) {
+  return config.customConstraints
+    .map((constraint, index) => ({ constraint, index }))
+    .filter(({ constraint }) => constraint.expr !== FUEL_WET_BASIS_WATER_EXPR)
+}
+
+
+
+function shiftDraftEntriesAfterRemoval<T>(drafts: Record<number, T>, removedIndex: number): Record<number, T> {
+  const next: Record<number, T> = {}
+  for (const [key, value] of Object.entries(drafts)) {
+    const index = Number(key)
+    if (!Number.isInteger(index) || index === removedIndex) continue
+    next[index > removedIndex ? index - 1 : index] = value
+  }
+  return next
+}
+
+function productDistributionRuleMap(
+  config: OxySideBlowConstraintConfig,
+  productKey: OxySideBlowProductKey
+): Record<string, ProductConstraintCellValues> {
+  const map: Record<string, ProductConstraintCellValues> = {}
+  for (const entry of config.elementDistributions) {
+    for (const rule of entry.rules) {
+      if (rule.product !== productKey) continue
+      map[entry.element] = {
+        ...map[entry.element],
+        [rule.type]: rule.value,
+      }
+    }
+  }
+  return map
+}
+
+function buildProductConstraintRows(
+  config: OxySideBlowConstraintConfig,
+  defaultConfig: OxySideBlowConstraintConfig
+): ProductConstraintRow[] {
+  const elements = new Set<ConstraintElementKey>()
+  const collect = (source: OxySideBlowConstraintConfig) => {
+    for (const entry of source.elementDistributions) elements.add(entry.element)
+  }
+  collect(defaultConfig)
+  collect(config)
+  return sortOxyConstraintElementKeys(elements).map((element) => ({ element }))
+}
+
+function upsertProductDistributionRule(
+  config: OxySideBlowConstraintConfig,
+  productKey: OxySideBlowProductKey,
+  element: string,
+  type: DistributionRuleType,
+  draftValue: string
+): OxySideBlowConstraintConfig {
+  const next = cloneOxyConstraintConfig(config)
+  const elementKey = element.trim()
+  if (!elementKey) return next
+
+  const value = normalizeConstraintRuleValue(draftValue) ?? ''
+  const distributionIndex = next.elementDistributions.findIndex((entry) => entry.element === elementKey)
+
+  let entry: ElementDistributionEntry
+  if (distributionIndex >= 0) {
+    entry = next.elementDistributions[distributionIndex]
+  } else {
+    entry = { element: elementKey, rules: [] }
+    next.elementDistributions.push(entry)
+  }
+
+  const rule = entry.rules.find((item) => item.product === productKey && item.type === type)
+  if (rule) {
+    rule.value = value
+  } else {
+    entry.rules.push({ product: productKey, type, value })
+  }
+  entry.rules = entry.rules.filter((item) => item.product !== productKey || item.type === type)
+  return next
+}
+
+function setProductDistributionRuleType(
+  config: OxySideBlowConstraintConfig,
+  productKey: OxySideBlowProductKey,
+  element: string,
+  type: DistributionRuleType | ''
+): OxySideBlowConstraintConfig {
+  const next = cloneOxyConstraintConfig(config)
+  const elementKey = element.trim()
+  if (!elementKey) return next
+  let distributionIndex = next.elementDistributions.findIndex((entry) => entry.element === elementKey)
+  if (distributionIndex < 0 && !type) return next
+  if (distributionIndex < 0) {
+    next.elementDistributions.push({ element: elementKey, rules: [] })
+    distributionIndex = next.elementDistributions.length - 1
+  }
+  const entry = next.elementDistributions[distributionIndex]!
+  const currentRule = entry.rules.find((item) => item.product === productKey && item.type === type)
+  const fallbackRule = entry.rules.find((item) => item.product === productKey)
+  const nextValue = currentRule?.value ?? fallbackRule?.value ?? ''
+  entry.rules = entry.rules.filter((item) => item.product !== productKey)
+  if (type) entry.rules.push({ product: productKey, type, value: nextValue })
+  if (entry.rules.length === 0) next.elementDistributions.splice(distributionIndex, 1)
+  return next
+}
+
+
+function updateCustomConstraintEntry(
+  config: OxySideBlowConstraintConfig,
+  index: number,
+  patch: Partial<CustomConstraintEntry>
+): OxySideBlowConstraintConfig {
+  const next = cloneOxyConstraintConfig(config)
+  if (!next.customConstraints[index]) return next
+  next.customConstraints[index] = {
+    ...next.customConstraints[index],
+    ...patch,
+  }
+  return next
+}
+
+function removeCustomConstraintEntry(
+  config: OxySideBlowConstraintConfig,
+  index: number
+): OxySideBlowConstraintConfig {
+  const next = cloneOxyConstraintConfig(config)
+  next.customConstraints = next.customConstraints.filter((_, itemIndex) => itemIndex !== index)
+  return next
+}
+
+function addCustomConstraintEntry(
+  config: OxySideBlowConstraintConfig,
+  expr: string,
+  target: string
+): OxySideBlowConstraintConfig {
+  const trimmedExpr = expr.trim()
+  const parsedTarget = normalizeConstraintRuleValue(target)
+  if (!trimmedExpr || typeof parsedTarget !== 'number') return cloneOxyConstraintConfig(config)
+  const next = cloneOxyConstraintConfig(config)
+  next.customConstraints.push({ expr: trimmedExpr, target: parsedTarget })
+  return next
+}
+
+
 
 interface CopperCaseRecord {
   id: string
@@ -281,6 +551,7 @@ interface CopperCaseRecord {
   phaseCompleted: boolean
   productCalculated: boolean
   productFilledBack?: boolean
+  productSolverResult?: OxyConstraintSolverResult | null
   heatBalanced: boolean
   fuelLhv: string
   fuelEfficiency: string
@@ -304,6 +575,7 @@ interface CopperCaseRecord {
   productDistributionDrafts?: ProductDistributionDrafts
   productPhaseOverrides?: Record<string, Record<string, string>>
   productPhaseManual?: boolean
+  productConstraintConfig?: OxySideBlowConstraintConfig
   customPhaseRows?: Record<string, CustomPhaseRow[]>
   materialPhaseRows?: Record<string, MaterialPhaseAssistRow[]>
   phaseMaterialId?: string | null
@@ -986,6 +1258,88 @@ function cloneSolventSolution(solution: CopperSolventSolution | null): CopperSol
   }
 }
 
+function cloneOxySolverResult(result: OxyConstraintSolverResult): OxyConstraintSolverResult {
+  return JSON.parse(JSON.stringify(result)) as OxyConstraintSolverResult
+}
+
+function normalizeOxySolverResult(value: unknown): OxyConstraintSolverResult | null {
+  const result = value as OxyConstraintSolverResult | null | undefined
+  if (!result || typeof result !== 'object') return null
+  if (typeof result.valid !== 'boolean' || !result.products || typeof result.products !== 'object') return null
+  if (typeof result.totalProductMass !== 'number') return null
+  if (!result.recommended || typeof result.recommended !== 'object') return null
+  if (!Array.isArray(result.constraintResiduals)) return null
+  const hasProducts = OXY_SIDE_BLOW_PRODUCT_KEYS.every((key) => {
+    const product = result.products[key]
+    return (
+      product &&
+      typeof product.name === 'string' &&
+      typeof product.mass === 'number' &&
+      Array.isArray(product.phases) &&
+      product.elementMass &&
+      product.composition
+    )
+  })
+  return hasProducts ? cloneOxySolverResult(result) : null
+}
+
+function buildProductSolverInputPhaseMass(
+  rawMaterials: CopperMaterialColumn[],
+  phaseBatchResults: PhaseBatchResults | null | undefined,
+  materialPhaseRows: Record<string, MaterialPhaseAssistRow[]>
+): Record<string, Record<string, number>> | undefined {
+  const validPhaseResults = rawMaterials
+    .map((material) => phaseBatchResults?.[material.id])
+    .filter((result): result is PhaseMaterialCalcResult => Boolean(result?.valid))
+  if (validPhaseResults.length === 0) return undefined
+  return {
+    [PRODUCT_INPUT_PHASE_BLEND_NAME]: buildBlendPhaseMassFromMaterialResults(validPhaseResults, materialPhaseRows),
+  }
+}
+
+function computeProductSolverResultFromCaseState(params: {
+  rawMaterials: CopperMaterialColumn[]
+  solventColumns: CopperMaterialColumn[]
+  fuelColumn: CopperFuelMaterial
+  airColumns: CopperMaterialColumn[]
+  phaseBatchResults: PhaseBatchResults | null | undefined
+  materialPhaseRows: Record<string, MaterialPhaseAssistRow[]>
+  productConstraintConfig: OxySideBlowConstraintConfig
+}): OxyConstraintSolverResult | null {
+  const blendFeed = calculateWeightedComposition([
+    ...params.rawMaterials,
+    ...params.solventColumns,
+    params.fuelColumn,
+    ...params.airColumns,
+  ])
+  if (blendFeed.totalWeight <= 0) return null
+  try {
+    return solveOxySideBlowProducts({
+      blendFeed,
+      rawFeed: calculateWeightedComposition(
+        params.rawMaterials.map((material) => ({
+          ...material,
+          waterWeight: 0,
+          moisture: 0,
+        }))
+      ),
+      rawMaterialColumns: params.rawMaterials,
+      concentrateMass: params.rawMaterials.reduce((sum, material) => sum + Math.max(0, material.weight), 0),
+      inputPhaseMass: buildProductSolverInputPhaseMass(
+        params.rawMaterials,
+        params.phaseBatchResults,
+        params.materialPhaseRows
+      ),
+      fuelColumn: params.fuelColumn,
+      solventColumns: params.solventColumns,
+      airColumns: params.airColumns,
+      config: params.productConstraintConfig,
+    })
+  } catch {
+    return null
+  }
+}
+
 type CopperCaseContent = Omit<CopperCaseRecord, 'id' | 'name' | 'createdAt' | 'updatedAt' | 'stageId'>
 
 function extractCopperCaseContent(record: CopperCaseRecord): CopperCaseContent {
@@ -1065,6 +1419,7 @@ function normalizeImportedCopperCase(payload: unknown, methodName: string): Copp
     phaseCompleted: candidate.phaseCompleted ?? false,
     productCalculated: candidate.productCalculated ?? false,
     productFilledBack: candidate.productFilledBack ?? candidate.productCalculated ?? false,
+    productSolverResult: normalizeOxySolverResult(candidate.productSolverResult),
     heatBalanced: candidate.heatBalanced ?? false,
     fuelLhv: candidate.fuelLhv ?? String(DEFAULT_COPPER_FUEL.lowerHeatingValueMJkg),
     fuelEfficiency: candidate.fuelEfficiency ?? String(DEFAULT_COPPER_FUEL.combustionEfficiency),
@@ -1091,6 +1446,7 @@ function normalizeImportedCopperCase(payload: unknown, methodName: string): Copp
     productDistributionDrafts: cloneProductDistributionDrafts(candidate.productDistributionDrafts),
     productPhaseOverrides: candidate.productPhaseOverrides ?? {},
     productPhaseManual: candidate.productPhaseManual ?? false,
+    productConstraintConfig: normalizeOxyConstraintConfig(candidate.productConstraintConfig),
     customPhaseRows: candidate.customPhaseRows ?? {},
     materialPhaseRows: candidate.materialPhaseRows ?? {},
     phaseMaterialId: candidate.phaseMaterialId ?? null,
@@ -1545,8 +1901,6 @@ export default function CopperWorkflow({
   const [ratioDrafts, setRatioDrafts] = useState<Record<string, string>>({})
   const [phaseCompleted, setPhaseCompleted] = useState(false)
   const [showElementAssist, setShowElementAssist] = useState(false)
-  const [showProductCalculationAssist, setShowProductCalculationAssist] = useState(false)
-  const [productCalculationEngaged, setProductCalculationEngaged] = useState(false)
   const [showHeatBalanceAssist, setShowHeatBalanceAssist] = useState(false)
   const [heatBalanceEngaged, setHeatBalanceEngaged] = useState(false)
 
@@ -1560,6 +1914,7 @@ export default function CopperWorkflow({
   const resetProductCalculation = useCallback(() => {
     setProductCalculated(false)
     setProductFilledBack(false)
+    setOxySolverResult(null)
   }, [])
   useEffect(() => {
     if (!productCalculated) setOxySolverResult(null)
@@ -1636,6 +1991,17 @@ export default function CopperWorkflow({
   const [heatLossMJh, setHeatLossMJh] = useState('1500')
   const [otherHeatMJh, setOtherHeatMJh] = useState('0')
   const [heatBalanced, setHeatBalanced] = useState(false)
+  const [productConstraintConfig, setProductConstraintConfig] = useState<OxySideBlowConstraintConfig>(() =>
+    createDefaultProductConstraintConfig()
+  )
+  const [productConstraintValueDrafts, setProductConstraintValueDrafts] = useState<ProductConstraintValueDrafts>({})
+  const [openProductConstraintRuleMenu, setOpenProductConstraintRuleMenu] = useState<string | null>(null)
+  const [customConstraintTargetDrafts, setCustomConstraintTargetDrafts] = useState<Record<number, string>>({})
+  const [customConstraintExprDrafts, setCustomConstraintExprDrafts] = useState<Record<number, string>>({})
+  const [newCustomConstraintDraft, setNewCustomConstraintDraft] = useState<CustomConstraintDraft>({
+    expr: '',
+    target: '',
+  })
   const [manualAirWeightValid, setManualAirWeightValid] = useState(false)
   const [isPhaseCalculating, setIsPhaseCalculating] = useState(false)
   const [batchTableHighlight, setBatchTableHighlight] = useState(false)
@@ -1708,13 +2074,52 @@ export default function CopperWorkflow({
     [rawMaterials, solventColumns, fuelColumn, airColumns]
   )
   const hasProductResult = productCalculated && Boolean(oxySolverResult)
+  const closeProductConstraintRuleMenu = useCallback(() => setOpenProductConstraintRuleMenu(null), [])
+  useEffect(() => {
+    if (!openProductConstraintRuleMenu) return
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!(event.target instanceof Element) || !event.target.closest('[data-product-constraint-rule-menu]')) {
+        closeProductConstraintRuleMenu()
+      }
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeProductConstraintRuleMenu()
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [closeProductConstraintRuleMenu, openProductConstraintRuleMenu])
+
+  const productConstraintRows = useMemo(
+    () => buildProductConstraintRows(productConstraintConfig, DEFAULT_OXY_CONSTRAINT_CONFIG),
+    [productConstraintConfig.elementDistributions]
+  )
+  const updateProductConstraintConfig = useCallback(
+    (updater: (config: OxySideBlowConstraintConfig) => OxySideBlowConstraintConfig) => {
+      setProductConstraintConfig((prev) => updater(prev))
+      resetProductCalculation()
+      setHeatBalanced(false)
+    },
+    [resetProductCalculation]
+  )
+  useEffect(() => {
+    if ((productConstraintConfig.version ?? 0) >= DEFAULT_OXY_CONSTRAINT_CONFIG.version) return
+    updateProductConstraintConfig((prev) =>
+      autoFillOxyProductConstraintConfig(
+        migrateOxyProductConstraintDefaults(normalizeProductConstraintFixedValues(prev), DEFAULT_OXY_CONSTRAINT_CONFIG)
+      ).config
+    )
+  }, [productConstraintConfig.version, updateProductConstraintConfig])
+
   useEffect(() => {
     if (batchTableView === 'productPhase' || batchTableView === 'productElement') {
-      if (!hasProductResult) {
-        window.requestAnimationFrame(() => {
-          productCalculationRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        })
-      }
+      window.requestAnimationFrame(() => {
+        const target = hasProductResult ? calculationTableRef.current : productCalculationRef.current
+        target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
       return
     }
     calculationTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -2857,8 +3262,7 @@ export default function CopperWorkflow({
       return
     }
     const titlePrefix = `${APP_NAME_ZH} ${getCopperStageExportName(activeStage.name)} 产出计算`
-    const config = loadOxySideBlowConstraints()
-    const pivotRows = buildProductResultPivotData(oxySolverResult, config)
+    const pivotRows = buildProductResultPivotData(oxySolverResult, productConstraintConfig)
     const productElementRows = pivotRows.filter((row) => row.kind === 'element')
 
     const elementColumns: CopperBatchExportColumn[] = [
@@ -2900,31 +3304,22 @@ export default function CopperWorkflow({
       })
       const phasePcts = Array.from({ length: maxPhaseCols }, (_, index) => {
         const phase = product.phases[index]
-        return phase ? formatProductSharePercent(phase.pct) : ''
+        if (!phase) return ''
+        if (pk !== 'flueGas') return formatProductSharePercent(phase.pct)
+        const volumePercents = calculateGasVolumePercents(
+          Object.fromEntries(product.phases.map((item) => [item.key, item.pct]))
+        )
+        const volPct = volumePercents[phase.key as keyof typeof volumePercents] ?? 0
+        return formatProductSharePercent(volPct)
       })
       phaseRows.push({
         label: `${product.name} · 物相`,
         values: [product.name, formatTableNumber(product.mass), ...phaseLabels],
       })
       phaseRows.push({
-        label: `${product.name} · w%`,
+        label: `${product.name} · ${pk === 'flueGas' ? 'v%' : 'w%'}`,
         values: ['', '', ...phasePcts],
       })
-      if (pk === 'flueGas') {
-        const volumePercents = calculateGasVolumePercents(
-          Object.fromEntries(product.phases.map((phase) => [phase.key, phase.pct]))
-        )
-        const phaseVolPcts = Array.from({ length: maxPhaseCols }, (_, index) => {
-          const phase = product.phases[index]
-          if (!phase) return ''
-          const volPct = volumePercents[phase.key as keyof typeof volumePercents] ?? 0
-          return volPct > 1e-12 ? formatProductSharePercent(volPct) : '0.0000'
-        })
-        phaseRows.push({
-          label: `${product.name} · v%`,
-          values: ['', '', ...phaseVolPcts],
-        })
-      }
     }
 
     const sheets: CopperBatchWorkbookSheet[] = [
@@ -3754,8 +4149,6 @@ export default function CopperWorkflow({
   const handleBatchTableViewChange = (view: BatchTableView) => {
     setBatchTableView(view)
     if (view === 'productPhase' || view === 'productElement') {
-      setProductCalculationEngaged(true)
-      setShowProductCalculationAssist(true)
       if (!hasProductResult) {
         scrollToProductCalculation()
         if (furnaceFeed.totalWeight > 0) {
@@ -3838,6 +4231,7 @@ export default function CopperWorkflow({
       scrollToCalculationTable()
       return
     }
+    setBatchTableView('productPhase')
     setIsProductCalculating(true)
     setProductCalculationStep(0)
     try {
@@ -3863,6 +4257,12 @@ export default function CopperWorkflow({
         }
       : undefined
     await advanceProductCalculationStep(1)
+    const constraintValidation = validateOxyProductConstraintConfig(productConstraintConfig)
+    const constraintBlocking = firstBlockingConstraintMessage(constraintValidation)
+    if (constraintBlocking) {
+      setWorkflowMessage(workflowStepMessage(5, constraintBlocking), 'error')
+      return
+    }
     const solverResult = solveOxySideBlowProducts({
       blendFeed: furnaceFeed,
       rawFeed: rawConcentrateBlend,
@@ -3872,15 +4272,19 @@ export default function CopperWorkflow({
       fuelColumn,
       solventColumns,
       airColumns,
+      config: productConstraintConfig,
     })
     await advanceProductCalculationStep(2)
     setOxySolverResult(solverResult)
     setProductCalculated(true)
-    setProductFilledBack(false)
+    setProductFilledBack(solverResult.valid)
     setProductPhaseManual(false)
     setProductPhaseOverrides({})
     setOutputPhaseDrafts({})
     setInvalidOutputPhaseColumns({})
+    setBatchTableView('productPhase')
+    setBatchTableHighlight(true)
+    window.setTimeout(() => setBatchTableHighlight(false), 1000)
     const bridged = oxySolverToCopperProductResult(solverResult)
     if (
       solverResult.recommended.fuelWeight > 0 &&
@@ -3931,8 +4335,11 @@ export default function CopperWorkflow({
       ? ''
       : ` ${solverResult.message ?? '产出约束未完全满足，请检查配料或约束配置。'}`
     const actionNote = solverResult.valid
-      ? '请确认预览表后点击「回填产出到配料总表」。'
+      ? '已自动回填到配料总表产出-产物物相表与产出-产物元素表。'
       : '当前结果不可回填，请先修正输入或约束。'
+    if (solverResult.valid) {
+      scrollToCalculationTable('start')
+    }
     setWorkflowMessage(
       workflowStepMessage(
         5,
@@ -3977,6 +4384,513 @@ export default function CopperWorkflow({
     )
   }
 
+  const productConstraintAutoFillMessage = (fills: ReturnType<typeof autoFillOxyProductConstraintConfig>['autoFills']) => {
+    const first = fills[0]
+    if (!first) return null
+    const suffix = fills.length > 1 ? `（共 ${fills.length} 项）` : ''
+    return `已自动补齐 ${first.element} 在 ${OXY_PRODUCT_KEY_TO_CN[first.product]} 的 D 为 ${formatConstraintDisplayValue(first.value)}%。${suffix}`
+  }
+
+  const updateProductDistributionConstraint = (
+    productKey: OxySideBlowProductKey,
+    element: string,
+    type: DistributionRuleType,
+    value: string
+  ): boolean => {
+    const valueLabel = `${element} ${OXY_PRODUCT_KEY_TO_CN[productKey]} ${type}`
+    const resolvedValue = value.trim() === '' ? null : resolveConstraintRuleValue(value, productConstraintConfig.variables, valueLabel)
+    if (resolvedValue && !resolvedValue.valid) {
+      setWorkflowMessage(workflowStepMessage(5, resolvedValue.error ?? '元素约束值无效。'), 'error')
+      return false
+    }
+
+    const nextConfig = upsertProductDistributionRule(productConstraintConfig, productKey, element, type, value)
+    const autoFilled = autoFillOxyProductConstraintConfig(nextConfig)
+    const finalValidation = validateOxyProductConstraintConfig(autoFilled.config)
+    const finalBlocking = firstBlockingConstraintMessage(finalValidation)
+    if (finalBlocking) {
+      setWorkflowMessage(workflowStepMessage(5, finalBlocking), 'error')
+      return false
+    }
+
+    updateProductConstraintConfig(() => autoFilled.config)
+    if (autoFilled.autoFills.length > 0) {
+      setProductConstraintValueDrafts((prev) => {
+        const next = { ...prev }
+        for (const fill of autoFilled.autoFills) {
+          delete next[productConstraintCellDraftKey(fill.product, fill.element, fill.type)]
+        }
+        return next
+      })
+      const message = productConstraintAutoFillMessage(autoFilled.autoFills)
+      if (message) setWorkflowMessage(workflowStepMessage(5, message), 'success')
+    } else if (finalValidation.warnings.length > 0) {
+      setWorkflowMessage(workflowStepMessage(5, finalValidation.warnings[0]!.message), 'warning')
+    }
+    return true
+  }
+
+  const updateProductDistributionConstraintType = (
+    productKey: OxySideBlowProductKey,
+    element: string,
+    type: DistributionRuleType | ''
+  ) => {
+    if (type && !productCanCarryConstraintElement(productConstraintConfig, productKey, element)) {
+      setWorkflowMessage(workflowStepMessage(5, `${OXY_PRODUCT_KEY_TO_CN[productKey]} 不能承接 ${element}。`), 'error')
+      return
+    }
+    const nextConfig = setProductDistributionRuleType(productConstraintConfig, productKey, element, type)
+    const autoFilled = autoFillOxyProductConstraintConfig(nextConfig)
+    const finalValidation = validateOxyProductConstraintConfig(autoFilled.config)
+    const finalBlocking = firstBlockingConstraintMessage(finalValidation)
+    if (finalBlocking) {
+      setWorkflowMessage(workflowStepMessage(5, finalBlocking), 'error')
+      return
+    }
+    updateProductConstraintConfig(() => autoFilled.config)
+    if (autoFilled.autoFills.length > 0) {
+      const message = productConstraintAutoFillMessage(autoFilled.autoFills)
+      if (message) setWorkflowMessage(workflowStepMessage(5, message), 'success')
+    } else if (finalValidation.warnings.length > 0) {
+      setWorkflowMessage(workflowStepMessage(5, finalValidation.warnings[0]!.message), 'warning')
+    }
+    setOpenProductConstraintRuleMenu(null)
+    setProductConstraintValueDrafts((prev) => {
+      const next = { ...prev }
+      for (const ruleType of OXY_DISTRIBUTION_RULE_TYPES) {
+        delete next[productConstraintCellDraftKey(productKey, element, ruleType)]
+      }
+      for (const fill of autoFilled.autoFills) {
+        delete next[productConstraintCellDraftKey(fill.product, fill.element, fill.type)]
+      }
+      return next
+    })
+  }
+
+  const productDistributionConstraintDraftValue = (
+    productKey: OxySideBlowProductKey,
+    element: string,
+    type: DistributionRuleType,
+    value: number | string | null | undefined
+  ) => {
+    const key = productConstraintCellDraftKey(productKey, element, type)
+    return productConstraintValueDrafts[key] ?? formatConstraintDisplayValue(value)
+  }
+
+  const setProductDistributionConstraintDraft = (
+    productKey: OxySideBlowProductKey,
+    element: string,
+    type: DistributionRuleType,
+    value: string
+  ) => {
+    const key = productConstraintCellDraftKey(productKey, element, type)
+    setProductConstraintValueDrafts((prev) => ({
+      ...prev,
+      [key]: value,
+    }))
+  }
+
+  const commitProductDistributionConstraintDraft = (
+    productKey: OxySideBlowProductKey,
+    element: string,
+    type: DistributionRuleType,
+    fallbackValue: number | string | null | undefined
+  ) => {
+    const key = productConstraintCellDraftKey(productKey, element, type)
+    const draft = productConstraintValueDrafts[key]
+    if (draft == null) return
+    if (draft !== formatConstraintDisplayValue(fallbackValue)) {
+      const committed = updateProductDistributionConstraint(productKey, element, type, draft)
+      if (!committed) return
+    }
+    setProductConstraintValueDrafts((prev) => {
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+  }
+
+
+
+  const resetProductConstraintsToDefault = () => {
+    updateProductConstraintConfig(() => createDefaultProductConstraintConfig())
+    setOpenProductConstraintRuleMenu(null)
+    setProductConstraintValueDrafts({})
+    setCustomConstraintTargetDrafts({})
+    setCustomConstraintExprDrafts({})
+    setNewCustomConstraintDraft({ expr: '', target: '' })
+    setWorkflowMessage(workflowStepMessage(5, '已恢复产出计算约束默认值。'), 'flow')
+  }
+
+
+  const addCustomConstraint = () => {
+    const nextTarget = normalizeConstraintRuleValue(newCustomConstraintDraft.target)
+    if (!newCustomConstraintDraft.expr.trim() || typeof nextTarget !== 'number') {
+      setWorkflowMessage(workflowStepMessage(5, '请先填写自定义约束表达式和数值目标。'), 'flow')
+      return
+    }
+    try {
+      parseConstraintExpression(newCustomConstraintDraft.expr)
+    } catch {
+      setWorkflowMessage(workflowStepMessage(5, '自定义约束表达式格式不正确，请检查 Input/Output 路径和运算符。'), 'flow')
+      return
+    }
+    updateProductConstraintConfig((config) =>
+      addCustomConstraintEntry(config, newCustomConstraintDraft.expr, newCustomConstraintDraft.target)
+    )
+    setCustomConstraintTargetDrafts({})
+    setCustomConstraintExprDrafts({})
+    setNewCustomConstraintDraft({ expr: '', target: '' })
+  }
+
+  const renderProductConstraintEditor = (compact = false) => {
+    const border = darkMode ? 'border-gray-600' : 'border-gray-200'
+    const head = darkMode ? 'bg-gray-800 text-gray-200' : 'bg-gray-50 text-gray-700'
+    const stickyHead = darkMode ? 'bg-gray-800 text-gray-200' : 'bg-gray-50 text-gray-700'
+    const stickyBody = darkMode ? 'bg-gray-900 text-gray-100' : 'bg-white text-gray-900'
+    const muted = darkMode ? 'text-gray-400' : 'text-gray-500'
+    const tableCell = `border-t border-l px-1 py-1.5 align-middle ${border}`
+    const actionCell = `w-[42px] border-t border-l px-0 py-1.5 text-center align-middle ${border}`
+    const stickyCell = `sticky z-10 border-t px-2 py-1.5 align-middle ${border} ${stickyBody}`
+    const valueInput = `${inputSm(darkMode)} h-8 w-full min-w-[64px] px-1 py-0 text-center text-sm`
+    const textInput = `${inputSm(darkMode)} h-8 w-full px-2 py-0 text-sm`
+    const ruleMenuTrigger = `${inputSm(darkMode)} relative h-8 w-full px-5 py-0 text-center text-sm`
+    const selectArrow = darkMode ? 'border-gray-300' : 'border-gray-600'
+    const ignoredCell = darkMode ? 'bg-gray-800/70 text-gray-500' : 'bg-gray-100 text-gray-500'
+    const ignoredControl = darkMode
+      ? '!border-gray-700 !bg-gray-800/80 text-gray-500 placeholder:text-gray-500'
+      : '!border-gray-300 !bg-gray-100 text-gray-500 placeholder:text-gray-500'
+    const unsupportedControl = darkMode ? 'ring-1 ring-yellow-500/40' : 'ring-1 ring-yellow-300'
+    const ruleMenuPanel = `absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden rounded-md border shadow-lg ${
+      darkMode ? 'border-gray-600 bg-gray-800 text-gray-100' : 'border-gray-200 bg-white text-gray-900'
+    }`
+    const ruleMenuOption = `flex h-8 w-full items-center justify-center px-2 text-center text-sm transition-colors ${
+      darkMode ? 'hover:bg-gray-700 focus:bg-gray-700' : 'hover:bg-blue-50 focus:bg-blue-50'
+    }`
+    const deleteIconButton = `inline-flex h-5 w-5 items-center justify-center border-0 bg-transparent p-0 text-base font-semibold leading-none transition-colors ${
+      darkMode
+        ? 'text-red-300 hover:text-red-200 disabled:text-gray-500'
+        : 'text-red-600 hover:text-red-800 disabled:text-gray-400'
+    }`
+    const iconButton = `inline-flex h-6 w-6 items-center justify-center border-0 bg-transparent p-0 text-lg font-semibold leading-none transition-colors ${
+      darkMode
+        ? 'text-blue-300 hover:text-blue-200 disabled:text-gray-500'
+        : 'text-blue-600 hover:text-blue-800 disabled:text-gray-400'
+    }`
+    const customRows = visibleCustomConstraints(productConstraintConfig)
+    const customExprValue = (index: number, expr: string) =>
+      customConstraintExprDrafts[index] ?? displayConstraintExpression(expr)
+    const setCustomExprDraft = (index: number, value: string) => {
+      setCustomConstraintExprDrafts((prev) => ({ ...prev, [index]: value }))
+    }
+    const commitCustomExprDraft = (index: number, expr: string) => {
+      const draft = customConstraintExprDrafts[index]
+      if (draft == null) return
+      try {
+        parseConstraintExpression(draft)
+      } catch {
+        setWorkflowMessage(workflowStepMessage(5, '\u81ea\u5b9a\u4e49\u7ea6\u675f\u8868\u8fbe\u5f0f\u683c\u5f0f\u4e0d\u6b63\u786e\uff0c\u8bf7\u68c0\u67e5 Input/Output \u8def\u5f84\u548c\u8fd0\u7b97\u7b26\u3002'), 'flow')
+        return
+      }
+      if (draft !== expr) {
+        updateProductConstraintConfig((config) => updateCustomConstraintEntry(config, index, { expr: draft }))
+      }
+      setCustomConstraintExprDrafts((prev) => {
+        const next = { ...prev }
+        delete next[index]
+        return next
+      })
+    }
+    const productRuleMaps = Object.fromEntries(
+      OXY_SIDE_BLOW_PRODUCT_KEYS.map((productKey) => [
+        productKey,
+        productDistributionRuleMap(productConstraintConfig, productKey),
+      ])
+    ) as Record<OxySideBlowProductKey, Record<string, ProductConstraintCellValues>>
+    const selectedRuleType = (productKey: OxySideBlowProductKey, element: string): DistributionRuleType | '' => {
+      const values = productRuleMaps[productKey]?.[element] ?? {}
+      if (values['W%'] != null) return 'W%'
+      if (values['D%'] != null) return 'D%'
+      return ''
+    }
+    const constraintTableMinWidth = Math.max(860, 176 + productConstraintRows.length * 76)
+    const constraintSyntaxHint =
+      '支持 Input.xxx、Output.xxx、Output.产物.物相.元素、OutputE.xxx；运算支持 + - * / () 和小数。例：Output.熔炼出炉烟气.As2O3.As / (Output.熔炼出炉烟气.As2O3.As + Output.烟气含尘.As2O3.As)'
+    const customTargetValue = (index: number, target: number) =>
+      customConstraintTargetDrafts[index] ?? formatCustomConstraintDisplayValue(target)
+    const setCustomTargetDraft = (index: number, value: string) => {
+      setCustomConstraintTargetDrafts((prev) => ({ ...prev, [index]: value }))
+    }
+    const commitCustomTargetDraft = (index: number, target: number) => {
+      const draft = customConstraintTargetDrafts[index]
+      if (draft == null) return
+      if (isValidNumberText(draft)) {
+        const nextTarget = toNumber(draft, target)
+        if (nextTarget !== target) {
+          updateProductConstraintConfig((config) => updateCustomConstraintEntry(config, index, { target: nextTarget }))
+        }
+      }
+      setCustomConstraintTargetDrafts((prev) => {
+        const next = { ...prev }
+        delete next[index]
+        return next
+      })
+    }
+
+    return (
+      <div className={`space-y-4 ${compact ? 'text-sm' : ''}`}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h4 className={`text-sm font-semibold ${darkMode ? 'text-gray-100' : 'text-gray-800'}`}>
+            元素约束
+          </h4>
+          <button type="button" className={btnSecondary(darkMode)} onClick={resetProductConstraintsToDefault}>
+            恢复默认
+          </button>
+        </div>
+
+        <div className={`overflow-hidden rounded-lg border ${border}`}>
+          <div className="overflow-auto">
+            <table className="w-full table-fixed text-sm" style={{ minWidth: constraintTableMinWidth }}>
+              <thead className={head}>
+                <tr>
+                  <th className={`sticky left-0 z-20 w-24 px-2 py-2 text-center font-semibold ${stickyHead}`}>产物</th>
+                  <th className={`sticky left-24 z-20 w-20 px-2 py-2 text-center font-semibold ${stickyHead}`}>项目</th>
+                  {productConstraintRows.map((row) => (
+                    <th key={row.element} className={`w-[76px] border-l px-1 py-2 text-center font-semibold ${border}`}>
+                      {elementSymbolLabel(row.element)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {OXY_SIDE_BLOW_PRODUCT_KEYS.map((productKey) => (
+                  <Fragment key={productKey}>
+                    <tr>
+                      <td rowSpan={2} className={`${stickyCell} left-0 text-center font-semibold`}>
+                        {OXY_PRODUCT_KEY_TO_CN[productKey]}
+                      </td>
+                      <td className={`${stickyCell} left-24 text-center ${muted}`}>约束</td>
+                      {productConstraintRows.map((row) => {
+                        const type = selectedRuleType(productKey, row.element)
+                        const canCarry = productCanCarryConstraintElement(productConstraintConfig, productKey, row.element)
+                        const ignored = !type
+                        const cellTitle = ignored ? '未参与计算，可选择 W/D' : canCarry ? undefined : `${OXY_PRODUCT_KEY_TO_CN[productKey]} 不能承接 ${row.element}`
+                        return (
+                          <td key={`${productKey}-${row.element}-type`} className={`${tableCell} ${ignored ? ignoredCell : ''}`} title={cellTitle}>
+                            <div className="relative" data-product-constraint-rule-menu>
+                              <button
+                                type="button"
+                                className={`${ruleMenuTrigger} ${ignored ? ignoredControl : ''} ${type && !canCarry ? unsupportedControl : ''}`}
+                                aria-haspopup="listbox"
+                                aria-expanded={openProductConstraintRuleMenu === productConstraintCellDraftKey(productKey, row.element, type || 'W%')}
+                                title={cellTitle}
+                                onClick={() => {
+                                  const menuKey = productConstraintCellDraftKey(productKey, row.element, type || 'W%')
+                                  setOpenProductConstraintRuleMenu((current) => (current === menuKey ? null : menuKey))
+                                }}
+                              >
+                                <span className="block w-full text-center">{type ? OXY_DISTRIBUTION_RULE_LABELS[type] : '\u2014'}</span>
+                                <span
+                                  aria-hidden="true"
+                                  className={`pointer-events-none absolute right-2 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rotate-45 border-b border-r ${selectArrow}`}
+                                />
+                              </button>
+                              {openProductConstraintRuleMenu === productConstraintCellDraftKey(productKey, row.element, type || 'W%') && (
+                                <div className={ruleMenuPanel} role="listbox">
+                                  {OXY_DISTRIBUTION_RULE_OPTIONS.map((ruleType) => (
+                                    <button
+                                      key={ruleType || 'empty'}
+                                      type="button"
+                                      className={ruleMenuOption}
+                                      role="option"
+                                      aria-selected={type === ruleType}
+                                      onClick={() =>
+                                        updateProductDistributionConstraintType(productKey, row.element, ruleType)
+                                      }
+                                    >
+                                      {ruleType ? OXY_DISTRIBUTION_RULE_LABELS[ruleType] : '\u2014'}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        )
+                      })}
+                    </tr>
+                    <tr>
+                      <td className={`${stickyCell} left-24 text-center ${muted}`}>数值</td>
+                      {productConstraintRows.map((row) => {
+                        const type = selectedRuleType(productKey, row.element)
+                        const canCarry = productCanCarryConstraintElement(productConstraintConfig, productKey, row.element)
+                        const ignored = !type
+                        const cellTitle = ignored ? '未参与计算，选择 W/D 后可填数值' : canCarry ? undefined : `${OXY_PRODUCT_KEY_TO_CN[productKey]} 不能承接 ${row.element}`
+                        const values = productRuleMaps[productKey]?.[row.element] ?? {}
+                        return (
+                          <td key={`${productKey}-${row.element}-value`} className={`${tableCell} ${ignored ? ignoredCell : ''}`} title={cellTitle}>
+                            <input
+                              className={`${valueInput} ${ignored ? ignoredControl : ''} ${type && !canCarry ? unsupportedControl : ''}`}
+                              value={type ? productDistributionConstraintDraftValue(productKey, row.element, type, values[type]) : ''}
+                              disabled={!type || !canCarry}
+                              title={cellTitle}
+                              placeholder={type ? '' : '\u2014'}
+                              onChange={(event) =>
+                                type && setProductDistributionConstraintDraft(productKey, row.element, type, event.target.value)
+                              }
+                              onFocus={(event) => {
+                                if (!type) return
+                                const fullValue = formatConstraintRuleValue(values[type])
+                                if (event.currentTarget.value !== fullValue) {
+                                  setProductDistributionConstraintDraft(productKey, row.element, type, fullValue)
+                                }
+                                event.currentTarget.select()
+                              }}
+                              onBlur={() => type && commitProductDistributionConstraintDraft(productKey, row.element, type, values[type])}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  event.currentTarget.blur()
+                                }
+                              }}
+                            />
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className={`overflow-hidden rounded-lg border ${border}`}>
+          <div className={`px-3 py-2 text-sm font-semibold ${head}`}>自定义约束</div>
+          <div className="overflow-auto">
+            <table className="w-full min-w-[820px] table-fixed text-sm">
+              <thead className={head}>
+                <tr>
+                  <th className="w-[52px] px-2 py-1.5 text-center font-semibold">序号</th>
+                  <th className="px-2 py-1.5 text-center font-semibold">约束</th>
+                  <th className="w-[132px] px-2 py-1.5 text-center font-semibold">数值</th>
+                  <th className="w-[42px] px-0 py-1.5 text-center font-semibold">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {customRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className={`${tableCell} text-center ${muted}`}>
+                      暂无自定义约束
+                    </td>
+                  </tr>
+                ) : (
+                  customRows.map(({ constraint, index }, rowIndex) => {
+                    const currentExpr = customConstraintExprDrafts[index] ?? constraint.expr
+                    let syntaxValid = true
+                    try {
+                      parseConstraintExpression(currentExpr)
+                    } catch {
+                      syntaxValid = false
+                    }
+                    return (
+                      <tr key={`${constraint.expr}-${index}`}>
+                        <td className={`${tableCell} text-center font-mono tabular-nums`}>
+                          {rowIndex + 1}
+                        </td>
+                        <td className={tableCell}>
+                          <input
+                            className={`${textInput} ${syntaxValid ? '' : darkMode ? 'border-red-500 text-red-200' : 'border-red-400 text-red-700'}`}
+                            value={customExprValue(index, constraint.expr)}
+                            title={displayConstraintExpression(currentExpr)}
+                            aria-label={`约束表达式：${displayConstraintExpression(currentExpr)}`}
+                            onFocus={(event) => {
+                              setCustomExprDraft(index, constraint.expr)
+                              event.currentTarget.select()
+                            }}
+                            onChange={(event) => setCustomExprDraft(index, event.target.value)}
+                            onBlur={() => commitCustomExprDraft(index, constraint.expr)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.currentTarget.blur()
+                              }
+                            }}
+                          />
+                        </td>
+                        <td className={tableCell}>
+                          <input
+                            className={valueInput}
+                            value={customTargetValue(index, constraint.target)}
+                            onChange={(event) => {
+                              if (!isEditableNumberDraft(event.target.value)) return
+                              setCustomTargetDraft(index, event.target.value)
+                            }}
+                            onFocus={(event) => event.currentTarget.select()}
+                            onBlur={() => commitCustomTargetDraft(index, constraint.target)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') event.currentTarget.blur()
+                            }}
+                          />
+                        </td>
+                        <td className={actionCell}>
+                          <button
+                            type="button"
+                            className={deleteIconButton}
+                            aria-label="删除自定义约束"
+                            title="删除自定义约束"
+                            onClick={() => {
+                              setCustomConstraintExprDrafts((prev) => shiftDraftEntriesAfterRemoval(prev, index))
+                              setCustomConstraintTargetDrafts((prev) => shiftDraftEntriesAfterRemoval(prev, index))
+                              updateProductConstraintConfig((config) => removeCustomConstraintEntry(config, index))
+                            }}
+                          >
+                            ×
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })
+                )}
+                <tr>
+                  <td className={`${tableCell} text-center ${muted}`}>—</td>
+                  <td className={tableCell}>
+                    <input
+                      className={textInput}
+                      value={newCustomConstraintDraft.expr}
+                      title={newCustomConstraintDraft.expr ? displayConstraintExpression(newCustomConstraintDraft.expr) : constraintSyntaxHint}
+                      placeholder=""
+                      onChange={(event) =>
+                        setNewCustomConstraintDraft((prev) => ({ ...prev, expr: event.target.value }))
+                      }
+                    />
+                  </td>
+                  <td className={tableCell}>
+                    <input
+                      className={valueInput}
+                      value={newCustomConstraintDraft.target}
+                      onChange={(event) => {
+                        if (!isEditableNumberDraft(event.target.value)) return
+                        setNewCustomConstraintDraft((prev) => ({ ...prev, target: event.target.value }))
+                      }}
+                    />
+                  </td>
+                  <td className={actionCell}>
+                    <button
+                      type="button"
+                      className={iconButton}
+                      onClick={addCustomConstraint}
+                      aria-label="增加自定义约束"
+                      title={constraintSyntaxHint}
+                    >
+                      +
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    )
+  }
   const updateHeatField = (setter: (value: string) => void, value: string) => {
     setter(value)
     setHeatBalanced(false)
@@ -4289,6 +5203,7 @@ export default function CopperWorkflow({
       phaseCompleted,
       productCalculated,
       productFilledBack,
+      productSolverResult: productCalculated && oxySolverResult ? cloneOxySolverResult(oxySolverResult) : null,
       heatBalanced,
       fuelLhv,
       fuelEfficiency,
@@ -4312,6 +5227,7 @@ export default function CopperWorkflow({
       productDistributionDrafts: cloneProductDistributionDrafts(productDistributionDrafts),
       productPhaseOverrides: { ...productPhaseOverrides },
       productPhaseManual,
+      productConstraintConfig: cloneOxyConstraintConfig(productConstraintConfig),
       customPhaseRows: Object.fromEntries(
         Object.entries(customPhaseRows).map(([columnId, rows]) => [
           columnId,
@@ -4358,6 +5274,7 @@ export default function CopperWorkflow({
       phaseCompleted: false,
       productCalculated: false,
       productFilledBack: false,
+      productSolverResult: null,
       heatBalanced: false,
       fuelLhv: String(DEFAULT_COPPER_FUEL.lowerHeatingValueMJkg),
       fuelEfficiency: String(DEFAULT_COPPER_FUEL.combustionEfficiency),
@@ -4381,6 +5298,7 @@ export default function CopperWorkflow({
       productDistributionDrafts: productModelToDrafts(DEFAULT_COPPER_PRODUCT_MODEL),
       productPhaseOverrides: {},
       productPhaseManual: false,
+      productConstraintConfig: createDefaultProductConstraintConfig(),
       customPhaseRows: {},
       materialPhaseRows: {},
       phaseMaterialId: null,
@@ -4424,23 +5342,53 @@ export default function CopperWorkflow({
     const nextRawMaterials = (record.rawMaterials?.length ? record.rawMaterials : createDefaultCopperMaterials()).map(cloneMaterialColumn)
     const nextSolventColumns = (record.solventColumns?.length ? record.solventColumns : createDefaultSolventColumns()).map(cloneMaterialColumn)
     const nextAirColumns = normalizeProcessAirColumns(record.airColumns, record.oxygenAirColumn)
+    const nextFuelColumn = record.fuelColumn ? cloneFuelMaterial(record.fuelColumn) : cloneFuelMaterial(DEFAULT_COPPER_FUEL)
+    const nextPhaseBatchResults = record.phaseBatchResults ?? null
+    const nextProductConstraintConfig = normalizeOxyConstraintConfig(record.productConstraintConfig)
+    const nextMaterialPhaseRows = Object.fromEntries(
+      Object.entries(record.materialPhaseRows ?? {}).map(([materialId, rows]) => [
+        materialId,
+        ensureMaterialPhaseRows(rows),
+      ])
+    )
+    const savedProductSolverResult = record.productCalculated
+      ? normalizeOxySolverResult(record.productSolverResult)
+      : null
+    const restoredProductSolverResult =
+      savedProductSolverResult ??
+      (record.productCalculated
+        ? computeProductSolverResultFromCaseState({
+            rawMaterials: nextRawMaterials,
+            solventColumns: nextSolventColumns,
+            fuelColumn: nextFuelColumn,
+            airColumns: nextAirColumns,
+            phaseBatchResults: nextPhaseBatchResults,
+            materialPhaseRows: nextMaterialPhaseRows,
+            productConstraintConfig: nextProductConstraintConfig,
+          })
+        : null)
+    const restoredProductCalculated = Boolean(record.productCalculated && restoredProductSolverResult)
+    const restoredProductFilledBack = Boolean(
+      (record.productFilledBack ?? record.productCalculated ?? false) && restoredProductSolverResult?.valid
+    )
     setRawMaterials(nextRawMaterials)
     setRawWeightDrafts(record.rawWeightDrafts ?? Object.fromEntries(nextRawMaterials.map((material) => [material.id, material.weight > 0 ? String(material.weight) : ''])))
     setWaterWeightDrafts({})
     setSolventColumns(nextSolventColumns)
-    setFuelColumn(record.fuelColumn ? cloneFuelMaterial(record.fuelColumn) : cloneFuelMaterial(DEFAULT_COPPER_FUEL))
+    setFuelColumn(nextFuelColumn)
     setAirColumns(nextAirColumns)
     setTargetFeSiO2(record.targetFeSiO2 ?? '2.8')
     setTargetCaOSiO2(record.targetCaOSiO2 ?? '0.45')
     setSolventSolution(cloneSolventSolution(record.solventSolution ?? null))
     setPhaseCompletedMaterials(record.phaseCompletedMaterials ?? {})
-    setPhaseBatchResults(record.phaseBatchResults ?? null)
+    setPhaseBatchResults(nextPhaseBatchResults)
     setManualPhaseCells(record.manualPhaseCells ?? {})
     setManualSolventWeights(record.manualSolventWeights ?? {})
     setManualFuelWeightValid(record.manualFuelWeightValid ?? false)
     setPhaseCompleted(record.phaseCompleted ?? false)
-    setProductCalculated(record.productCalculated ?? false)
-    setProductFilledBack(record.productFilledBack ?? record.productCalculated ?? false)
+    setProductCalculated(restoredProductCalculated)
+    setProductFilledBack(restoredProductFilledBack)
+    setOxySolverResult(restoredProductSolverResult)
     setHeatBalanced(record.heatBalanced ?? false)
     setFuelLhv(record.fuelLhv ?? String(DEFAULT_COPPER_FUEL.lowerHeatingValueMJkg))
     setFuelEfficiency(record.fuelEfficiency ?? String(DEFAULT_COPPER_FUEL.combustionEfficiency))
@@ -4465,15 +5413,13 @@ export default function CopperWorkflow({
     setProductDistributionDrafts(cloneProductDistributionDrafts(record.productDistributionDrafts))
     setProductPhaseOverrides(record.productPhaseOverrides ?? {})
     setProductPhaseManual(record.productPhaseManual ?? false)
+    setProductConstraintConfig(nextProductConstraintConfig)
+    setProductConstraintValueDrafts({})
+    setCustomConstraintTargetDrafts({})
+    setCustomConstraintExprDrafts({})
+    setNewCustomConstraintDraft({ expr: '', target: '' })
     setCustomPhaseRows(record.customPhaseRows ?? {})
-    setMaterialPhaseRows(
-      Object.fromEntries(
-        Object.entries(record.materialPhaseRows ?? {}).map(([materialId, rows]) => [
-          materialId,
-          ensureMaterialPhaseRows(rows),
-        ])
-      )
-    )
+    setMaterialPhaseRows(nextMaterialPhaseRows)
     setInputPhaseDrafts({})
     setOutputPhaseDrafts({})
     setInvalidInputPhaseColumns({})
@@ -4483,19 +5429,19 @@ export default function CopperWorkflow({
       restoredPhaseMaterialId &&
       nextRawMaterials.some((material) => material.id === restoredPhaseMaterialId && material.name.trim())
         ? restoredPhaseMaterialId
-        : nextRawMaterials.find((material) => material.name.trim() && record.phaseBatchResults?.[material.id])?.id ??
+        : nextRawMaterials.find((material) => material.name.trim() && nextPhaseBatchResults?.[material.id])?.id ??
           null
     setPhaseMaterialId(validPhaseMaterialId)
     setPhaseAssistTabMaterialIds(
       buildPhaseAssistTabMaterialIds(
         record.phaseAssistTabMaterialIds ?? [],
         validPhaseMaterialId,
-        record.phaseBatchResults ?? null
+        nextPhaseBatchResults
       ).filter((id) => nextRawMaterials.some((material) => material.id === id && material.name.trim()))
     )
     const savedPreview = record.phasePreviewUnknowns ?? null
-    if (validPhaseMaterialId && record.phaseBatchResults?.[validPhaseMaterialId]) {
-      const result = record.phaseBatchResults[validPhaseMaterialId]!
+    if (validPhaseMaterialId && nextPhaseBatchResults?.[validPhaseMaterialId]) {
+      const result = nextPhaseBatchResults[validPhaseMaterialId]!
       if (savedPreview && savedPreview.materialId === validPhaseMaterialId) {
         setPhasePreviewUnknowns(savedPreview)
       } else {
@@ -4740,10 +5686,8 @@ export default function CopperWorkflow({
   const renderProductCalculationPanel = (
     key = 'product-calculation-panel',
     extraClassName = '',
-    options: { engaged?: boolean; tableVisible?: boolean; showIntro?: boolean } = {}
+    options: { showIntro?: boolean } = {}
   ) => {
-    const engaged = options.engaged ?? false
-    const tableVisible = options.tableVisible ?? true
     const showIntro = options.showIntro ?? true
     const hasResult = hasProductResult
     const recommendedFuelWeight = oxySolverResult?.recommended.fuelWeight ?? 0
@@ -4752,77 +5696,67 @@ export default function CopperWorkflow({
       <div key={key} className={`space-y-4 ${extraClassName}`}>
         {showIntro && (
           <div className={`${hintText(darkMode)} space-y-1 text-sm leading-relaxed`}>
-            <p>打开方式：在配料总表完成混料投料量与各原料物相成分后，在本区预览侧吹炉产出结果。</p>
+            <p>在配料总表完成混料投料量与各原料物相成分后，点击计算产出结果，计算成功后会直接回填到配料总表的产出页签。</p>
             <p>
-              计算说明：依据入炉混料、熔剂、燃料煤与工艺空气的质量守恒，求解熔炼渣、白铜锍、烟气、烟尘、无组织排放与损失的质量、物相组成及元素组成；预览优先展示产物物相 w%，下方再展示元素透视。
+              计算说明：先列举六产物元素闭合、元素质量守恒、元素约束与自定义约束方程，再求解熔炼渣、白铜锍、烟气、烟尘、无组织排放与损失的质量、物相组成及元素组成。
             </p>
           </div>
         )}
-        {tableVisible && (
-          <CopperProductionResultTable
-            darkMode={darkMode}
-            result={hasResult ? oxySolverResult : null}
-            empty={!hasResult}
-          />
+        {renderProductConstraintEditor()}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            className={btnPrimary(darkMode)}
+            onClick={calculateProductsFromProductTable}
+            disabled={furnaceFeed.totalWeight <= 0 || isProductCalculating}
+          >
+            {isProductCalculating ? '计算中...' : '计算产出结果'}
+          </button>
+        </div>
+        {hasResult && (
+          <div className={assistAlertPanelClassName(darkMode, oxySolverResult?.valid ? 'success' : 'warning')}>
+            {productFilledBack
+              ? `已回填：产出结果已写入配料总表产出-产物物相表与产出-产物元素表${
+                  recommendedFuelWeight > 0 ? `；推荐燃料煤 ${format(recommendedFuelWeight)} t/h` : ''
+                }。`
+              : `已计算但未回填：产物总量 ${format(tableProductResult.totalProductMass)} t/h（${formatCopperProductMassSummary(
+                  tableProductResult,
+                  activeProcessStageId
+                )}）。${
+                  recommendedFuelWeight > 0 ? ` 推荐燃料煤 ${format(recommendedFuelWeight)} t/h。` : ''
+                }${oxySolverResult && !oxySolverResult.valid ? ` ${oxySolverResult.message ?? '产出约束未完全满足，当前不可回填。'}` : ''}`}
+          </div>
         )}
-        {engaged && (
-          <>
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                className={btnSecondary(darkMode)}
-                onClick={() => void exportProductCalculation()}
-                disabled={!hasResult}
-                title="导出产出计算预览表"
-              >
-                导出 Excel
-              </button>
-              <button
-                type="button"
-                className={btnPrimary(darkMode)}
-                onClick={calculateProductsFromProductTable}
-                disabled={furnaceFeed.totalWeight <= 0 || isProductCalculating}
-              >
-                {isProductCalculating ? '计算中...' : '计算产出结果'}
-              </button>
-              <button
-                type="button"
-                className={btnSecondary(darkMode)}
-                onClick={applyProductResultsToBatchTable}
-                disabled={!oxySolverResult?.valid || isProductCalculating}
-              >
-                回填产出到配料总表
-              </button>
-            </div>
-            {hasResult && (
-              <div
-                className={assistAlertPanelClassName(
-                  darkMode,
-                  oxySolverResult?.valid ? 'success' : 'warning'
-                )}
-              >
-                {!productFilledBack
-                  ? `已计算，待回填：产物总量 ${format(tableProductResult.totalProductMass)} t/h（${formatCopperProductMassSummary(tableProductResult, activeProcessStageId)}）。${
-                      recommendedFuelWeight > 0
-                        ? ` 推荐燃料煤 ${format(recommendedFuelWeight)} t/h。`
-                        : ''
-                    }${
-                      oxySolverResult && !oxySolverResult.valid
-                        ? ` ${oxySolverResult.message ?? '产出约束未完全满足，当前不可回填。'}`
-                        : ''
-                    }`
-                  : `已回填：产出结果已写入配料总表产出-产物物相表与产出-产物元素表${
-                      recommendedFuelWeight > 0
-                        ? `；推荐燃料煤 ${format(recommendedFuelWeight)} t/h`
-                        : ''
-                    }。`}
+        {oxySolverResult && (
+          <details className={`rounded-lg border text-sm ${darkMode ? 'border-gray-600 bg-gray-900/40' : 'border-gray-200 bg-white'}`} open={!oxySolverResult.valid}>
+            <summary className={`cursor-pointer px-3 py-2 font-semibold ${darkMode ? 'text-gray-100' : 'text-gray-800'}`}>
+              求解方程：1. 列举方程（{oxySolverResult.equationCount} 条） 2. 求解
+            </summary>
+            <div className={`border-t px-3 py-2 ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+              <div className={`${hintText(darkMode)} mb-2`}>
+                硬方程 {oxySolverResult.equationCount} 条；目标函数方程 {oxySolverResult.objectiveEquationCount} 条。
               </div>
-            )}
-          </>
+              <ol className={`max-h-72 list-decimal space-y-1 overflow-auto pl-5 font-mono text-xs leading-relaxed ${darkMode ? 'text-gray-200' : 'text-gray-700'}`}>
+                {oxySolverResult.equations.map((equation) => (
+                  <li key={equation.id}>{equation.expr.replace(/^\d+\.\s*/, '')}</li>
+                ))}
+              </ol>
+            </div>
+          </details>
         )}
       </div>
     )
   }
+
+  const renderProductResultPlaceholder = () => (
+    <div
+      className={`rounded-lg border px-3 py-8 text-center text-sm ${
+        darkMode ? 'border-gray-600 text-gray-400' : 'border-gray-200 text-gray-500'
+      }`}
+    >
+      请在“产出计算”专区设置约束并点击“计算产出结果”，成功后会自动回填到这里。
+    </div>
+  )
 
   if (activeSheet === 'raw_material') {
     return (
@@ -5063,7 +5997,7 @@ export default function CopperWorkflow({
           darkMode={darkMode}
           title="产出计算中"
           description="正在计算产物组成，请稍候…"
-          steps={['整理输入', '求解约束', '生成产物表']}
+          steps={['列举方程', '求解', '生成产物表']}
           currentStep={productCalculationStep}
         />
       )}
@@ -5534,13 +6468,17 @@ export default function CopperWorkflow({
                 : ''
             }`}
           >
-            <CopperProductionResultTable
-              darkMode={darkMode}
-              result={productFilledBack ? oxySolverResult : null}
-              empty={!productFilledBack}
-              mode="phase"
-              phaseTitle="产出-产物物相表（w%）"
-            />
+            {productFilledBack ? (
+              <CopperProductionResultTable
+                darkMode={darkMode}
+                result={oxySolverResult}
+                mode="phase"
+                phaseTitle="产出-产物物相表（固体/熔体 w%，烟气 v%）"
+                config={productConstraintConfig}
+              />
+            ) : (
+              renderProductResultPlaceholder()
+            )}
           </div>
         ) : batchTableView === 'productElement' ? (
           <div
@@ -5553,13 +6491,17 @@ export default function CopperWorkflow({
                 : ''
             }`}
           >
-            <CopperProductionResultTable
-              darkMode={darkMode}
-              result={productFilledBack ? oxySolverResult : null}
-              empty={!productFilledBack}
-              mode="element"
-              elementTitle="产出-产物元素表（w%）"
-            />
+            {productFilledBack ? (
+              <CopperProductionResultTable
+                darkMode={darkMode}
+                result={oxySolverResult}
+                mode="element"
+                elementTitle="产出-产物元素表（w%）"
+                config={productConstraintConfig}
+              />
+            ) : (
+              renderProductResultPlaceholder()
+            )}
           </div>
         ) : batchTableView === 'balance' ? (
           <div key="balance-batch-view" className="space-y-3 batch-table-view-enter">
@@ -6242,18 +7184,8 @@ export default function CopperWorkflow({
       <div ref={productCalculationRef} className={cardCompact(darkMode)}>
         <div className="flex w-full flex-wrap items-center justify-between gap-3">
           <h3 className={`${sectionTitle(darkMode)} mb-0`}>产出计算</h3>
-          <button
-            type="button"
-            className={btnSecondary(darkMode)}
-            onClick={() => setShowProductCalculationAssist((value) => !value)}
-          >
-            {showProductCalculationAssist ? '折叠' : '展开'}
-          </button>
         </div>
-        {renderProductCalculationPanel('product-standalone-calculation', 'mt-4', {
-          engaged: productCalculationEngaged,
-          tableVisible: showProductCalculationAssist,
-        })}
+        {renderProductCalculationPanel('product-standalone-calculation', 'mt-4')}
       </div>
 
       <div ref={heatBalanceRef} className={cardCompact(darkMode)}>

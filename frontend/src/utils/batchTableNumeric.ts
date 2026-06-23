@@ -105,6 +105,14 @@ export function batchTableNumericTitle(
   return parts.length > 0 ? parts.join('\n') : undefined
 }
 
+export function batchTableCopyText(value: string | number | null | undefined): string {
+  if (value == null) return ''
+  if (typeof value === 'string' && isBatchTableEmptyValue(value)) return ''
+  const parsed = parseBatchTableNumeric(value)
+  if (parsed != null) return formatBatchTableTooltip(parsed)
+  return typeof value === 'string' ? value.trim() : ''
+}
+
 type ClipboardLike = { preventDefault(): void; clipboardData: DataTransfer }
 
 /** 复制时写入 tooltip 全精度；若与显示相同则走默认行为 */

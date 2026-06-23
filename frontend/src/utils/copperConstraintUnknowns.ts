@@ -2,6 +2,7 @@ import { COPPER_BUILTIN_PHASE_FRACTIONS } from './copperPhaseStoichiometry.ts'
 import { phaseFractionsFromFormula } from './chemicalFormula.ts'
 import { atomicMass } from './atomicMass.ts'
 import {
+  constraintFeedMetalMass,
   expandAssayDisplayMassForBalance,
   resolveConstraintElementBinding,
   singleCountOxideDisplayMass,
@@ -13,6 +14,7 @@ import {
   type OxySideBlowProductKey,
 } from './copperConstraintConfig.ts'
 import type { ConstraintSymbolTable } from './copperConstraintExpression.ts'
+import { isBlankConstraintRuleValue, resolveConstraintRuleValue } from './copperConstraintValidation.ts'
 import {
   calculateWeightedComposition,
   calculateKnownTotal,
@@ -260,9 +262,14 @@ function phaseFormulaFractions(phaseKey: string): Partial<Record<CopperElementKe
   return phaseFractionsFromFormula(phaseKey) as Partial<Record<CopperElementKey, number>>
 }
 
-function resolveConfigNumber(value: number | string, variables: Record<string, number> | undefined): number {
-  if (typeof value === 'number') return value
-  return variables?.[value] ?? 0
+function resolveConfigNumber(
+  value: number | string,
+  variables: Record<string, number> | undefined,
+  label = '约束值'
+): number {
+  const resolved = resolveConstraintRuleValue(value, variables, label)
+  if (!resolved.valid) throw new Error(resolved.error ?? `${label}无效`)
+  return resolved.value
 }
 
 function phaseConstraintElementFraction(phaseKey: string, constraintElement: string): number {
@@ -283,18 +290,37 @@ function singleCarrierPhase(
   return carriers.length === 1 ? carriers[0]! : null
 }
 
-function directlySolvedWPercentPhaseIds(config: OxySideBlowConstraintConfig): Set<string> {
-  const ids = new Set<string>()
+function directlySolvedWPercentPhaseTargets(
+  config: OxySideBlowConstraintConfig
+): Partial<Record<OxySideBlowProductKey, Array<{ phaseKey: string; share: number }>>> {
+  const targets: Partial<Record<OxySideBlowProductKey, Array<{ phaseKey: string; share: number }>>> = {}
   for (const entry of config.elementDistributions) {
     for (const rule of entry.rules) {
       if (rule.type !== 'W%') continue
+      if (isBlankConstraintRuleValue(rule.value)) continue
       const carrier = singleCarrierPhase(config, rule.product, entry.element)
       if (!carrier) continue
-      const percent = resolveConfigNumber(rule.value, config.variables)
+      const percent = resolveConfigNumber(
+        rule.value,
+        config.variables,
+        `${entry.element} ${OXY_PRODUCT_KEY_TO_CN[rule.product]} ${rule.type}`
+      )
       const share = (percent / 100) / carrier.fraction
       if (!Number.isFinite(share) || share < 0 || share >= 1) continue
-      ids.add(`${rule.product}:${carrier.phaseKey}`)
+      ;(targets[rule.product] ??= []).push({ phaseKey: carrier.phaseKey, share })
     }
+  }
+  return targets
+}
+
+function directlySolvedWPercentPhaseIds(config: OxySideBlowConstraintConfig): Set<string> {
+  const ids = new Set<string>()
+  const targets = directlySolvedWPercentPhaseTargets(config)
+  for (const [productKey, entries] of Object.entries(targets) as [
+    OxySideBlowProductKey,
+    Array<{ phaseKey: string; share: number }>,
+  ][]) {
+    for (const target of entries) ids.add(`${productKey}:${target.phaseKey}`)
   }
   return ids
 }
@@ -308,9 +334,14 @@ export function applyDirectlySolvablePhaseConstraints(unpacked: UnpackedUnknowns
 
   for (const entry of config.elementDistributions) {
     for (const rule of entry.rules) {
+      if (isBlankConstraintRuleValue(rule.value)) continue
       const carrier = singleCarrierPhase(config, rule.product, entry.element)
       if (!carrier) continue
-      const percent = resolveConfigNumber(rule.value, config.variables)
+      const percent = resolveConfigNumber(
+        rule.value,
+        config.variables,
+        `${entry.element} ${OXY_PRODUCT_KEY_TO_CN[rule.product]} ${rule.type}`
+      )
       const productPhases = unpacked.outputPhases[rule.product]
       if (!productPhases || !Number.isFinite(percent) || percent < 0) continue
       if (rule.type === 'D%' && percent === 0) {
@@ -421,6 +452,39 @@ function findAirColumn(airColumns: CopperMaterialColumn[], name: string) {
   return airColumns.find((col) => col.name === name)
 }
 
+function phaseFraction(phaseKey: string, element: CopperElementKey): number {
+  return (phaseFormulaFractions(phaseKey)[element] ?? 0) as number
+}
+
+function phaseMassForElement(phases: Record<string, number>, phaseKey: string, element: CopperElementKey): number {
+  return Math.max(0, phases[phaseKey] ?? 0) * phaseFraction(phaseKey, element)
+}
+
+function productElementMassFromPhases(
+  phases: Record<string, number>,
+  element: CopperElementKey,
+  excludedPhases: Set<string> = new Set()
+): number {
+  return Object.entries(phases).reduce((sum, [phaseKey, mass]) => {
+    if (excludedPhases.has(phaseKey)) return sum
+    return sum + Math.max(0, mass) * phaseFraction(phaseKey, element)
+  }, 0)
+}
+
+function inputPhaseMass(baseInput: OxyConstraintBaseInput): Record<string, number> {
+  return (
+    baseInput.inputPhaseMass?.混合铜精矿 ??
+    Object.values(baseInput.inputPhaseMass ?? {})[0] ??
+    {}
+  )
+}
+
+function columnElementFraction(column: CopperMaterialColumn | undefined, element: CopperElementKey): number {
+  if (!column) return 0
+  const unitColumn = { ...column, weight: 1, waterWeight: 0, moisture: 0 }
+  return columnBalanceElementMass(unitColumn)[element] ?? 0
+}
+
 function applyHardInputMassConstraints(
   unpacked: UnpackedUnknowns,
   baseInput: OxyConstraintBaseInput,
@@ -431,8 +495,169 @@ function applyHardInputMassConstraints(
   unpacked.fuelColumn = fuelColumn
 }
 
-function applyHardOutputPhaseConstraints(_unpacked: UnpackedUnknowns, _config: OxySideBlowConstraintConfig) {
-  // 输出侧约束全部进入 81 方程组求解；这里保留空函数以隔离旧调用路径。
+function applyInitialInputMassGuess(
+  unpacked: UnpackedUnknowns,
+  baseInput: OxyConstraintBaseInput,
+  config: OxySideBlowConstraintConfig
+) {
+  unpacked.gasMass['加料口漏风'] = 5.73
+
+  const phases = inputPhaseMass(baseInput)
+  const cuFeS2Sulfur = Math.max(0, phases.CuFeS2 ?? 0) * phaseFraction('CuFeS2', 'S (硫)')
+  const feS2Sulfur = Math.max(0, phases.FeS2 ?? 0) * phaseFraction('FeS2', 'S (硫)')
+  const fuelCarbon = unpacked.fuelMass * ((closeRatiosForBalance(baseInput.fuelColumn.ratios)['C (碳)'] ?? 0) / 100)
+  const oxygenMolesTarget =
+    (cuFeS2Sulfur / atomicMass('S') / 4) +
+    (feS2Sulfur / atomicMass('S') / 2) * 0.7 +
+    (fuelCarbon / atomicMass('C')) * 0.7
+  const secondaryAir = findAirColumn(unpacked.airColumns, '二次风')
+  const secondaryOxygenFraction = columnElementFraction(secondaryAir, 'O(氧)')
+  if (oxygenMolesTarget > 0 && secondaryOxygenFraction > 0) {
+    unpacked.gasMass['二次风'] = (oxygenMolesTarget * 1.02 * atomicMass('O')) / secondaryOxygenFraction
+  }
+
+  const processAir = findAirColumn(unpacked.airColumns, '空气')
+  const oxygen = findAirColumn(unpacked.airColumns, '氧气')
+  const airOxygenFraction = columnElementFraction(processAir, 'O(氧)')
+  const oxygenOxygenFraction = columnElementFraction(oxygen, 'O(氧)')
+  const targetOxygenFraction = 0.85 * atomicMass('O') / 22.4
+  const totalPrimaryOxygenGas = Math.max(0, unpacked.gasMass['空气'] ?? 0) + Math.max(0, unpacked.gasMass['氧气'] ?? 0)
+  if (totalPrimaryOxygenGas > 0 && oxygenOxygenFraction > airOxygenFraction) {
+    const oxygenShare = Math.min(
+      1,
+      Math.max(0, (targetOxygenFraction - airOxygenFraction) / (oxygenOxygenFraction - airOxygenFraction))
+    )
+    unpacked.gasMass['氧气'] = totalPrimaryOxygenGas * oxygenShare
+    unpacked.gasMass['空气'] = totalPrimaryOxygenGas - unpacked.gasMass['氧气']
+  }
+}
+
+function applyInitialSlagPhaseGuess(unpacked: UnpackedUnknowns) {
+  const phases = unpacked.outputPhases.smeltingSlag
+  const total = productPhaseMass(phases)
+  if (total <= 0) return
+
+  const cu2sCu = phaseFraction('Cu2S', 'Cu(铜)')
+  const cu2oCu = phaseFraction('Cu2O', 'Cu(铜)')
+  const cu2sSulfur = phaseFraction('Cu2S', 'S (硫)')
+  const feSFe = phaseFraction('FeS', 'Fe(铁)')
+  const feSSulfur = phaseFraction('FeS', 'S (硫)')
+  const feOFe = phaseFraction('FeO', 'Fe(铁)')
+  const fe3o4Fe = phaseFraction('Fe3O4', 'Fe(铁)')
+  const slagCu2SCu2ORatio = 2
+  const cu2oShare = 0.02 / (slagCu2SCu2ORatio * cu2sCu + cu2oCu)
+  const cu2sShare = slagCu2SCu2ORatio * cu2oShare
+  phases.Cu2O = total * cu2oShare
+  phases.Cu2S = total * cu2sShare
+  phases.FeS = Math.max(0, (0.006 * total - phases.Cu2S * cu2sSulfur) / feSSulfur)
+  phases.Fe3O4 = total * 0.15
+
+  const silicaEquivalent =
+    phaseMassForElement(phases, 'CaSiO3', 'SiO₂(二氧化硅)') +
+    phaseMassForElement(phases, 'MgSiO3', 'SiO₂(二氧化硅)') +
+    phaseMassForElement(phases, '3Al2O3•2SiO2', 'SiO₂(二氧化硅)') +
+    Math.max(0, phases.SiO2 ?? 0)
+  const fixedIron = Math.max(0, phases.FeS ?? 0) * feSFe + Math.max(0, phases.Fe3O4 ?? 0) * fe3o4Fe
+  phases.FeO = Math.max(0, (2 * silicaEquivalent - fixedIron) / feOFe)
+}
+
+function applyInitialMattePhaseGuess(unpacked: UnpackedUnknowns, config: OxySideBlowConstraintConfig) {
+  const phases = unpacked.outputPhases.matte
+  const gmc = Math.max(0, config.variables?.GMC ?? 75)
+  const cu2sCu = phaseFraction('Cu2S', 'Cu(铜)')
+  const cu2sSulfur = phaseFraction('Cu2S', 'S (硫)')
+  const feSSulfur = phaseFraction('FeS', 'S (硫)')
+  const feSFe = phaseFraction('FeS', 'Fe(铁)')
+  const fe3o4Fe = phaseFraction('Fe3O4', 'Fe(铁)')
+  if (cu2sCu <= 0 || feSSulfur <= 0 || fe3o4Fe <= 0) return
+
+  const controlled = new Set(['Cu2S', 'FeS', 'Fe3O4'])
+  const fixedMass = Object.entries(phases).reduce(
+    (sum, [phaseKey, mass]) => sum + (controlled.has(phaseKey) ? 0 : Math.max(0, mass)),
+    0
+  )
+  const fixedSulfur = productElementMassFromPhases(phases, 'S (硫)', controlled)
+  const fixedIron = productElementMassFromPhases(phases, 'Fe(铁)', controlled)
+  const currentTotal = productPhaseMass(phases)
+  if (currentTotal <= 0 && fixedMass <= 0) return
+
+  const cu2sShare = (gmc / 100) / cu2sCu
+  const sulfurShare = Math.max(0, -0.125 * gmc / 100 + 0.292)
+  const ironShare = Math.max(0, -0.825 * gmc / 100 + 0.633)
+  const feSLinear = (sulfurShare - cu2sShare * cu2sSulfur) / feSSulfur
+  const feSOffset = -fixedSulfur / feSSulfur
+  const fe3o4Linear = (ironShare - feSLinear * feSFe) / fe3o4Fe
+  const fe3o4Offset = -(fixedIron + feSOffset * feSFe) / fe3o4Fe
+  const denom = 1 - cu2sShare - feSLinear - fe3o4Linear
+  const solvedTotal =
+    Math.abs(denom) > 1e-12 ? (fixedMass + feSOffset + fe3o4Offset) / denom : currentTotal
+  const total = Number.isFinite(solvedTotal) && solvedTotal > 0 ? solvedTotal : currentTotal
+
+  phases.Cu2S = Math.max(0, total * cu2sShare)
+  phases.FeS = Math.max(0, total * feSLinear + feSOffset)
+  phases.Fe3O4 = Math.max(0, total * fe3o4Linear + fe3o4Offset)
+  const targetTotal = cu2sShare > 0 ? phases.Cu2S / cu2sShare : productPhaseMass(phases)
+  const withoutOther = Object.entries(phases).reduce(
+    (sum, [phaseKey, mass]) => sum + (phaseKey === 'Other' ? 0 : Math.max(0, mass)),
+    0
+  )
+  phases.Other = Math.max(0, targetTotal - withoutOther)
+}
+
+function applyInitialDustPhaseGuess(unpacked: UnpackedUnknowns) {
+  const phases = unpacked.outputPhases.dust
+  const cuFeed = constraintFeedMetalMass('Cu(铜)', unpacked.distributionFeed)
+  const sulfurFeed = constraintFeedMetalMass('S (硫)', unpacked.distributionFeed)
+  const ironFeed = constraintFeedMetalMass('Fe(铁)', unpacked.distributionFeed)
+  const cu2sCu = phaseFraction('Cu2S', 'Cu(铜)')
+  const cu2oCu = phaseFraction('Cu2O', 'Cu(铜)')
+  const cu2sSulfur = phaseFraction('Cu2S', 'S (硫)')
+  const feSSulfur = phaseFraction('FeS', 'S (硫)')
+  const feSFe = phaseFraction('FeS', 'Fe(铁)')
+  const feOFe = phaseFraction('FeO', 'Fe(铁)')
+  const fe3o4Fe = phaseFraction('Fe3O4', 'Fe(铁)')
+
+  const cuTarget = cuFeed * 0.01
+  const cu2o = cuTarget / (4 * cu2sCu + cu2oCu)
+  phases.Cu2O = Math.max(0, cu2o)
+  phases.Cu2S = Math.max(0, cu2o * 4)
+
+  const sulfurTarget = sulfurFeed * 0.002
+  const fixedSulfur = Math.max(0, phases.Cu2S ?? 0) * cu2sSulfur
+  phases.FeS = Math.max(0, (sulfurTarget - fixedSulfur) / feSSulfur)
+
+  const ironTarget = ironFeed * 0.0055
+  phases.Fe3O4 = Math.max(0, (ironTarget * 0.12) / fe3o4Fe)
+  const fixedIron = Math.max(0, phases.FeS ?? 0) * feSFe + Math.max(0, phases.Fe3O4 ?? 0) * fe3o4Fe
+  phases.FeO = Math.max(0, (ironTarget - fixedIron) / feOFe)
+}
+
+function applyInitialFlueGasPhaseGuess(unpacked: UnpackedUnknowns) {
+  const phases = unpacked.outputPhases.flueGas
+  phases.SO3 = 0
+  phases.H2O = Math.max(0, unpacked.waterMass)
+  const gasOxygen = unpacked.airColumns.reduce(
+    (sum, column) => sum + (columnBalanceElementMass(column)['O(氧)'] ?? 0),
+    0
+  )
+  phases.O2 = gasOxygen * 0.05
+  const n2Fraction = phaseFraction('N2', 'N(氮)')
+  const co2Fraction = phaseFraction('CO2', 'C (碳)')
+  const so2Fraction = phaseFraction('SO2', 'S (硫)')
+  if (n2Fraction > 0) phases.N2 = Math.max(phases.N2 ?? 0, (unpacked.balanceFeed.elementWeights['N(氮)'] ?? 0) / n2Fraction)
+  if (co2Fraction > 0) phases.CO2 = Math.max(phases.CO2 ?? 0, (unpacked.balanceFeed.elementWeights['C (碳)'] ?? 0) / co2Fraction)
+  if (so2Fraction > 0) phases.SO2 = Math.max(phases.SO2 ?? 0, (unpacked.balanceFeed.elementWeights['S (硫)'] ?? 0) / so2Fraction)
+}
+
+function applyInitialOutputPhaseGuess(unpacked: UnpackedUnknowns, config: OxySideBlowConstraintConfig) {
+  applyInitialSlagPhaseGuess(unpacked)
+  applyInitialMattePhaseGuess(unpacked, config)
+  applyInitialDustPhaseGuess(unpacked)
+  applyInitialFlueGasPhaseGuess(unpacked)
+}
+
+function applyHardOutputPhaseConstraints(unpacked: UnpackedUnknowns, _config: OxySideBlowConstraintConfig) {
+  unpacked.outputPhases.flueGas.H2O = Math.max(0, unpacked.waterMass)
 }
 
 export function unpackUnknowns(
@@ -660,13 +885,25 @@ export function createInitialUnpacked(baseInput: OxyConstraintBaseInput, config:
   const specs = buildUnknownSpecs(config, baseInput)
   const rawFeed = resolveRawDisplayFeed(baseInput)
   const blendMass = Math.max(rawFeed.totalWeight, baseInput.concentrateMass, 1)
+  const directWTargets = directlySolvedWPercentPhaseTargets(config)
   const outputPhases = Object.fromEntries(
     OXY_SIDE_BLOW_PRODUCT_KEYS.map((pk) => {
-      const phaseCount = Math.max(config.products[pk].phases.length, 1)
       const productMassHint = blendMass / OXY_SIDE_BLOW_PRODUCT_KEYS.length
-      const phases = Object.fromEntries(
-        config.products[pk].phases.map((phaseKey) => [phaseKey, productMassHint / phaseCount])
+      const targets = directWTargets[pk] ?? []
+      const directPhaseKeys = new Set(targets.map((target) => target.phaseKey))
+      const freePhaseKeys = config.products[pk].phases.filter((phaseKey) => !directPhaseKeys.has(phaseKey))
+      const directShare = Math.min(
+        0.98,
+        targets.reduce((sum, target) => sum + Math.max(0, target.share), 0)
       )
+      const freeMass = productMassHint * Math.max(0, 1 - directShare)
+      const freePhaseMass = freePhaseKeys.length > 0 ? freeMass / freePhaseKeys.length : 0
+      const phases = Object.fromEntries(
+        config.products[pk].phases.map((phaseKey) => [phaseKey, freePhaseKeys.includes(phaseKey) ? freePhaseMass : 0])
+      )
+      for (const target of targets) {
+        phases[target.phaseKey] = productMassHint * target.share
+      }
       return [pk, phases]
     })
   ) as Record<OxySideBlowProductKey, Record<string, number>>
@@ -701,6 +938,10 @@ export function createInitialUnpacked(baseInput: OxyConstraintBaseInput, config:
     airColumns: baseInput.airColumns,
   }
   const projected = unpackProjectedUnknowns(packUnknowns(initial, specs), specs, baseInput, config)
-  projected.productMasses = productMassesFromPhaseSums(projected.outputPhases)
-  return projected
+  applyInitialInputMassGuess(projected, baseInput, config)
+  const seeded = unpackUnknowns(packUnknowns(projected, specs), specs, baseInput, config)
+  applyDirectlySolvablePhaseConstraints(seeded, config)
+  applyInitialOutputPhaseGuess(seeded, config)
+  seeded.productMasses = productMassesFromPhaseSums(seeded.outputPhases)
+  return seeded
 }
