@@ -668,8 +668,8 @@
                               },
                               {
                                   "expr":  "Output.烟气含尘.Fe3O4.Fe / Output.烟气含尘.Fe",
-                                  "target":  0.015,
-                                  "note":  "【解读】烟尘 Fe₃O₄ 中 Fe 质量 ÷ 烟尘总 Fe 质量。【业务】烟尘铁中约 12% 以磁性铁形式存在。【执行】强制矫正 Fe₃O₄ 相质量。"
+                                  "target":  0.12,
+                                  "note":  "【解读】烟尘 Fe₃O₄ 中 Fe 质量 ÷ 烟尘总 Fe 质量。【业务】烟尘铁中约 12% 以磁性铁（Fe₃O₄）形式存在，其余为 FeO/FeS。目标值 0.12 与初值估计（applyInitialDustPhaseGuess 中 Fe₃O₄≈12% 铁）一致。【执行】强制矫正 Fe₃O₄ 相质量。"
                               },
                               {
                                   "expr":  "OutputE.白铜锍.S / ((-0.125 * 75 / 100 + 0.292) * Output.白铜锍)",
@@ -688,7 +688,7 @@
                               }
                           ],
     "solverParams":  {
-                         "wPercentIterations":  40,
-                         "newtonMaxIterations":  100,
-                         "tolerance":  0.0001
+                         "newtonMaxIterations":  150,
+                         "tolerance":  0.0001,
+                         "refineTolerance":  0.000001
                      }}
