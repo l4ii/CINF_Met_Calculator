@@ -92,9 +92,11 @@ export interface OxySideBlowConstraintConfig {
   elementDistributions: ElementDistributionEntry[]
   customConstraints: CustomConstraintEntry[]
   solverParams?: {
-    wPercentIterations?: number
     newtonMaxIterations?: number
+    /** 收敛/有效性阈值：maxRelativeResidual 低于该值即视为已收敛（valid 判定沿用此值，避免回归） */
     tolerance?: number
+    /** 精炼阈值：牛顿迭代会继续把残差压到该值以下（若可行），用于进一步降低过定约束的残余偏差 */
+    refineTolerance?: number
   }
 }
 
