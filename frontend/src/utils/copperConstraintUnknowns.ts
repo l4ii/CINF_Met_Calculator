@@ -604,7 +604,27 @@ function applyInitialMattePhaseGuess(unpacked: UnpackedUnknowns, config: OxySide
   phases.Other = Math.max(0, targetTotal - withoutOther)
 }
 
-function applyInitialDustPhaseGuess(unpacked: UnpackedUnknowns) {
+function dustDistributionPercent(
+  config: OxySideBlowConstraintConfig,
+  element: string,
+  fallback: number
+): number {
+  const entry = config.elementDistributions.find((item) => item.element === element)
+  const rule = entry?.rules.find((item) => item.product === 'dust' && item.type === 'D%')
+  if (!rule || isBlankConstraintRuleValue(rule.value)) return fallback
+  return resolveConfigNumber(
+    rule.value,
+    config.variables,
+    `${element} 烟气含尘 D%`
+  )
+}
+
+function applyInitialDustPhaseGuess(unpacked: UnpackedUnknowns, config: OxySideBlowConstraintConfig) {
+  reconcileDustDirectPhases(unpacked, config)
+}
+
+/** 烟气含尘：按 D% 与 Cu₂S/Cu₂O=4、Fe₃O₄.Fe/总Fe=1.5% 代数闭合 */
+export function reconcileDustDirectPhases(unpacked: UnpackedUnknowns, config: OxySideBlowConstraintConfig) {
   const phases = unpacked.outputPhases.dust
   const cuFeed = constraintFeedMetalMass('Cu(铜)', unpacked.distributionFeed)
   const sulfurFeed = constraintFeedMetalMass('S (硫)', unpacked.distributionFeed)
@@ -617,19 +637,32 @@ function applyInitialDustPhaseGuess(unpacked: UnpackedUnknowns) {
   const feOFe = phaseFraction('FeO', 'Fe(铁)')
   const fe3o4Fe = phaseFraction('Fe3O4', 'Fe(铁)')
 
-  const cuTarget = cuFeed * 0.01
-  const cu2o = cuTarget / (4 * cu2sCu + cu2oCu)
+  const cuTarget = cuFeed * (dustDistributionPercent(config, 'Cu(铜)', 1) / 100)
+  const cu2oDenominator = 4 * cu2sCu + cu2oCu
+  const cu2o = cu2oDenominator > 0 ? cuTarget / cu2oDenominator : 0
   phases.Cu2O = Math.max(0, cu2o)
   phases.Cu2S = Math.max(0, cu2o * 4)
 
-  const sulfurTarget = sulfurFeed * 0.002
+  const sulfurTarget = sulfurFeed * (dustDistributionPercent(config, 'S (硫)', 0.2) / 100)
   const fixedSulfur = Math.max(0, phases.Cu2S ?? 0) * cu2sSulfur
-  phases.FeS = Math.max(0, (sulfurTarget - fixedSulfur) / feSSulfur)
+  phases.FeS = feSSulfur > 0 ? Math.max(0, (sulfurTarget - fixedSulfur) / feSSulfur) : 0
 
-  const ironTarget = ironFeed * 0.0055
-  phases.Fe3O4 = Math.max(0, (ironTarget * 0.12) / fe3o4Fe)
+  const ironTarget = ironFeed * (dustDistributionPercent(config, 'Fe(铁)', 0.55) / 100)
+  phases.Fe3O4 = fe3o4Fe > 0 ? Math.max(0, (ironTarget * 0.015) / fe3o4Fe) : 0
   const fixedIron = Math.max(0, phases.FeS ?? 0) * feSFe + Math.max(0, phases.Fe3O4 ?? 0) * fe3o4Fe
-  phases.FeO = Math.max(0, (ironTarget - fixedIron) / feOFe)
+  phases.FeO = feOFe > 0 ? Math.max(0, (ironTarget - fixedIron) / feOFe) : 0
+}
+
+/** 白铜锍：GMC 经验式与 W% Cu 直接可解物相代数闭合 */
+export function reconcileMatteDirectPhases(unpacked: UnpackedUnknowns, config: OxySideBlowConstraintConfig) {
+  applyInitialMattePhaseGuess(unpacked, config)
+}
+
+/** 各产物总质量与物相质量之和对齐，避免 w% 分母偏差 */
+export function reconcileProductMassesFromPhases(unpacked: UnpackedUnknowns) {
+  for (const productKey of OXY_SIDE_BLOW_PRODUCT_KEYS) {
+    unpacked.productMasses[productKey] = productPhaseMass(unpacked.outputPhases[productKey] ?? {})
+  }
 }
 
 function applyInitialFlueGasPhaseGuess(unpacked: UnpackedUnknowns) {
@@ -652,7 +685,7 @@ function applyInitialFlueGasPhaseGuess(unpacked: UnpackedUnknowns) {
 function applyInitialOutputPhaseGuess(unpacked: UnpackedUnknowns, config: OxySideBlowConstraintConfig) {
   applyInitialSlagPhaseGuess(unpacked)
   applyInitialMattePhaseGuess(unpacked, config)
-  applyInitialDustPhaseGuess(unpacked)
+  applyInitialDustPhaseGuess(unpacked, config)
   applyInitialFlueGasPhaseGuess(unpacked)
 }
 
@@ -759,6 +792,9 @@ export function unpackProjectedUnknowns(
   const unpacked = unpackUnknowns(packUnknowns(inputProjected, specs), specs, baseInput, config)
   applyDirectlySolvablePhaseConstraints(unpacked, config)
   applyHardOutputPhaseConstraints(unpacked, config)
+  reconcileMatteDirectPhases(unpacked, config)
+  reconcileDustDirectPhases(unpacked, config)
+  reconcileProductMassesFromPhases(unpacked)
   return unpacked
 }
 
@@ -798,7 +834,7 @@ export function buildProductsFromPhases(
       phases[phaseKey] = Math.max(0, outputPhases[pk]?.[phaseKey] ?? 0)
     }
     const phaseMass = productPhaseMass(phases)
-    const mass = Math.max(0, productMasses?.[pk] ?? phaseMass)
+    const mass = phaseMass > 0 ? phaseMass : Math.max(0, productMasses?.[pk] ?? 0)
     products[pk] = {
       mass,
       phases,

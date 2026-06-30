@@ -106,11 +106,15 @@ function buildOxyProductResults(
       key: pk,
       name: def.name,
       mass: product.mass,
-      phases: def.phases.map((phaseKey) => ({
-        key: phaseKey,
-        mass: product.phases[phaseKey] ?? 0,
-        pct: product.mass > 0 ? ((product.phases[phaseKey] ?? 0) / product.mass) * 100 : 0,
-      })),
+      phases: def.phases.map((phaseKey) => {
+        const phaseMass = product.phases[phaseKey] ?? 0
+        const denominator = product.mass > 0 ? product.mass : 0
+        return {
+          key: phaseKey,
+          mass: phaseMass,
+          pct: denominator > 0 ? (phaseMass / denominator) * 100 : 0,
+        }
+      }),
       elementMass: product.elementMass,
       balanceElementMass: product.balanceElementMass,
       composition: compositionFromElementMass(product.elementMass, product.mass),

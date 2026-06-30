@@ -7,7 +7,7 @@ import { writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { atomicMass } from '../src/utils/atomicMass.ts'
+import { atomicMass, elementMassFraction } from '../src/utils/atomicMass.ts'
 import { allocateConcentratePhases } from '../src/utils/copperConcentratePhaseNorm.ts'
 import { loadOxySideBlowConstraints, OXY_SIDE_BLOW_PRODUCT_KEYS } from '../src/utils/copperConstraintConfig.ts'
 import { solveOxySideBlowProducts } from '../src/utils/copperConstraintSolver.ts'
@@ -319,6 +319,24 @@ for (const pk of OXY_SIDE_BLOW_PRODUCT_KEYS) {
   }
 }
 
+const cu2sCuFraction = elementMassFraction({ Cu: 2, S: 1 }, 'Cu')
+const expectedMatteCu2sPct = (gmc / cu2sCuFraction)
+const matteCu2sPhase = solverResult.products.matte.phases.find((ph) => ph.key === 'Cu2S')
+const matteCuPct = solverResult.products.matte.composition['Cu(铜)'] ?? 0
+const dustCu2sMass = solverResult.products.dust.phases.find((ph) => ph.key === 'Cu2S')?.mass ?? 0
+const dustCu2oMass = solverResult.products.dust.phases.find((ph) => ph.key === 'Cu2O')?.mass ?? 0
+const dustCu2sCu2oRatio = dustCu2oMass > 0 ? dustCu2sMass / dustCu2oMass : 0
+
+function assertNear(actual, expected, tolerance, label) {
+  if (!Number.isFinite(actual) || Math.abs(actual - expected) > tolerance) {
+    throw new Error(`${label}: expected ${expected}, got ${actual}`)
+  }
+}
+
+assertNear(matteCu2sPhase?.pct ?? 0, expectedMatteCu2sPct, 1e-3, '白铜锍 Cu2S w%')
+assertNear(matteCuPct, gmc, 1e-3, '白铜锍 Cu w%')
+assertNear(dustCu2sCu2oRatio, 4, 1e-3, '烟气含尘 Cu2S/Cu2O 质量比')
+
 const output = {
   generatedAt: new Date().toISOString(),
   inputs: {
@@ -430,6 +448,10 @@ const output = {
   },
   chapter8_validation: {
     maxRelativeResidual: round(solverResult.maxRelativeResidual, 6),
+    matteCu2sPctExpected: round(expectedMatteCu2sPct, 6),
+    matteCu2sPctActual: round(matteCu2sPhase?.pct ?? 0, 6),
+    matteCuPctActual: round(matteCuPct, 6),
+    dustCu2sCu2oRatio: round(dustCu2sCu2oRatio, 6),
     constraintResiduals: solverResult.constraintResiduals
       .slice()
       .sort((a, b) => b.relativeResidual - a.relativeResidual)
