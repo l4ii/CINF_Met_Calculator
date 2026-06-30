@@ -17,6 +17,8 @@ import {
 
 export interface StrictSolverOptions {
   tolerance?: number
+  /** 精炼阈值：迭代会继续把残差压到该值以下（若可行）；默认取 min(tolerance, configRefine, 1e-6) */
+  refineTolerance?: number
   maxIterations?: number
   lmLambda?: number
 }
@@ -169,7 +171,13 @@ export function solveOxyConstraintSystemStrict(
   config: OxySideBlowConstraintConfig,
   options: StrictSolverOptions = {}
 ): StrictSolverResult {
+  // tolerance 决定 converged/valid（沿用历史阈值，避免把当前可行案例判为无效）；
+  // refineTolerance 仅用于驱动迭代继续把残差压得更低（在可行范围内），以减小过定约束的残余偏差。
   const tolerance = options.tolerance ?? config.solverParams?.tolerance ?? 1e-4
+  const refineTolerance = Math.min(
+    tolerance,
+    options.refineTolerance ?? config.solverParams?.refineTolerance ?? 1e-6
+  )
   const maxIterations = options.maxIterations ?? config.solverParams?.newtonMaxIterations ?? 120
   const specs = buildUnknownSpecs(config, baseInput)
   const hardEquations = compileOxyConstraintSystem(config)
@@ -177,7 +185,6 @@ export function solveOxyConstraintSystemStrict(
 
   let x = projectVector(packUnknowns(createInitialUnpacked(baseInput, config), specs), specs, baseInput, config)
   let lambda = options.lmLambda ?? 1e-2
-  let converged = false
   let iterations = 0
   let maxRel = Number.POSITIVE_INFINITY
 
@@ -186,8 +193,7 @@ export function solveOxyConstraintSystemStrict(
     const residuals = residualVector(x, objectiveEquations, specs, baseInput, config)
     const objective = residuals.reduce((sum, value) => sum + value * value, 0)
     maxRel = maxRelativeResidualFromSolution(x, hardEquations, specs, baseInput, config)
-    if (maxRel < tolerance) {
-      converged = true
+    if (maxRel < refineTolerance) {
       break
     }
 
@@ -234,7 +240,7 @@ export function solveOxyConstraintSystemStrict(
   }
 
   return {
-    converged,
+    converged: maxRel < tolerance,
     x,
     iterations,
     maxRelativeResidual: maxRel,

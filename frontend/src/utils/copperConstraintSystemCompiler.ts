@@ -155,15 +155,8 @@ export function compileOxyConstraintSystem(
     })
   }
 
-  for (const productKey of OXY_SIDE_BLOW_PRODUCT_KEYS) {
-    equations.push({
-      id: `product_element_closure:${productKey}`,
-      kind: 'product_element_closure',
-      target: 0,
-      label: `产物元素闭合 ${OXY_PRODUCT_KEY_TO_CN[productKey]}：Σ元素 = 产物总量（w%合计=100%）`,
-      productKey,
-    })
-  }
+  // 产物元素闭合方程已移除：产物总质量现恒等于各物相质量之和（productMassesFromPhaseSums），
+  // “Σ元素 = 产物总量”因此自动成立，无需作为独立方程参与最小二乘，亦减少未知量/方程规模。
 
   return equations
 }

@@ -1,6 +1,6 @@
 铜冶炼富氧侧吹 - 四矿案例产出求解方程
-生成时间：2026-06-22T07:42:52.298Z
-方程总数：97
+生成时间：2026-06-30T01:47:54.084Z
+方程总数：91
 
 1. OutputE.熔炼渣.Cu(铜) = 2% × Output.熔炼渣
 2. OutputE.白铜锍.Cu(铜) = 75% × Output.白铜锍
@@ -63,7 +63,7 @@
 59. Output.熔炼渣.Cu2S / Output.熔炼渣.Cu2O = 2
 60. Output.熔炼渣.Fe3O4 / Output.熔炼渣 = 0.15
 61. Output.烟气含尘.Cu2S / Output.烟气含尘.Cu2O = 4
-62. Output.烟气含尘.Fe3O4.Fe / Output.烟气含尘.Fe = 0.015
+62. Output.烟气含尘.Fe3O4.Fe / Output.烟气含尘.Fe = 0.12
 63. OutputE.白铜锍.S / ((-0.125 * 75 / 100 + 0.292) * Output.白铜锍) = 1
 64. OutputE.白铜锍.Fe / ((-0.825 * 75 / 100 + 0.633) * Output.白铜锍) = 1
 65. Output.熔炼出炉烟气.As2O3.As / (Output.熔炼出炉烟气.As2O3.As + Output.烟气含尘.As2O3.As) = 0.6
@@ -93,9 +93,3 @@
 89. Σ(OutputE.六产物.N(氮)) = Input.总投入.N(氮)
 90. Σ(OutputE.六产物.C (碳)) = Input.总投入.C (碳)
 91. Σ(OutputE.六产物.Other(其他)) = Input.总投入.Other(其他)
-92. Σ(OutputE.熔炼渣.所有元素) = Output.熔炼渣（元素w%合计=100%）
-93. Σ(OutputE.白铜锍.所有元素) = Output.白铜锍（元素w%合计=100%）
-94. Σ(OutputE.熔炼出炉烟气.所有元素) = Output.熔炼出炉烟气（元素w%合计=100%）
-95. Σ(OutputE.烟气含尘.所有元素) = Output.烟气含尘（元素w%合计=100%）
-96. Σ(OutputE.无组织排放.所有元素) = Output.无组织排放（元素w%合计=100%）
-97. Σ(OutputE.损失.所有元素) = Output.损失（元素w%合计=100%）

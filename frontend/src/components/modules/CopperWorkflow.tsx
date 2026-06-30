@@ -670,9 +670,40 @@ function readCopperCaseRecords(): CopperCaseRecord[] {
   }
 }
 
+let pendingCopperCaseWrite: CopperCaseRecord[] | null = null
+let copperCaseWriteScheduled = false
+
+function flushCopperCaseRecords() {
+  copperCaseWriteScheduled = false
+  const records = pendingCopperCaseWrite
+  pendingCopperCaseWrite = null
+  if (!records || typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(COPPER_CASES_STORAGE_KEY, JSON.stringify(records))
+  } catch (error) {
+    console.error('保存铜冶炼案例到本地存储失败', error)
+  }
+}
+
+if (typeof window !== 'undefined') {
+  // 关闭/刷新前确保挂起的案例写入落盘，避免异步写延迟导致数据丢失。
+  window.addEventListener('beforeunload', flushCopperCaseRecords)
+  window.addEventListener('pagehide', flushCopperCaseRecords)
+}
+
 function writeCopperCaseRecords(records: CopperCaseRecord[]) {
   if (typeof window === 'undefined') return
-  window.localStorage.setItem(COPPER_CASES_STORAGE_KEY, JSON.stringify(records))
+  // 异步写盘：内存状态（setAllCaseRecords）已同步反映到界面，将体积可能较大的
+  // JSON.stringify + localStorage.setItem 推迟到空闲时执行并合并多次写入，
+  // 避免删除/保存案例时同步序列化全量案例阻塞主线程造成卡顿。
+  pendingCopperCaseWrite = records
+  if (copperCaseWriteScheduled) return
+  copperCaseWriteScheduled = true
+  const schedule =
+    typeof window.requestIdleCallback === 'function'
+      ? (cb: () => void) => window.requestIdleCallback(cb, { timeout: 500 })
+      : (cb: () => void) => window.setTimeout(cb, 0)
+  schedule(flushCopperCaseRecords)
 }
 
 function sortCopperCaseRecords(records: CopperCaseRecord[]) {
@@ -2037,6 +2068,8 @@ export default function CopperWorkflow({
   const productCalculationRef = useRef<HTMLDivElement>(null)
   const heatBalanceRef = useRef<HTMLDivElement>(null)
   const caseImportInputRef = useRef<HTMLInputElement>(null)
+  // 跟踪“当前正在打开的案例”，用于异步重算产出时避免把过期结果写回到已被切换的案例上。
+  const openCaseTokenRef = useRef<string | null>(null)
   const stagePageTopRef = useRef<HTMLDivElement>(null)
   const previousActiveSheetRef = useRef<SheetId>(activeSheet)
   const [stageEnterHighlight, setStageEnterHighlight] = useState(false)
@@ -5330,6 +5363,9 @@ export default function CopperWorkflow({
   }
 
   const deleteCopperCase = (record: CopperCaseRecord) => {
+    if (openCaseTokenRef.current === record.id) {
+      openCaseTokenRef.current = null
+    }
     persistCopperCases(caseRecords.filter((item) => item.id !== record.id))
     if (activeCaseId === record.id) {
       setActiveCaseId(null)
@@ -5351,26 +5387,19 @@ export default function CopperWorkflow({
         ensureMaterialPhaseRows(rows),
       ])
     )
+    // 打开案例时优先信任已保存的产出求解结果（绝大多数案例都已缓存）。
+    // 仅当案例标记为已计算但缺少有效缓存（旧版本/结构迁移）时才需要重算——
+    // 该重算改为异步执行（见下方 needsRecompute 分支），避免在点击事件里同步跑
+    // 牛顿迭代求解器导致界面卡死约 30 秒。
     const savedProductSolverResult = record.productCalculated
       ? normalizeOxySolverResult(record.productSolverResult)
       : null
-    const restoredProductSolverResult =
-      savedProductSolverResult ??
-      (record.productCalculated
-        ? computeProductSolverResultFromCaseState({
-            rawMaterials: nextRawMaterials,
-            solventColumns: nextSolventColumns,
-            fuelColumn: nextFuelColumn,
-            airColumns: nextAirColumns,
-            phaseBatchResults: nextPhaseBatchResults,
-            materialPhaseRows: nextMaterialPhaseRows,
-            productConstraintConfig: nextProductConstraintConfig,
-          })
-        : null)
-    const restoredProductCalculated = Boolean(record.productCalculated && restoredProductSolverResult)
+    const needsProductRecompute = Boolean(record.productCalculated && !savedProductSolverResult)
+    const restoredProductCalculated = Boolean(savedProductSolverResult)
     const restoredProductFilledBack = Boolean(
-      (record.productFilledBack ?? record.productCalculated ?? false) && restoredProductSolverResult?.valid
+      (record.productFilledBack ?? record.productCalculated ?? false) && savedProductSolverResult?.valid
     )
+    openCaseTokenRef.current = record.id
     setRawMaterials(nextRawMaterials)
     setRawWeightDrafts(record.rawWeightDrafts ?? Object.fromEntries(nextRawMaterials.map((material) => [material.id, material.weight > 0 ? String(material.weight) : ''])))
     setWaterWeightDrafts({})
@@ -5388,7 +5417,7 @@ export default function CopperWorkflow({
     setPhaseCompleted(record.phaseCompleted ?? false)
     setProductCalculated(restoredProductCalculated)
     setProductFilledBack(restoredProductFilledBack)
-    setOxySolverResult(restoredProductSolverResult)
+    setOxySolverResult(savedProductSolverResult)
     setHeatBalanced(record.heatBalanced ?? false)
     setFuelLhv(record.fuelLhv ?? String(DEFAULT_COPPER_FUEL.lowerHeatingValueMJkg))
     setFuelEfficiency(record.fuelEfficiency ?? String(DEFAULT_COPPER_FUEL.combustionEfficiency))
@@ -5455,6 +5484,33 @@ export default function CopperWorkflow({
     setCaseMessage(`已打开案例：${record.name}`)
     onActiveCaseNameChange?.(record.name)
     onStageSelect(normalizeCopperCaseStageId(record.stageId))
+
+    if (needsProductRecompute) {
+      // 异步重算：先让界面切换并渲染“产出计算中”遮罩，再在下一帧执行求解，
+      // 避免阻塞主线程造成长时间卡顿。
+      setIsProductCalculating(true)
+      setProductCalculationStep(1)
+      window.requestAnimationFrame(() => {
+        window.setTimeout(() => {
+          const recomputed = computeProductSolverResultFromCaseState({
+            rawMaterials: nextRawMaterials,
+            solventColumns: nextSolventColumns,
+            fuelColumn: nextFuelColumn,
+            airColumns: nextAirColumns,
+            phaseBatchResults: nextPhaseBatchResults,
+            materialPhaseRows: nextMaterialPhaseRows,
+            productConstraintConfig: nextProductConstraintConfig,
+          })
+          // 若用户在求解期间已切换/关闭到其他案例，则丢弃过期结果。
+          if (openCaseTokenRef.current !== record.id) return
+          setOxySolverResult(recomputed)
+          setProductCalculated(Boolean(recomputed))
+          setProductFilledBack(Boolean(recomputed?.valid))
+          setProductCalculationStep(0)
+          setIsProductCalculating(false)
+        }, 0)
+      })
+    }
   }
 
   const renameActiveCase = (nextName: string) => {
