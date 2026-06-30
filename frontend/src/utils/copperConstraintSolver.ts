@@ -218,4 +218,49 @@ export function verifyProductElementTotals(product: OxyProductResult, tolerance 
   return Math.abs(total - 100) <= tolerance || product.mass <= 0
 }
 
+/** 案例持久化用：去掉方程/残差等大字段，减小 localStorage 读写与打开时反序列化开销 */
+export function slimOxySolverResultForStorage(result: OxyConstraintSolverResult): OxyConstraintSolverResult {
+  return {
+    valid: result.valid,
+    converged: result.converged,
+    stage: result.stage,
+    message: result.message,
+    products: result.products,
+    totalProductMass: result.totalProductMass,
+    iterations: result.iterations,
+    maxRelativeResidual: result.maxRelativeResidual,
+    recommended: result.recommended,
+    constraintResiduals: [],
+    equations: [],
+    equationCount: result.equationCount,
+    objectiveEquationCount: result.objectiveEquationCount,
+  }
+}
+
+/** 从案例记录恢复产出结果：校验结构，不做 JSON 深拷贝 */
+export function restoreOxySolverResultFromCase(value: unknown): OxyConstraintSolverResult | null {
+  const result = value as OxyConstraintSolverResult | null | undefined
+  if (!result || typeof result !== 'object') return null
+  if (typeof result.valid !== 'boolean' || !result.products || typeof result.products !== 'object') return null
+  if (typeof result.totalProductMass !== 'number') return null
+  if (!result.recommended || typeof result.recommended !== 'object') return null
+  const hasProducts = OXY_SIDE_BLOW_PRODUCT_KEYS.every((key) => {
+    const product = result.products[key]
+    return (
+      product &&
+      typeof product.name === 'string' &&
+      typeof product.mass === 'number' &&
+      Array.isArray(product.phases) &&
+      product.elementMass &&
+      product.composition
+    )
+  })
+  if (!hasProducts) return null
+  return {
+    ...result,
+    constraintResiduals: result.constraintResiduals ?? [],
+    equations: result.equations ?? [],
+  }
+}
+
 export { parseConstraintExpression, evaluateConstraintExprString }

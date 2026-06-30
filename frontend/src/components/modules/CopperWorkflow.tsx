@@ -189,6 +189,8 @@ import {
 } from '../../utils/copperProcessCalc'
 import {
   parseConstraintExpression,
+  restoreOxySolverResultFromCase,
+  slimOxySolverResultForStorage,
   solveOxySideBlowProducts,
   type OxyConstraintSolverResult,
 } from '../../utils/copperConstraintSolver.ts'
@@ -1289,29 +1291,225 @@ function cloneSolventSolution(solution: CopperSolventSolution | null): CopperSol
   }
 }
 
-function cloneOxySolverResult(result: OxyConstraintSolverResult): OxyConstraintSolverResult {
-  return JSON.parse(JSON.stringify(result)) as OxyConstraintSolverResult
+function restoreCaseProductSolverResult(value: unknown): OxyConstraintSolverResult | null {
+  return restoreOxySolverResultFromCase(value)
 }
 
-function normalizeOxySolverResult(value: unknown): OxyConstraintSolverResult | null {
-  const result = value as OxyConstraintSolverResult | null | undefined
-  if (!result || typeof result !== 'object') return null
-  if (typeof result.valid !== 'boolean' || !result.products || typeof result.products !== 'object') return null
-  if (typeof result.totalProductMass !== 'number') return null
-  if (!result.recommended || typeof result.recommended !== 'object') return null
-  if (!Array.isArray(result.constraintResiduals)) return null
-  const hasProducts = OXY_SIDE_BLOW_PRODUCT_KEYS.every((key) => {
-    const product = result.products[key]
-    return (
-      product &&
-      typeof product.name === 'string' &&
-      typeof product.mass === 'number' &&
-      Array.isArray(product.phases) &&
-      product.elementMass &&
-      product.composition
-    )
-  })
-  return hasProducts ? cloneOxySolverResult(result) : null
+type PreparedCaseOpen = {
+  record: CopperCaseRecord
+  nextRawMaterials: CopperMaterialColumn[]
+  nextSolventColumns: CopperMaterialColumn[]
+  nextAirColumns: CopperMaterialColumn[]
+  nextFuelColumn: CopperFuelMaterial
+  nextPhaseBatchResults: PhaseBatchResults | null
+  nextProductConstraintConfig: OxySideBlowConstraintConfig
+  nextMaterialPhaseRows: Record<string, MaterialPhaseAssistRow[]>
+  restoredProductSolverResult: OxyConstraintSolverResult | null
+  restoredProductCalculated: boolean
+  restoredProductFilledBack: boolean
+  validPhaseMaterialId: string | null
+  nextPhasePreviewUnknowns: PhasePreviewUnknowns | null
+  nextOxygenAirText: { oxygen: string; nitrogen: string }
+  nextStageId: CopperCaseStageId
+}
+
+function prepareCaseOpenFromRecord(record: CopperCaseRecord): PreparedCaseOpen {
+  const nextRawMaterials = (record.rawMaterials?.length ? record.rawMaterials : createDefaultCopperMaterials()).map(
+    cloneMaterialColumn
+  )
+  const nextSolventColumns = (record.solventColumns?.length ? record.solventColumns : createDefaultSolventColumns()).map(
+    cloneMaterialColumn
+  )
+  const nextAirColumns = normalizeProcessAirColumns(record.airColumns, record.oxygenAirColumn)
+  const nextFuelColumn = record.fuelColumn ? cloneFuelMaterial(record.fuelColumn) : cloneFuelMaterial(DEFAULT_COPPER_FUEL)
+  const nextPhaseBatchResults = record.phaseBatchResults ?? null
+  const nextProductConstraintConfig = normalizeOxyConstraintConfig(record.productConstraintConfig)
+  const nextMaterialPhaseRows = Object.fromEntries(
+    Object.entries(record.materialPhaseRows ?? {}).map(([materialId, rows]) => [
+      materialId,
+      ensureMaterialPhaseRows(rows),
+    ])
+  )
+  const restoredProductSolverResult = record.productCalculated
+    ? restoreCaseProductSolverResult(record.productSolverResult)
+    : null
+  const restoredProductCalculated = Boolean(record.productCalculated && restoredProductSolverResult)
+  const restoredProductFilledBack = Boolean(
+    (record.productFilledBack ?? record.productCalculated ?? false) && restoredProductSolverResult?.valid
+  )
+  const restoredPhaseMaterialId = record.phaseMaterialId ?? null
+  const validPhaseMaterialId =
+    restoredPhaseMaterialId &&
+    nextRawMaterials.some((material) => material.id === restoredPhaseMaterialId && material.name.trim())
+      ? restoredPhaseMaterialId
+      : nextRawMaterials.find((material) => material.name.trim() && nextPhaseBatchResults?.[material.id])?.id ?? null
+  const savedPreview = record.phasePreviewUnknowns ?? null
+  const nextPhasePreviewUnknowns =
+    validPhaseMaterialId && nextPhaseBatchResults?.[validPhaseMaterialId]
+      ? savedPreview && savedPreview.materialId === validPhaseMaterialId
+        ? savedPreview
+        : buildPhasePreviewUnknowns(validPhaseMaterialId, nextPhaseBatchResults[validPhaseMaterialId]!)
+      : savedPreview
+  return {
+    record,
+    nextRawMaterials,
+    nextSolventColumns,
+    nextAirColumns,
+    nextFuelColumn,
+    nextPhaseBatchResults,
+    nextProductConstraintConfig,
+    nextMaterialPhaseRows,
+    restoredProductSolverResult,
+    restoredProductCalculated,
+    restoredProductFilledBack,
+    validPhaseMaterialId,
+    nextPhasePreviewUnknowns,
+    nextOxygenAirText: normalizeOxygenAirText(record.oxygenAirO2Pct, record.oxygenAirN2Pct),
+    nextStageId: normalizeCopperCaseStageId(record.stageId),
+  }
+}
+
+function applyPreparedCaseBatchingState(
+  prepared: PreparedCaseOpen,
+  setters: {
+    setRawMaterials: (value: CopperMaterialColumn[]) => void
+    setRawWeightDrafts: (value: Record<string, string>) => void
+    setWaterWeightDrafts: (value: Record<string, string>) => void
+    setSolventColumns: (value: CopperMaterialColumn[]) => void
+    setFuelColumn: (value: CopperFuelMaterial) => void
+    setAirColumns: (value: CopperMaterialColumn[]) => void
+    setTargetFeSiO2: (value: string) => void
+    setTargetCaOSiO2: (value: string) => void
+    setSolventSolution: (value: CopperSolventSolution | null) => void
+    setManualPhaseCells: (value: Record<string, boolean>) => void
+    setManualSolventWeights: (value: Record<string, boolean>) => void
+    setManualFuelWeightValid: (value: boolean) => void
+    setFuelLhv: (value: string) => void
+    setFuelEfficiency: (value: string) => void
+    setOxygenAirO2Pct: (value: string) => void
+    setOxygenAirN2Pct: (value: string) => void
+    setOxygenSupplyCoefficient: (value: string) => void
+    setFeedTemperature: (value: string) => void
+    setMatteTemperature: (value: string) => void
+    setSlagTemperature: (value: string) => void
+    setGasTemperature: (value: string) => void
+    setDustTemperature: (value: string) => void
+    setHeatLossMJh: (value: string) => void
+    setOtherHeatMJh: (value: string) => void
+    setAnnualHours: (value: string) => void
+    setEquipmentIntensity: (value: string) => void
+    setTargetScaleWanTpa: (value: string) => void
+    setEquipmentAdjustments: (value: Record<EquipmentStageId, string>) => void
+    setBatchTableView: (value: BatchTableView) => void
+    setPhaseRatioOverrides: (value: Record<string, Record<string, string>>) => void
+    setManualPhaseRatioColumns: (value: Record<string, boolean>) => void
+    setProductDistributionDrafts: (value: ProductDistributionDrafts) => void
+    setProductConstraintConfig: (value: OxySideBlowConstraintConfig) => void
+    setProductConstraintValueDrafts: (value: ProductConstraintValueDrafts) => void
+    setCustomConstraintTargetDrafts: (value: Record<number, string>) => void
+    setCustomConstraintExprDrafts: (value: Record<number, string>) => void
+    setNewCustomConstraintDraft: (value: CustomConstraintDraft) => void
+    setCustomPhaseRows: (value: Record<string, CustomPhaseRow[]>) => void
+    setMaterialPhaseRows: (value: Record<string, MaterialPhaseAssistRow[]>) => void
+    setInputPhaseDrafts: (value: Record<string, Record<string, string>>) => void
+    setOutputPhaseDrafts: (value: Record<string, Record<string, string>>) => void
+    setInvalidInputPhaseColumns: (value: Record<string, boolean>) => void
+    setInvalidOutputPhaseColumns: (value: Record<string, boolean>) => void
+    setWorkflowMessage: (value: null) => void
+    setActiveCaseId: (value: string) => void
+  }
+) {
+  const { record } = prepared
+  setters.setRawMaterials(prepared.nextRawMaterials)
+  setters.setRawWeightDrafts(
+    record.rawWeightDrafts ??
+      Object.fromEntries(
+        prepared.nextRawMaterials.map((material) => [material.id, material.weight > 0 ? String(material.weight) : ''])
+      )
+  )
+  setters.setWaterWeightDrafts({})
+  setters.setSolventColumns(prepared.nextSolventColumns)
+  setters.setFuelColumn(prepared.nextFuelColumn)
+  setters.setAirColumns(prepared.nextAirColumns)
+  setters.setTargetFeSiO2(record.targetFeSiO2 ?? '2.8')
+  setters.setTargetCaOSiO2(record.targetCaOSiO2 ?? '0.45')
+  setters.setSolventSolution(cloneSolventSolution(record.solventSolution ?? null))
+  setters.setManualPhaseCells(record.manualPhaseCells ?? {})
+  setters.setManualSolventWeights(record.manualSolventWeights ?? {})
+  setters.setManualFuelWeightValid(record.manualFuelWeightValid ?? false)
+  setters.setFuelLhv(record.fuelLhv ?? String(DEFAULT_COPPER_FUEL.lowerHeatingValueMJkg))
+  setters.setFuelEfficiency(record.fuelEfficiency ?? String(DEFAULT_COPPER_FUEL.combustionEfficiency))
+  setters.setOxygenAirO2Pct(prepared.nextOxygenAirText.oxygen)
+  setters.setOxygenAirN2Pct(prepared.nextOxygenAirText.nitrogen)
+  setters.setOxygenSupplyCoefficient(record.oxygenSupplyCoefficient ?? '1.15')
+  setters.setFeedTemperature(record.feedTemperature ?? '25')
+  setters.setMatteTemperature(record.matteTemperature ?? '1180')
+  setters.setSlagTemperature(record.slagTemperature ?? '1250')
+  setters.setGasTemperature(record.gasTemperature ?? '1150')
+  setters.setDustTemperature(record.dustTemperature ?? '450')
+  setters.setHeatLossMJh(record.heatLossMJh ?? '1500')
+  setters.setOtherHeatMJh(record.otherHeatMJh ?? '0')
+  setters.setAnnualHours(record.annualHours ?? '7200')
+  setters.setEquipmentIntensity(record.equipmentIntensity ?? '32')
+  setters.setTargetScaleWanTpa(record.targetScaleWanTpa ?? '10')
+  setters.setEquipmentAdjustments(record.equipmentAdjustments ?? { smelting: '1', converting: '1', refining: '1' })
+  setters.setBatchTableView(
+    normalizeBatchTableView(record.batchTableView, record.productFilledBack ?? record.productCalculated ?? false)
+  )
+  setters.setPhaseRatioOverrides(record.phaseRatioOverrides ?? {})
+  setters.setManualPhaseRatioColumns(record.manualPhaseRatioColumns ?? {})
+  setters.setProductDistributionDrafts(cloneProductDistributionDrafts(record.productDistributionDrafts))
+  setters.setProductConstraintConfig(prepared.nextProductConstraintConfig)
+  setters.setProductConstraintValueDrafts({})
+  setters.setCustomConstraintTargetDrafts({})
+  setters.setCustomConstraintExprDrafts({})
+  setters.setNewCustomConstraintDraft({ expr: '', target: '' })
+  setters.setCustomPhaseRows(record.customPhaseRows ?? {})
+  setters.setMaterialPhaseRows(prepared.nextMaterialPhaseRows)
+  setters.setInputPhaseDrafts({})
+  setters.setOutputPhaseDrafts({})
+  setters.setInvalidInputPhaseColumns({})
+  setters.setInvalidOutputPhaseColumns({})
+  setters.setWorkflowMessage(null)
+  setters.setActiveCaseId(record.id)
+}
+
+function applyPreparedCaseHeavyState(
+  prepared: PreparedCaseOpen,
+  setters: {
+    setPhaseCompletedMaterials: (value: Record<string, boolean>) => void
+    setPhaseBatchResults: (value: PhaseBatchResults | null) => void
+    setPhaseCompleted: (value: boolean) => void
+    setProductCalculated: (value: boolean) => void
+    setProductFilledBack: (value: boolean) => void
+    setOxySolverResult: (value: OxyConstraintSolverResult | null) => void
+    setHeatBalanced: (value: boolean) => void
+    setProductPhaseOverrides: (value: Record<string, Record<string, string>>) => void
+    setProductPhaseManual: (value: boolean) => void
+    setPhaseMaterialId: (value: string | null) => void
+    setPhaseAssistTabMaterialIds: (value: string[]) => void
+    setPhasePreviewUnknowns: (value: PhasePreviewUnknowns | null) => void
+  }
+) {
+  const { record } = prepared
+  setters.setPhaseCompletedMaterials(record.phaseCompletedMaterials ?? {})
+  setters.setPhaseBatchResults(prepared.nextPhaseBatchResults)
+  setters.setPhaseCompleted(record.phaseCompleted ?? false)
+  setters.setProductCalculated(prepared.restoredProductCalculated)
+  setters.setProductFilledBack(prepared.restoredProductFilledBack)
+  setters.setOxySolverResult(prepared.restoredProductSolverResult)
+  setters.setHeatBalanced(record.heatBalanced ?? false)
+  setters.setProductPhaseOverrides(record.productPhaseOverrides ?? {})
+  setters.setProductPhaseManual(record.productPhaseManual ?? false)
+  setters.setPhaseMaterialId(prepared.validPhaseMaterialId)
+  setters.setPhaseAssistTabMaterialIds(
+    buildPhaseAssistTabMaterialIds(
+      record.phaseAssistTabMaterialIds ?? [],
+      prepared.validPhaseMaterialId,
+      prepared.nextPhaseBatchResults
+    ).filter((id) => prepared.nextRawMaterials.some((material) => material.id === id && material.name.trim()))
+  )
+  setters.setPhasePreviewUnknowns(prepared.nextPhasePreviewUnknowns)
 }
 
 function buildProductSolverInputPhaseMass(
@@ -1469,7 +1667,7 @@ function normalizeImportedCopperCase(payload: unknown, methodName: string): Copp
     phaseCompleted: candidate.phaseCompleted ?? false,
     productCalculated: candidate.productCalculated ?? false,
     productFilledBack: candidate.productFilledBack ?? candidate.productCalculated ?? false,
-    productSolverResult: normalizeOxySolverResult(candidate.productSolverResult),
+    productSolverResult: restoreCaseProductSolverResult(candidate.productSolverResult),
     heatBalanced: candidate.heatBalanced ?? false,
     fuelLhv: candidate.fuelLhv ?? String(DEFAULT_COPPER_FUEL.lowerHeatingValueMJkg),
     fuelEfficiency: candidate.fuelEfficiency ?? String(DEFAULT_COPPER_FUEL.combustionEfficiency),
@@ -1961,6 +2159,8 @@ export default function CopperWorkflow({
   const [oxySolverResult, setOxySolverResult] = useState<OxyConstraintSolverResult | null>(null)
   const [isProductCalculating, setIsProductCalculating] = useState(false)
   const [productCalculationStep, setProductCalculationStep] = useState(0)
+  const [isOpeningCase, setIsOpeningCase] = useState(false)
+  const openingCaseRef = useRef(false)
   const resetProductCalculation = useCallback(() => {
     batchingDirtyRef.current = true
     setProductCalculated(false)
@@ -2095,6 +2295,7 @@ export default function CopperWorkflow({
   const stagePageTopRef = useRef<HTMLDivElement>(null)
   const previousActiveSheetRef = useRef<SheetId>(activeSheet)
   const [stageEnterHighlight, setStageEnterHighlight] = useState(false)
+  const shouldBuildBatchTables = activeSheet !== 'raw_material' && !isOpeningCase
 
   const rawBlend = useMemo(() => calculateWeightedComposition(rawMaterials), [rawMaterials])
   const rawConcentrateBlend = useMemo(
@@ -2453,6 +2654,7 @@ export default function CopperWorkflow({
     ]
   )
   const inputPhaseColumnData = useMemo(() => {
+    if (!shouldBuildBatchTables) return [] as PhaseTableColumn[]
     const blendSolidPhaseKeys = phaseTableRowKeys.filter((key) => key !== 'O2' && key !== 'N2')
     type BuildPhaseColumnOptions = {
       moisture?: number
@@ -2628,11 +2830,13 @@ export default function CopperWorkflow({
     phaseTableRowKeys,
     phaseRatioOverrides,
     rawMaterials,
+    shouldBuildBatchTables,
     solventColumns,
   ])
   const outputPhaseColumnData = useMemo(
-    (): PhaseTableColumn[] =>
-      productTableColumns.flatMap((product) => {
+    (): PhaseTableColumn[] => {
+      if (!shouldBuildBatchTables) return []
+      return productTableColumns.flatMap((product) => {
         if (product.key === 'total') return []
         const directPhases =
           product.displayMode === 'phases' && product.phases && product.phases.length > 0
@@ -2667,8 +2871,9 @@ export default function CopperWorkflow({
               : undefined,
           readOnly: true,
         }]
-      }),
-    [activeProcessStageId, productFilledBack, productPhaseComposition, productTableColumns]
+      })
+    },
+    [activeProcessStageId, productFilledBack, productPhaseComposition, productTableColumns, shouldBuildBatchTables]
   )
   const outputPhaseRowKeys = useMemo(() => {
     if (!productFilledBack) return []
@@ -5244,9 +5449,9 @@ export default function CopperWorkflow({
       productCalculated: preserveCachedResults ? base!.productCalculated : productCalculated,
       productFilledBack: preserveCachedResults ? Boolean(base!.productFilledBack) : productFilledBack,
       productSolverResult: preserveCachedResults
-        ? normalizeOxySolverResult(base!.productSolverResult)
+        ? restoreCaseProductSolverResult(base!.productSolverResult)
         : productCalculated && oxySolverResult
-          ? cloneOxySolverResult(oxySolverResult)
+          ? slimOxySolverResultForStorage(oxySolverResult)
           : null,
       heatBalanced: preserveCachedResults ? Boolean(base!.heatBalanced) : heatBalanced,
       solventSolution: preserveCachedResults
@@ -5294,7 +5499,8 @@ export default function CopperWorkflow({
       phaseCompleted,
       productCalculated,
       productFilledBack,
-      productSolverResult: productCalculated && oxySolverResult ? cloneOxySolverResult(oxySolverResult) : null,
+      productSolverResult:
+        productCalculated && oxySolverResult ? slimOxySolverResultForStorage(oxySolverResult) : null,
       heatBalanced,
       fuelLhv,
       fuelEfficiency,
@@ -5431,116 +5637,110 @@ export default function CopperWorkflow({
   }
 
   const openCopperCase = (record: CopperCaseRecord) => {
-    const nextRawMaterials = (record.rawMaterials?.length ? record.rawMaterials : createDefaultCopperMaterials()).map(cloneMaterialColumn)
-    const nextSolventColumns = (record.solventColumns?.length ? record.solventColumns : createDefaultSolventColumns()).map(cloneMaterialColumn)
-    const nextAirColumns = normalizeProcessAirColumns(record.airColumns, record.oxygenAirColumn)
-    const nextFuelColumn = record.fuelColumn ? cloneFuelMaterial(record.fuelColumn) : cloneFuelMaterial(DEFAULT_COPPER_FUEL)
-    const nextPhaseBatchResults = record.phaseBatchResults ?? null
-    const nextProductConstraintConfig = normalizeOxyConstraintConfig(record.productConstraintConfig)
-    const nextMaterialPhaseRows = Object.fromEntries(
-      Object.entries(record.materialPhaseRows ?? {}).map(([materialId, rows]) => [
-        materialId,
-        ensureMaterialPhaseRows(rows),
-      ])
-    )
-    const restoredProductSolverResult = record.productCalculated
-      ? normalizeOxySolverResult(record.productSolverResult)
-      : null
-    const restoredProductCalculated = Boolean(record.productCalculated && restoredProductSolverResult)
-    const restoredProductFilledBack = Boolean(
-      (record.productFilledBack ?? record.productCalculated ?? false) && restoredProductSolverResult?.valid
-    )
-    const restoredPhaseMaterialId = record.phaseMaterialId ?? null
-    const validPhaseMaterialId =
-      restoredPhaseMaterialId &&
-      nextRawMaterials.some((material) => material.id === restoredPhaseMaterialId && material.name.trim())
-        ? restoredPhaseMaterialId
-        : nextRawMaterials.find((material) => material.name.trim() && nextPhaseBatchResults?.[material.id])?.id ??
-          null
-    const savedPreview = record.phasePreviewUnknowns ?? null
-    const nextPhasePreviewUnknowns =
-      validPhaseMaterialId && nextPhaseBatchResults?.[validPhaseMaterialId]
-        ? savedPreview && savedPreview.materialId === validPhaseMaterialId
-          ? savedPreview
-          : buildPhasePreviewUnknowns(validPhaseMaterialId, nextPhaseBatchResults[validPhaseMaterialId]!)
-        : savedPreview
-    const nextOxygenAirText = normalizeOxygenAirText(record.oxygenAirO2Pct, record.oxygenAirN2Pct)
-    const nextStageId = normalizeCopperCaseStageId(record.stageId)
-
-    startTransition(() => {
-      setRawMaterials(nextRawMaterials)
-      setRawWeightDrafts(record.rawWeightDrafts ?? Object.fromEntries(nextRawMaterials.map((material) => [material.id, material.weight > 0 ? String(material.weight) : ''])))
-      setWaterWeightDrafts({})
-      setSolventColumns(nextSolventColumns)
-      setFuelColumn(nextFuelColumn)
-      setAirColumns(nextAirColumns)
-      setTargetFeSiO2(record.targetFeSiO2 ?? '2.8')
-      setTargetCaOSiO2(record.targetCaOSiO2 ?? '0.45')
-      setSolventSolution(cloneSolventSolution(record.solventSolution ?? null))
-      setPhaseCompletedMaterials(record.phaseCompletedMaterials ?? {})
-      setPhaseBatchResults(nextPhaseBatchResults)
-      setManualPhaseCells(record.manualPhaseCells ?? {})
-      setManualSolventWeights(record.manualSolventWeights ?? {})
-      setManualFuelWeightValid(record.manualFuelWeightValid ?? false)
-      setPhaseCompleted(record.phaseCompleted ?? false)
-      setProductCalculated(restoredProductCalculated)
-      setProductFilledBack(restoredProductFilledBack)
-      setOxySolverResult(restoredProductSolverResult)
-      setHeatBalanced(record.heatBalanced ?? false)
-      setFuelLhv(record.fuelLhv ?? String(DEFAULT_COPPER_FUEL.lowerHeatingValueMJkg))
-      setFuelEfficiency(record.fuelEfficiency ?? String(DEFAULT_COPPER_FUEL.combustionEfficiency))
-      setOxygenAirO2Pct(nextOxygenAirText.oxygen)
-      setOxygenAirN2Pct(nextOxygenAirText.nitrogen)
-      setOxygenSupplyCoefficient(record.oxygenSupplyCoefficient ?? '1.15')
-      setFeedTemperature(record.feedTemperature ?? '25')
-      setMatteTemperature(record.matteTemperature ?? '1180')
-      setSlagTemperature(record.slagTemperature ?? '1250')
-      setGasTemperature(record.gasTemperature ?? '1150')
-      setDustTemperature(record.dustTemperature ?? '450')
-      setHeatLossMJh(record.heatLossMJh ?? '1500')
-      setOtherHeatMJh(record.otherHeatMJh ?? '0')
-      setAnnualHours(record.annualHours ?? '7200')
-      setEquipmentIntensity(record.equipmentIntensity ?? '32')
-      setTargetScaleWanTpa(record.targetScaleWanTpa ?? '10')
-      setEquipmentAdjustments(record.equipmentAdjustments ?? { smelting: '1', converting: '1', refining: '1' })
-      setBatchTableView(normalizeBatchTableView(record.batchTableView, record.productFilledBack ?? record.productCalculated ?? false))
-      setPhaseRatioOverrides(record.phaseRatioOverrides ?? {})
-      setManualPhaseRatioColumns(record.manualPhaseRatioColumns ?? {})
-      setProductDistributionDrafts(cloneProductDistributionDrafts(record.productDistributionDrafts))
-      setProductPhaseOverrides(record.productPhaseOverrides ?? {})
-      setProductPhaseManual(record.productPhaseManual ?? false)
-      setProductConstraintConfig(nextProductConstraintConfig)
-      setProductConstraintValueDrafts({})
-      setCustomConstraintTargetDrafts({})
-      setCustomConstraintExprDrafts({})
-      setNewCustomConstraintDraft({ expr: '', target: '' })
-      setCustomPhaseRows(record.customPhaseRows ?? {})
-      setMaterialPhaseRows(nextMaterialPhaseRows)
-      setInputPhaseDrafts({})
-      setOutputPhaseDrafts({})
-      setInvalidInputPhaseColumns({})
-      setInvalidOutputPhaseColumns({})
-      setPhaseMaterialId(validPhaseMaterialId)
-      setPhaseAssistTabMaterialIds(
-        buildPhaseAssistTabMaterialIds(
-          record.phaseAssistTabMaterialIds ?? [],
-          validPhaseMaterialId,
-          nextPhaseBatchResults
-        ).filter((id) => nextRawMaterials.some((material) => material.id === id && material.name.trim()))
-      )
-      setPhasePreviewUnknowns(nextPhasePreviewUnknowns)
-      setWorkflowMessage(null)
-      setActiveCaseId(record.id)
-    })
-
-    clearBatchingDirty()
-    if (record.productCalculated && !restoredProductSolverResult) {
-      setCaseMessage(`已打开案例：${record.name}（产出缓存缺失，请手动点击“计算产出结果”）`)
-    } else {
-      setCaseMessage(`已打开案例：${record.name}`)
-    }
+    if (openingCaseRef.current) return
+    openingCaseRef.current = true
+    setIsOpeningCase(true)
+    setCaseMessage(`正在打开案例：${record.name}…`)
     onActiveCaseNameChange?.(record.name)
+
+    const nextStageId = normalizeCopperCaseStageId(record.stageId)
     onStageSelect(nextStageId)
+
+    window.setTimeout(() => {
+      const prepared = prepareCaseOpenFromRecord(record)
+      const batchingSetters = {
+        setRawMaterials,
+        setRawWeightDrafts,
+        setWaterWeightDrafts,
+        setSolventColumns,
+        setFuelColumn,
+        setAirColumns,
+        setTargetFeSiO2,
+        setTargetCaOSiO2,
+        setSolventSolution,
+        setManualPhaseCells,
+        setManualSolventWeights,
+        setManualFuelWeightValid,
+        setFuelLhv,
+        setFuelEfficiency,
+        setOxygenAirO2Pct,
+        setOxygenAirN2Pct,
+        setOxygenSupplyCoefficient,
+        setFeedTemperature,
+        setMatteTemperature,
+        setSlagTemperature,
+        setGasTemperature,
+        setDustTemperature,
+        setHeatLossMJh,
+        setOtherHeatMJh,
+        setAnnualHours,
+        setEquipmentIntensity,
+        setTargetScaleWanTpa,
+        setEquipmentAdjustments,
+        setBatchTableView,
+        setPhaseRatioOverrides,
+        setManualPhaseRatioColumns,
+        setProductDistributionDrafts,
+        setProductConstraintConfig,
+        setProductConstraintValueDrafts,
+        setCustomConstraintTargetDrafts,
+        setCustomConstraintExprDrafts,
+        setNewCustomConstraintDraft,
+        setCustomPhaseRows,
+        setMaterialPhaseRows,
+        setInputPhaseDrafts,
+        setOutputPhaseDrafts,
+        setInvalidInputPhaseColumns,
+        setInvalidOutputPhaseColumns,
+        setWorkflowMessage,
+        setActiveCaseId,
+      }
+      const heavySetters = {
+        setPhaseCompletedMaterials,
+        setPhaseBatchResults,
+        setPhaseCompleted,
+        setProductCalculated,
+        setProductFilledBack,
+        setOxySolverResult,
+        setHeatBalanced,
+        setProductPhaseOverrides,
+        setProductPhaseManual,
+        setPhaseMaterialId,
+        setPhaseAssistTabMaterialIds,
+        setPhasePreviewUnknowns,
+      }
+
+      startTransition(() => {
+        applyPreparedCaseBatchingState(prepared, batchingSetters)
+        setProductCalculated(false)
+        setProductFilledBack(false)
+        setOxySolverResult(null)
+        setPhaseBatchResults(null)
+      })
+
+      const finishOpen = () => {
+        startTransition(() => {
+          applyPreparedCaseHeavyState(prepared, heavySetters)
+          clearBatchingDirty()
+          setIsOpeningCase(false)
+          openingCaseRef.current = false
+          if (record.productCalculated && !prepared.restoredProductSolverResult) {
+            setCaseMessage(`已打开案例：${record.name}（产出缓存缺失，请手动点击“计算产出结果”）`)
+          } else {
+            setCaseMessage(`已打开案例：${record.name}`)
+          }
+        })
+      }
+
+      if ('requestIdleCallback' in window) {
+        ;(window as Window & { requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback(
+          finishOpen,
+          { timeout: 120 }
+        )
+      } else {
+        window.setTimeout(finishOpen, 16)
+      }
+    }, 0)
   }
 
   const renameActiveCase = (nextName: string) => {
@@ -6056,6 +6256,13 @@ export default function CopperWorkflow({
 
   return (
     <div className="space-y-4">
+      {isOpeningCase && (
+        <IteratingOverlay
+          darkMode={darkMode}
+          title="正在打开案例"
+          description="正在恢复配料与产出数据，请稍候…"
+        />
+      )}
       {isPhaseCalculating && (
         <IteratingOverlay
           darkMode={darkMode}
