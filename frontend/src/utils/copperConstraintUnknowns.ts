@@ -394,13 +394,9 @@ function deriveElementMassFromPhases(
 export function buildUnknownSpecs(config: OxySideBlowConstraintConfig, baseInput?: OxyConstraintBaseInput): UnknownSpec[] {
   const specs: UnknownSpec[] = []
   const directlySolvedWPhases = directlySolvedWPercentPhaseIds(config)
-  for (const productKey of OXY_SIDE_BLOW_PRODUCT_KEYS) {
-    specs.push({
-      id: `product:${productKey}`,
-      kind: 'product_mass',
-      productKey,
-    })
-  }
+  // 产物总质量不再作为独立未知量：它恒等于各物相质量之和（见 unpackProjectedUnknowns
+  // 中的 productMassesFromPhaseSums）。这样单载体 W% 物相（如白铜锍 Cu2S）的显示百分比
+  // 直接等于其解析解，不会再继承产物总质量未知量与闭合方程之间的迭代残差。
   for (const productKey of OXY_SIDE_BLOW_PRODUCT_KEYS) {
     for (const phaseKey of config.products[productKey].phases) {
       if (directlySolvedWPhases.has(`${productKey}:${phaseKey}`)) continue
@@ -759,6 +755,8 @@ export function unpackProjectedUnknowns(
   const unpacked = unpackUnknowns(packUnknowns(inputProjected, specs), specs, baseInput, config)
   applyDirectlySolvablePhaseConstraints(unpacked, config)
   applyHardOutputPhaseConstraints(unpacked, config)
+  // 产物总质量 ≡ 各物相质量之和（物相已含 Other 闭合相），使产物 w% 与物相分配自洽。
+  unpacked.productMasses = productMassesFromPhaseSums(unpacked.outputPhases)
   return unpacked
 }
 
