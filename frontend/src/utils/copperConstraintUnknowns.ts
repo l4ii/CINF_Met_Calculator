@@ -653,9 +653,31 @@ export function reconcileDustDirectPhases(unpacked: UnpackedUnknowns, config: Ox
   phases.FeO = feOFe > 0 ? Math.max(0, (ironTarget - fixedIron) / feOFe) : 0
 }
 
-/** 白铜锍：GMC 经验式与 W% Cu 直接可解物相代数闭合 */
+/** 白铜锍：在求解器已收敛的锍总量内按 GMC 闭合 Cu₂S（不改变锍总质量） */
+export function reconcileMattePhasesAtFixedMass(unpacked: UnpackedUnknowns, config: OxySideBlowConstraintConfig) {
+  const phases = unpacked.outputPhases.matte
+  const gmc = Math.max(0, config.variables?.GMC ?? 75)
+  const cu2sCu = phaseFraction('Cu2S', 'Cu(铜)')
+  if (cu2sCu <= 0) return
+  const total = Math.max(0, unpacked.productMasses.matte ?? productPhaseMass(phases))
+  if (total <= 0) return
+
+  const fixedKeys = new Set(['Cu2S', 'Other'])
+  const fixedMass = Object.entries(phases).reduce(
+    (sum, [phaseKey, mass]) => sum + (fixedKeys.has(phaseKey) ? 0 : Math.max(0, mass)),
+    0
+  )
+  phases.Cu2S = Math.max(0, Math.min(total * (gmc / 100) / cu2sCu, total - fixedMass))
+  const withoutOther = Object.entries(phases).reduce(
+    (sum, [phaseKey, mass]) => sum + (phaseKey === 'Other' ? 0 : Math.max(0, mass)),
+    0
+  )
+  phases.Other = Math.max(0, total - withoutOther)
+}
+
+/** @deprecated 使用 reconcileMattePhasesAtFixedMass */
 export function reconcileMatteDirectPhases(unpacked: UnpackedUnknowns, config: OxySideBlowConstraintConfig) {
-  applyInitialMattePhaseGuess(unpacked, config)
+  reconcileMattePhasesAtFixedMass(unpacked, config)
 }
 
 /** 各产物总质量与物相质量之和对齐，避免 w% 分母偏差 */
@@ -792,9 +814,7 @@ export function unpackProjectedUnknowns(
   const unpacked = unpackUnknowns(packUnknowns(inputProjected, specs), specs, baseInput, config)
   applyDirectlySolvablePhaseConstraints(unpacked, config)
   applyHardOutputPhaseConstraints(unpacked, config)
-  reconcileMatteDirectPhases(unpacked, config)
-  reconcileDustDirectPhases(unpacked, config)
-  reconcileProductMassesFromPhases(unpacked)
+  reconcileMattePhasesAtFixedMass(unpacked, config)
   return unpacked
 }
 
@@ -834,7 +854,7 @@ export function buildProductsFromPhases(
       phases[phaseKey] = Math.max(0, outputPhases[pk]?.[phaseKey] ?? 0)
     }
     const phaseMass = productPhaseMass(phases)
-    const mass = phaseMass > 0 ? phaseMass : Math.max(0, productMasses?.[pk] ?? 0)
+    const mass = Math.max(0, productMasses?.[pk] ?? phaseMass)
     products[pk] = {
       mass,
       phases,

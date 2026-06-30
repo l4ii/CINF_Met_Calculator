@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-06-30T02:15:00.659Z",
+  "generatedAt": "2026-06-30T02:41:14.052Z",
   "inputs": {
     "materials": [
       {
@@ -715,7 +715,7 @@
   "chapter6_solver": {
     "valid": true,
     "converged": true,
-    "iterations": 51,
+    "iterations": 30,
     "equationCount": 97,
     "objectiveEquationCount": 97,
     "equations": [
@@ -1505,7 +1505,7 @@
         "phases": [
           {
             "key": "SO2",
-            "mass": 88.5071,
+            "mass": 88.5081,
             "pct": 46.664
           },
           {
@@ -1520,7 +1520,7 @@
           },
           {
             "key": "N2",
-            "mass": 67.6649,
+            "mass": 67.6647,
             "pct": 35.675
           },
           {
@@ -1535,16 +1535,16 @@
           }
         ],
         "elementMass": {
-          "S (硫)": 44.3005,
-          "O(氧)": 72.8814,
+          "S (硫)": 44.301,
+          "O(氧)": 72.8819,
           "C (碳)": 2.2484,
-          "N(氮)": 67.6649,
+          "N(氮)": 67.6647,
           "H(氢)": 2.3917,
           "As(砷)": 0.1835
         },
         "composition": {
           "S (硫)": 23.357,
-          "O(氧)": 38.425,
+          "O(氧)": 38.426,
           "C (碳)": 1.185,
           "N(氮)": 35.675,
           "H(氢)": 1.261,
@@ -1566,14 +1566,9 @@
             "pct": 3.862
           },
           {
-            "key": "FeS",
-            "mass": 0.0621,
-            "pct": 2.143
-          },
-          {
             "key": "FeO",
-            "mass": 0.3315,
-            "pct": 11.436
+            "mass": 0.3823,
+            "pct": 13.188
           },
           {
             "key": "Fe3O4",
@@ -1582,13 +1577,23 @@
           },
           {
             "key": "PbO",
-            "mass": 0.3969,
-            "pct": 13.689
+            "mass": 0.3728,
+            "pct": 12.859
+          },
+          {
+            "key": "PbS",
+            "mass": 0.0259,
+            "pct": 0.892
           },
           {
             "key": "ZnO",
-            "mass": 1.0651,
-            "pct": 36.738
+            "mass": 1.0163,
+            "pct": 35.056
+          },
+          {
+            "key": "ZnS",
+            "mass": 0.0584,
+            "pct": 2.013
           },
           {
             "key": "SeO2",
@@ -1652,7 +1657,7 @@
           "O(氧)": 0.3856,
           "Fe(铁)": 0.3017,
           "Pb(铅)": 0.3685,
-          "Zn(锌)": 0.8557,
+          "Zn(锌)": 0.8556,
           "Se(硒)": 0.0045,
           "Ni(镍)": 0.0007,
           "CaO(氧化钙)": 0.0029,
@@ -1669,7 +1674,7 @@
           "Cu(铜)": 15.767,
           "S (硫)": 3.895,
           "O(氧)": 13.301,
-          "Fe(铁)": 10.407,
+          "Fe(铁)": 10.408,
           "Pb(铅)": 12.71,
           "Zn(锌)": 29.515,
           "Se(硒)": 0.154,
@@ -2192,14 +2197,14 @@
       "石英石": 12.4876
     },
     "gasWeights": {
-      "空气": 54.9791,
-      "氧气": 51.2531,
+      "空气": 54.9789,
+      "氧气": 51.2528,
       "二次风": 28.7693,
       "加料口漏风": 5.73
     }
   },
   "chapter8_validation": {
-    "maxRelativeResidual": 0.000095,
+    "maxRelativeResidual": 0.000077,
     "matteCu2sPctExpected": 93.922906,
     "matteCu2sPctActual": 93.922906,
     "matteCuPctActual": 75,
@@ -2207,64 +2212,99 @@
     "constraintResiduals": [
       {
         "expr": "D% S (硫) → 烟气含尘 = 0.2%",
-        "value": 0.000011,
+        "value": 0.000009,
         "target": 0,
-        "residual": 0.000011,
-        "relativeResidual": 0.000095
+        "residual": 0.000009,
+        "relativeResidual": 0.000077
       },
       {
-        "expr": "D% Zn(锌) → 烟气含尘 = 23%",
-        "value": 0.000022,
+        "expr": "D% Fe(铁) → 烟气含尘 = 0.55%",
+        "value": 0.000015,
         "target": 0,
-        "residual": 0.000022,
-        "relativeResidual": 0.000025
-      },
-      {
-        "expr": "元素守恒 Zn(锌)",
-        "value": 0.000022,
-        "target": 0,
-        "residual": 0.000022,
-        "relativeResidual": 0.000006
+        "residual": 0.000015,
+        "relativeResidual": 0.00005
       },
       {
         "expr": "元素守恒 S (硫)",
-        "value": 0.000011,
+        "value": 0.000543,
         "target": 0,
-        "residual": 0.000011,
+        "residual": 0.000543,
+        "relativeResidual": 0.00001
+      },
+      {
+        "expr": "元素守恒 O(氧)",
+        "value": 0.0008,
+        "target": 0,
+        "residual": 0.0008,
+        "relativeResidual": 0.000009
+      },
+      {
+        "expr": "产物元素闭合 烟气含尘：Σ元素 = 产物总量（w%合计=100%）",
+        "value": 0.000024,
+        "target": 0,
+        "residual": 0.000024,
+        "relativeResidual": 0.000008
+      },
+      {
+        "expr": "产物元素闭合 熔炼出炉烟气：Σ元素 = 产物总量（w%合计=100%）",
+        "value": 0.001335,
+        "target": 0,
+        "residual": 0.001335,
+        "relativeResidual": 0.000007
+      },
+      {
+        "expr": "Output.烟气含尘.Fe3O4.Fe / Output.烟气含尘.Fe",
+        "value": 0.014999,
+        "target": 0.015,
+        "residual": -0.000001,
+        "relativeResidual": 0.000001
+      },
+      {
+        "expr": "元素守恒 Fe(铁)",
+        "value": 0.000015,
+        "target": 0,
+        "residual": 0.000015,
         "relativeResidual": 0
       },
       {
-        "expr": "D% Pb(铅) → 烟气含尘 = 32%",
+        "expr": "((Input.空气.O2 + Input.氧气.O2) / O * 22.4) / (Input.空气 + Input.氧气)",
+        "value": 0.85,
+        "target": 0.85,
+        "residual": 0,
+        "relativeResidual": 0
+      },
+      {
+        "expr": "Output.熔炼出炉烟气.O2 / (Input.空气.O2 + Input.氧气.O2 + Input.二次风.O2 + Input.加料口漏风.O2)",
+        "value": 0.05,
+        "target": 0.05,
+        "residual": 0,
+        "relativeResidual": 0
+      },
+      {
+        "expr": "元素守恒 N(氮)",
         "value": 0,
         "target": 0,
         "residual": 0,
         "relativeResidual": 0
       },
       {
-        "expr": "元素守恒 Pb(铅)",
+        "expr": "元素守恒 C (碳)",
         "value": 0,
         "target": 0,
         "residual": 0,
         "relativeResidual": 0
       },
       {
-        "expr": "D% Zn(锌) → 熔炼渣 = 65%",
-        "value": 0,
-        "target": 0,
+        "expr": "(Input.二次风.O2 / O) / ((Input.混合铜精矿.CuFeS2.S / S / 4) + (Input.混合铜精矿.FeS2.S / S / 2) * 0.7 + Input.煤.C / C * 0.7)",
+        "value": 1.02,
+        "target": 1.02,
         "residual": 0,
         "relativeResidual": 0
       },
       {
-        "expr": "D% Pb(铅) → 熔炼渣 = 38%",
-        "value": 0,
-        "target": 0,
-        "residual": 0,
-        "relativeResidual": 0
-      },
-      {
-        "expr": "D% Pb(铅) → 白铜锍 = 30%",
-        "value": 0,
-        "target": 0,
+        "expr": "Output.熔炼渣.Fe3O4 / Output.熔炼渣",
+        "value": 0.15,
+        "target": 0.15,
         "residual": 0,
         "relativeResidual": 0
       },
@@ -2272,41 +2312,6 @@
         "expr": "元素守恒 Cu(铜)",
         "value": 0,
         "target": 0,
-        "residual": 0,
-        "relativeResidual": 0
-      },
-      {
-        "expr": "D% Zn(锌) → 白铜锍 = 12%",
-        "value": 0,
-        "target": 0,
-        "residual": 0,
-        "relativeResidual": 0
-      },
-      {
-        "expr": "元素守恒 O(氧)",
-        "value": 0,
-        "target": 0,
-        "residual": 0,
-        "relativeResidual": 0
-      },
-      {
-        "expr": "元素守恒 Other(其他)",
-        "value": 0,
-        "target": 0,
-        "residual": 0,
-        "relativeResidual": 0
-      },
-      {
-        "expr": "产物元素闭合 白铜锍：Σ元素 = 产物总量（w%合计=100%）",
-        "value": 0,
-        "target": 0,
-        "residual": 0,
-        "relativeResidual": 0
-      },
-      {
-        "expr": "OutputE.白铜锍.Fe / ((-0.825 * 75 / 100 + 0.633) * Output.白铜锍)",
-        "value": 1,
-        "target": 1,
         "residual": 0,
         "relativeResidual": 0
       }
