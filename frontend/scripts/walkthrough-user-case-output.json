@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-06-22T07:42:52.298Z",
+  "generatedAt": "2026-06-30T02:41:14.052Z",
   "inputs": {
     "materials": [
       {
@@ -2204,21 +2204,25 @@
     }
   },
   "chapter8_validation": {
-    "maxRelativeResidual": 0.000075,
+    "maxRelativeResidual": 0.000077,
+    "matteCu2sPctExpected": 93.922906,
+    "matteCu2sPctActual": 93.922906,
+    "matteCuPctActual": 75,
+    "dustCu2sCu2oRatio": 4,
     "constraintResiduals": [
       {
         "expr": "D% S (硫) → 烟气含尘 = 0.2%",
-        "value": 0.000008,
+        "value": 0.000009,
         "target": 0,
-        "residual": 0.000008,
-        "relativeResidual": 0.000075
+        "residual": 0.000009,
+        "relativeResidual": 0.000077
       },
       {
         "expr": "D% Fe(铁) → 烟气含尘 = 0.55%",
         "value": 0.000015,
         "target": 0,
         "residual": 0.000015,
-        "relativeResidual": 0.000049
+        "relativeResidual": 0.00005
       },
       {
         "expr": "元素守恒 S (硫)",
@@ -2229,23 +2233,23 @@
       },
       {
         "expr": "元素守恒 O(氧)",
-        "value": 0.000801,
+        "value": 0.0008,
         "target": 0,
-        "residual": 0.000801,
+        "residual": 0.0008,
         "relativeResidual": 0.000009
       },
       {
         "expr": "产物元素闭合 烟气含尘：Σ元素 = 产物总量（w%合计=100%）",
-        "value": 0.000023,
+        "value": 0.000024,
         "target": 0,
-        "residual": 0.000023,
+        "residual": 0.000024,
         "relativeResidual": 0.000008
       },
       {
         "expr": "产物元素闭合 熔炼出炉烟气：Σ元素 = 产物总量（w%合计=100%）",
-        "value": 0.001336,
+        "value": 0.001335,
         "target": 0,
-        "residual": 0.001336,
+        "residual": 0.001335,
         "relativeResidual": 0.000007
       },
       {
