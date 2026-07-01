@@ -1,10 +1,14 @@
-import { useState, useEffect } from 'react'
-import { SMELT_TYPES, SHEETS, type SelectedMethod, type SheetId } from '../types'
+import { useEffect, useState } from 'react'
+import {
+  SMELT_TYPES,
+  type SheetId,
+  type SelectedMethod,
+  type SmeltMethod,
+} from '../types'
 import { ABOUT_NAV, APP_TAGLINE_SIDEBAR_EN, APP_TAGLINE_SIDEBAR_ZH_LINE1, APP_TAGLINE_SIDEBAR_ZH_LINE2, sidebarTitleForLang } from '../constants/appCopy'
 
 interface SidebarProps {
   selectedMethod: SelectedMethod | null
-  activeSheet: SheetId
   onMethodSelect: (method: SelectedMethod) => void
   onSheetSelect: (sheet: SheetId) => void
   darkMode: boolean
@@ -15,9 +19,9 @@ interface SidebarProps {
   aboutDepartment?: string | null
 }
 
+const sectionKey = (smeltTypeId: string, sectionId: string) => `${smeltTypeId}:${sectionId}`
 export default function Sidebar({
   selectedMethod,
-  activeSheet,
   onMethodSelect,
   onSheetSelect,
   darkMode,
@@ -27,68 +31,54 @@ export default function Sidebar({
   currentView,
   aboutDepartment,
 }: SidebarProps) {
-  const [expandedMethods, setExpandedMethods] = useState<Set<string>>(new Set())
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(() => new Set())
   const smeltTypeNameEn: Record<string, string> = {
     cu: 'Copper Smelting',
     pb: 'Lead Smelting',
     zn: 'Zinc Smelting',
     sb: 'Antimony Smelting',
   }
+  const sectionNameEn: Record<string, string> = {
+    pyro: 'Pyrometallurgy',
+    hydro: 'Hydrometallurgy',
+  }
   const methodNameEn: Record<string, string> = {
-    'oxy-side-blast': 'Oxygen-Enriched Side-Blown',
-    flash: 'Flash Smelting',
-  }
-  const sheetNameEn: Record<SheetId, string> = {
-    raw_material: 'Batching Calculation',
-    product: 'Product Calculation',
-    heat_balance: 'Heat Balance',
-    furnace: 'Furnace Design',
-    cu_smelting: 'Smelting',
-    cu_converting: 'Converting',
-    cu_refining: 'Refining',
-    cu_equipment: 'Equipment Selection',
-  }
-  const isLeadFlash = (method?: SelectedMethod | null) =>
-    method?.smeltTypeId === 'pb' && method?.smeltMethodId === 'flash'
-  const sheetLabel = (sheet: { id: SheetId; name: string }) => {
-    if (isLeadFlash(selectedMethod)) {
-      if (language === 'en') {
-        if (sheet.id === 'raw_material') return 'Blend Calculation'
-        if (sheet.id === 'product') return 'Phase Calculation'
-        if (sheet.id === 'heat_balance') return 'Heat Balance'
-      } else {
-        if (sheet.id === 'raw_material') return '配矿计算'
-        if (sheet.id === 'product') return '物相计算'
-        if (sheet.id === 'heat_balance') return '热平衡计算'
-      }
-    }
-    return language === 'en' ? (sheetNameEn[sheet.id] ?? sheet.name) : sheet.name
-  }
-  const visibleSheets = () => {
-    if (isLeadFlash(selectedMethod)) return SHEETS.filter((sheet) => sheet.id !== 'furnace')
-    return SHEETS
+    'cu:side-blown': 'Side-Blown Furnace',
+    'cu:flash': 'Flash Furnace',
+    'pb:side-blown': 'Side-Blown Furnace',
+    'pb:ausmelt': 'Ausmelt Furnace',
+    'pb:flash': 'Flash Furnace',
+    'pb:kivcet': 'Kivcet Furnace',
+    'zn:isp': 'ISP Furnace',
+    'zn:electric': 'Electric Furnace',
+    'zn:pressure-leaching': 'Pressure Leaching',
+    'zn:atmospheric-leaching': 'Atmospheric Leaching',
+    'sb:side-blown': 'Side-Blown Furnace',
   }
   const t = ABOUT_NAV[language]
-
   const sidebarTitle = sidebarTitleForLang(language)
 
-  const isSelected = (smeltTypeId: string, smeltMethodId: string) =>
-    selectedMethod?.smeltTypeId === smeltTypeId && selectedMethod?.smeltMethodId === smeltMethodId
-  
-  const methodKey = (smeltTypeId: string, smeltMethodId: string) => `${smeltTypeId}-${smeltMethodId}`
-  const isExpanded = (smeltTypeId: string, smeltMethodId: string) => expandedMethods.has(methodKey(smeltTypeId, smeltMethodId))
-  
-  // 确保当前选中的方法总是展开
+  const smeltTypeLabel = (smeltTypeId: string, fallback: string) =>
+    language === 'en' ? (smeltTypeNameEn[smeltTypeId] ?? fallback) : fallback
+  const sectionLabel = (sectionId: string, fallback: string) =>
+    language === 'en' ? (sectionNameEn[sectionId] ?? fallback) : fallback
+  const methodLabel = (smeltTypeId: string, method: SmeltMethod) =>
+    language === 'en' ? (methodNameEn[`${smeltTypeId}:${method.id}`] ?? method.name) : method.name
+  const emptySectionLabel = language === 'en' ? 'Not configured' : '暂未配置'
+
+  const isSelected = (smeltTypeId: string, sectionId: string | undefined, smeltMethodId: string) =>
+    selectedMethod?.smeltTypeId === smeltTypeId &&
+    selectedMethod?.smeltMethodId === smeltMethodId &&
+    (selectedMethod?.sectionId ?? 'default') === (sectionId ?? 'default')
+
+  // 默认折叠所有分区；选中方法后仅展开其所在分区，方便回看当前路径。
   useEffect(() => {
-    if (selectedMethod) {
-      const key = methodKey(selectedMethod.smeltTypeId, selectedMethod.smeltMethodId)
-      setExpandedMethods((prev) => {
-        if (!prev.has(key)) {
-          return new Set(prev).add(key)
-        }
-        return prev
-      })
-    }
+    if (!selectedMethod) return
+    const nextSectionKey = selectedMethod.sectionId ? sectionKey(selectedMethod.smeltTypeId, selectedMethod.sectionId) : null
+    setExpandedSections((prev) => {
+      if (!nextSectionKey || prev.has(nextSectionKey)) return prev
+      return new Set(prev).add(nextSectionKey)
+    })
   }, [selectedMethod])
 
   return (
@@ -117,7 +107,7 @@ export default function Sidebar({
         </div>
       </div>
 
-      {/* 冶炼类型 → 冶炼方法 */}
+      {/* 冶炼类型 → 工艺分区 → 炉型/方法 */}
       <div className="sidebar-scroll flex-1 min-h-0 overflow-y-auto p-3">
         {SMELT_TYPES.map((smeltType) => (
           <div key={smeltType.id} className="mb-3">
@@ -126,68 +116,74 @@ export default function Sidebar({
                 darkMode ? 'text-gray-300' : 'text-gray-700'
               }`}
             >
-              {language === 'en' ? (smeltTypeNameEn[smeltType.id] ?? smeltType.name) : smeltType.name}
+              {smeltTypeLabel(smeltType.id, smeltType.name)}
             </div>
-            <div className="pl-3 space-y-0.5">
-              {smeltType.methods.map((method) => {
-                const active = isSelected(smeltType.id, method.id)
-                const expanded = isExpanded(smeltType.id, method.id)
-                const methodFullKey = methodKey(smeltType.id, method.id)
-                const isCopperMethod = smeltType.id === 'cu'
+            <div className="pl-2 space-y-1">
+              {smeltType.sections.map((section) => {
+                const secKey = sectionKey(smeltType.id, section.id)
+                const sectionExpanded = expandedSections.has(secKey)
+                const hasMethods = section.methods.length > 0
                 return (
-                  <div key={method.id} className="mb-1">
+                  <div key={section.id}>
                     <button
+                      type="button"
                       onClick={() => {
-                        const newMethod = {
-                          smeltTypeId: smeltType.id,
-                          smeltTypeName: language === 'en' ? (smeltTypeNameEn[smeltType.id] ?? smeltType.name) : smeltType.name,
-                          smeltMethodId: method.id,
-                          smeltMethodName: language === 'en' ? (methodNameEn[method.id] ?? method.name) : method.name,
-                          description: method.description,
-                        }
-                        onMethodSelect(newMethod)
-                        if (isCopperMethod) {
-                          onSheetSelect('raw_material')
-                          return
-                        }
-                        setExpandedMethods((prev) => new Set(prev).add(methodFullKey))
+                        setExpandedSections((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(secKey)) next.delete(secKey)
+                          else next.add(secKey)
+                          return next
+                        })
                       }}
-                      className={`w-full text-left px-2 py-1.5 rounded-lg text-sm transition-colors flex items-center justify-between ${
-                        active
-                          ? 'bg-blue-600 text-white'
-                          : darkMode
+                      className={`w-full text-left px-2 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center justify-between ${
+                        darkMode
                           ? 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
                           : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
                       }`}
                     >
-                      <span>{language === 'en' ? (methodNameEn[method.id] ?? method.name) : method.name}</span>
-                      {!isCopperMethod && (
-                        <span className={`text-sm transition-transform ${expanded ? 'rotate-90' : ''}`}>▶</span>
-                      )}
+                      <span>{sectionLabel(section.id, section.name)}</span>
+                      <span className={`text-xs transition-transform ${sectionExpanded ? 'rotate-90' : ''}`}>▶</span>
                     </button>
-                    {!isCopperMethod && expanded && active && (
-                      <div className="pl-4 mt-1 space-y-0.5">
-                        {visibleSheets().map((sheet) => {
-                          const sheetActive = activeSheet === sheet.id
-                          return (
-                            <button
-                              key={sheet.id}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                onSheetSelect(sheet.id)
-                              }}
-                              className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
-                                sheetActive
-                                  ? darkMode ? 'bg-blue-700 text-white' : 'bg-blue-100 text-blue-900'
-                                  : darkMode
-                                  ? 'text-gray-500 hover:bg-gray-800 hover:text-gray-300'
-                                  : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
-                              }`}
-                            >
-                              {sheetLabel(sheet)}
-                            </button>
-                          )
-                        })}
+                    {sectionExpanded && (
+                      <div className={`ml-2 mt-1 space-y-1 border-l pl-3 ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+                        {hasMethods ? (
+                          section.methods.map((method) => {
+                            const active = isSelected(smeltType.id, section.id, method.id)
+                            const methodSelection: SelectedMethod = {
+                              smeltTypeId: smeltType.id,
+                              smeltTypeName: smeltTypeLabel(smeltType.id, smeltType.name),
+                              sectionId: section.id,
+                              sectionName: sectionLabel(section.id, section.name),
+                              smeltMethodId: method.id,
+                              smeltMethodName: methodLabel(smeltType.id, method),
+                              description: method.description,
+                            }
+                            return (
+                              <div key={method.id} className="mb-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onMethodSelect(methodSelection)
+                                    onSheetSelect('raw_material')
+                                  }}
+                                  className={`w-full text-left px-2 py-1.5 rounded-lg text-sm transition-colors flex items-center justify-between ${
+                                    active
+                                      ? 'bg-blue-600 text-white'
+                                      : darkMode
+                                      ? 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
+                                      : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                                  }`}
+                                >
+                                  <span>{methodLabel(smeltType.id, method)}</span>
+                                </button>
+                              </div>
+                            )
+                          })
+                        ) : (
+                          <div className={`px-2 py-1 text-xs ${darkMode ? 'text-gray-600' : 'text-gray-400'}`}>
+                            {emptySectionLabel}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -209,6 +205,7 @@ export default function Sidebar({
         </h2>
         <div className="pl-2 space-y-1 mb-3">
           <button
+            type="button"
             onClick={() => onShowAbout('cinf')}
             className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
               currentView === 'about' && aboutDepartment === 'cinf'
@@ -221,6 +218,7 @@ export default function Sidebar({
             {t.cinf}
           </button>
           <button
+            type="button"
             onClick={() => onShowAbout('metallurgy')}
             className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
               currentView === 'about' && aboutDepartment === 'metallurgy'
@@ -233,6 +231,7 @@ export default function Sidebar({
             {t.metallurgy}
           </button>
           <button
+            type="button"
             onClick={() => onShowAbout('research')}
             className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
               currentView === 'about' && aboutDepartment === 'research'
@@ -246,6 +245,7 @@ export default function Sidebar({
           </button>
         </div>
         <button
+          type="button"
           onClick={onShowSettings}
           className={`w-full text-left px-2 py-1.5 rounded-lg text-base font-semibold uppercase tracking-wide transition-colors ${
             currentView === 'settings'

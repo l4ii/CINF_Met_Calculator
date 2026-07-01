@@ -294,6 +294,21 @@ export function buildElementTableDisplayKeys(
   })
 }
 
+export function elementTableDisplaySourceKeys(
+  displayKey: string,
+  sourceKeys: readonly CopperElementKey[],
+  mode: CopperElementDisplayMode
+): CopperElementKey[] {
+  if (mode === 'compound') return sourceKeys.filter((key) => key === displayKey)
+
+  return sourceKeys.filter((sourceKey) => {
+    const convertedKey = OXIDE_TO_ELEMENT_VIEW_KEY[sourceKey]
+    if (displayKey === 'O(氧)' && convertedKey) return true
+    if (convertedKey) return convertedKey === displayKey
+    return toElementViewMassKey(sourceKey) === displayKey
+  })
+}
+
 export function elementTableDisplayEditTarget(
   displayKey: string,
   mode: CopperElementDisplayMode

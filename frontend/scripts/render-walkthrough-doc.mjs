@@ -236,7 +236,7 @@ ${mdTable(
 **公式**：
 
 \`\`\`
-O₂_mol = CuFeS₂中S / M_S / 4 + FeS₂中S / M_S / 2 × 0.7 + 煤中C / M_C × 0.7
+O₂_mol = (CuFeS₂中S / 4 + FeS₂中S / 2 × 0.7) / M_S + 煤中C / M_C × 0.7
 二次风质量 = O₂_mol × 1.02 × M_O / w_O(二次风)
 \`\`\`
 

@@ -234,21 +234,24 @@ export function calculateProductPhaseComposition(
   return out
 }
 
+export const STANDARD_GAS_MOLAR_VOLUME_NM3_PER_KMOL = 22.4
+
+export const GAS_PHASE_MOLAR_MASS: Record<string, number> = {
+  SO2: MM.SO2,
+  SO3: atomicMass('S') + 3 * atomicMass('O'),
+  CO2: MM.CO2,
+  O2: MM.O2,
+  N2: MM.N2,
+  H2O: 2 * atomicMass('H') + atomicMass('O'),
+  As2O3: MM.As2O3,
+  Hg: atomicMass('Hg'),
+  Other: 28,
+}
+
 export function calculateGasVolumePercents(phases: ProductPhasePercentMap) {
-  const gasMolarMass: Record<string, number> = {
-    SO2: MM.SO2,
-    SO3: atomicMass('S') + 3 * atomicMass('O'),
-    CO2: MM.CO2,
-    O2: MM.O2,
-    N2: MM.N2,
-    H2O: 2 * atomicMass('H') + atomicMass('O'),
-    As2O3: MM.As2O3,
-    Hg: atomicMass('Hg'),
-    Other: 28,
-  }
   const moles = Object.fromEntries(
     Object.entries(phases).map(([key, massPct]) => {
-      const molarMass = gasMolarMass[key] ?? 28
+      const molarMass = GAS_PHASE_MOLAR_MASS[key] ?? GAS_PHASE_MOLAR_MASS.Other
       return [key, molarMass > 0 ? Math.max(0, massPct ?? 0) / molarMass : 0]
     })
   )
@@ -257,6 +260,34 @@ export function calculateGasVolumePercents(phases: ProductPhasePercentMap) {
   return Object.fromEntries(
     Object.entries(moles).map(([key, value]) => [key, (value / total) * 100])
   )
+}
+
+export function calculateGasStandardVolumeNm3h(
+  phases: Array<{ key: string; mass: number }> | Record<string, number>
+) {
+  const entries = Array.isArray(phases)
+    ? phases.map((phase) => [phase.key, phase.mass] as const)
+    : Object.entries(phases)
+
+  return entries.reduce((sum, [key, mass]) => {
+    const molarMass = GAS_PHASE_MOLAR_MASS[key] ?? GAS_PHASE_MOLAR_MASS.Other
+    if (molarMass <= 0) return sum
+    return sum + (Math.max(0, mass ?? 0) * 1000 * STANDARD_GAS_MOLAR_VOLUME_NM3_PER_KMOL) / molarMass
+  }, 0)
+}
+
+export function calculateGasMixtureStandardVolumeNm3h(
+  massTh: number,
+  phaseWeightPct: Partial<Record<string, number>>
+) {
+  const mass = Math.max(0, massTh)
+  if (mass <= 0) return 0
+  return Object.entries(phaseWeightPct).reduce((sum, [key, pct]) => {
+    const molarMass = GAS_PHASE_MOLAR_MASS[key] ?? GAS_PHASE_MOLAR_MASS.Other
+    if (molarMass <= 0) return sum
+    const phaseMass = (mass * Math.max(0, pct ?? 0)) / 100
+    return sum + (phaseMass * 1000 * STANDARD_GAS_MOLAR_VOLUME_NM3_PER_KMOL) / molarMass
+  }, 0)
 }
 
 const PHASE_TO_ELEMENT_MASS: Record<string, Partial<Record<CopperElementKey, (mass: number) => number>>> = {

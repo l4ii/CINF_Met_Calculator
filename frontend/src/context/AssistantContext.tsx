@@ -14,7 +14,7 @@ export type AssistantWorkspaceSnapshot = {
   currentView: 'module' | 'about' | 'settings'
   aboutDepartment: string | null
   language: 'zh' | 'en'
-  selectedMethod: Pick<SelectedMethod, 'smeltTypeName' | 'smeltMethodName'> | null
+  selectedMethod: Pick<SelectedMethod, 'smeltTypeName' | 'sectionName' | 'smeltMethodName'> | null
   activeSheet: SheetId
   /** 简要工况（避免把整个配料表塞进上下文） */
   materialCount: number

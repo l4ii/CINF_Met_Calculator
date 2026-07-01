@@ -693,14 +693,36 @@ export function dryPercentToWetBasis(dryPercent: number, moisturePercent: number
 
 export const DEFAULT_COPPER_OXYGEN_AIR_SETTINGS = { oxygenPct: 99.65, nitrogenPct: 0.35 } as const
 
-const STANDARD_AIR_RATIOS = { 'H(氢)': 0.19, 'O(氧)': 24.41, 'N(氮)': 75.4, 'Other(其他)': 0 } as const
+export const DEFAULT_STANDARD_AIR_PHASE_COMPOSITION = {
+  weightPct: { O2: 22.89, N2: 75.4, H2O: 1.71 },
+  volumePct: { O2: 20.43, N2: 76.86, H2O: 2.71 },
+} as const
+
+const STANDARD_AIR_DRY_WEIGHT_PCT =
+  DEFAULT_STANDARD_AIR_PHASE_COMPOSITION.weightPct.O2 +
+  DEFAULT_STANDARD_AIR_PHASE_COMPOSITION.weightPct.N2
+const STANDARD_AIR_DRY_BASIS_MOISTURE =
+  STANDARD_AIR_DRY_WEIGHT_PCT > 0
+    ? (DEFAULT_STANDARD_AIR_PHASE_COMPOSITION.weightPct.H2O / STANDARD_AIR_DRY_WEIGHT_PCT) * 100
+    : 0
+
+const STANDARD_AIR_RATIOS = {
+  'H(氢)': 0,
+  'O(氧)': (DEFAULT_STANDARD_AIR_PHASE_COMPOSITION.weightPct.O2 / STANDARD_AIR_DRY_WEIGHT_PCT) * 100,
+  'N(氮)': (DEFAULT_STANDARD_AIR_PHASE_COMPOSITION.weightPct.N2 / STANDARD_AIR_DRY_WEIGHT_PCT) * 100,
+  'Other(其他)': 0,
+} as const
 const DEFAULT_OXYGEN_RATIOS = {
   'O(氧)': DEFAULT_COPPER_OXYGEN_AIR_SETTINGS.oxygenPct,
   'N(氮)': DEFAULT_COPPER_OXYGEN_AIR_SETTINGS.nitrogenPct,
   'Other(其他)': 0,
 } as const
 
-const LEGACY_STANDARD_AIR_RATIOS = [{ 'H(氢)': 0, 'O(氧)': 21, 'N(氮)': 79, 'C (碳)': 0, 'Other(其他)': 0 }] as const
+const LEGACY_STANDARD_AIR_RATIOS = [
+  { 'H(氢)': 0, 'O(氧)': 21, 'N(氮)': 79, 'C (碳)': 0, 'Other(其他)': 0 },
+  { 'H(氢)': 0, 'O(氧)': 24.456, 'N(氮)': 75.544, 'Other(其他)': 0 },
+  { 'H(氢)': 0.19, 'O(氧)': 24.41, 'N(氮)': 75.4, 'Other(其他)': 0 },
+] as const
 const LEGACY_OXYGEN_RATIOS = [
   { 'H(氢)': 0, 'O(氧)': 100, 'N(氮)': 0, 'C (碳)': 0, 'Other(其他)': 0 },
   { 'H(氢)': 0, 'O(氧)': 70, 'N(氮)': 30, 'C (碳)': 0, 'Other(其他)': 0 },
@@ -766,6 +788,7 @@ function createStandardAirColumn(
     kind: 'gas',
     airRole,
     weight: Math.max(0, weight),
+    moisture: STANDARD_AIR_DRY_BASIS_MOISTURE,
     ratios: { ...emptyCopperRatios(), ...ratios },
     unitPrice: 0,
   }

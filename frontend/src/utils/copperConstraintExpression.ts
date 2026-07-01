@@ -85,6 +85,7 @@ const FORMULA_CONSTANTS: Record<string, number> = {
   Hg: atomicMass('Hg'),
   O2: COMPOUND_MOLAR_MASS.O2,
   N2: COMPOUND_MOLAR_MASS.N2,
+  H2O: 2 * atomicMass('H') + atomicMass('O'),
   SO2: COMPOUND_MOLAR_MASS.SO2,
   CO2: COMPOUND_MOLAR_MASS.CO2,
   SiO2: COMPOUND_MOLAR_MASS.SiO2,

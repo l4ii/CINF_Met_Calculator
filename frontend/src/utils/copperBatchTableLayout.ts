@@ -692,9 +692,15 @@ export function computeProductResultTableLayout(params: {
   labelSamples: string[]
   productHeaders: string[]
   containerWidth?: number
+  totalSamples?: Array<string | number>
 }): BatchTableColLayout {
   const labelWidth = batchTableDataColWidth('项目', params.labelSamples, false)
-  const totalWidth = BATCH_TABLE_ASSIST_TOTAL_COL_MIN
+  const totalWidth = params.totalSamples?.length
+    ? Math.max(
+        BATCH_TABLE_ASSIST_TOTAL_COL_MIN,
+        batchTableDataColWidth('Nm³/h', params.totalSamples, false)
+      )
+    : BATCH_TABLE_ASSIST_TOTAL_COL_MIN
   const productColWidths = params.productHeaders.map((header) =>
     batchTableDataColWidth(header, [], false)
   )

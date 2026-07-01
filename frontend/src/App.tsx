@@ -161,6 +161,13 @@ function App() {
     setAboutDepartment(null)
   }
 
+  const handleBackToHome = () => {
+    setSelectedMethod(null)
+    setActiveSheet('raw_material')
+    setCurrentView('module')
+    setAboutDepartment(null)
+  }
+
   if (licenseGate === 'blocked') {
     return <LicenseActivation language={language} onActivated={() => setLicenseGate('ok')} />
   }
@@ -177,7 +184,6 @@ function App() {
             <div className="group fixed inset-y-0 left-0 z-40 w-[292px] -translate-x-[270px] transition-transform duration-300 ease-out hover:translate-x-0 focus-within:translate-x-0">
               <Sidebar
                 selectedMethod={selectedMethod}
-                activeSheet={activeSheet}
                 onMethodSelect={handleMethodSelect}
                 onSheetSelect={setActiveSheet}
                 darkMode={darkMode}
@@ -199,7 +205,6 @@ function App() {
           ) : (
             <Sidebar
               selectedMethod={selectedMethod}
-              activeSheet={activeSheet}
               onMethodSelect={handleMethodSelect}
               onSheetSelect={setActiveSheet}
               darkMode={darkMode}
@@ -221,6 +226,7 @@ function App() {
             onDarkModeChange={setDarkMode}
             onLanguageChange={setLanguage}
             onSheetSelect={setActiveSheet}
+            onBackToHome={handleBackToHome}
           />
           <AssistantPanel darkMode={darkMode} language={language} onSheetSelect={setActiveSheet} />
         </div>

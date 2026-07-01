@@ -22,16 +22,16 @@ export const APP_EXPORT_FILENAME_PREFIX = 'CINF-MetBatch'
 /** 离线授权码行首（与 electron/license.js、scripts/issue-offline-license.js 一致；与 Flow 的 CINF-LIC1. 区分） */
 export const LICENSE_TOKEN_PREFIX = 'CINF-MET-LIC1.'
 
-export const APP_TAGLINE_ZH = '基于能量守恒与质量守恒定律的专业冶金配料计算工具。'
+export const APP_TAGLINE_ZH = '面向冶金工程的配料、设备选型与三维设计一体化智能平台。'
 export const APP_TAGLINE_MAIN_EN =
-  'Professional Metallurgical Batching Tool Based on Mass-Energy Balance.'
+  'Integrated intelligent platform for batching, equipment selection, and 3D design.'
 
-export const APP_TAGLINE_SIDEBAR_ZH = '专业冶金配料计算工具'
-export const APP_TAGLINE_SIDEBAR_EN = 'Professional metallurgical batching tool'
+export const APP_TAGLINE_SIDEBAR_ZH = '配料-选型-三维设计一体化智能平台'
+export const APP_TAGLINE_SIDEBAR_EN = 'Batching · Sizing · 3D Design Platform'
 
 /** 侧栏中文副标题两行（与 Flow 侧栏版式一致；由单行语义拆分） */
-export const APP_TAGLINE_SIDEBAR_ZH_LINE1 = '专业冶金配料'
-export const APP_TAGLINE_SIDEBAR_ZH_LINE2 = '计算工具'
+export const APP_TAGLINE_SIDEBAR_ZH_LINE1 = '配料-选型-三维设计'
+export const APP_TAGLINE_SIDEBAR_ZH_LINE2 = '一体化智能平台'
 
 /** 设置页：免责声明 / 隐私 / 智能助手说明 */
 export const SETTINGS_LEGAL = {

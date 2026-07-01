@@ -11,7 +11,7 @@ import {
   type CopperPhaseInput,
   type CopperRatios,
 } from './copperWorkflowCalc.ts'
-import { COMPOUND_MOLAR_MASS } from './atomicMass.ts'
+import { atomicMass, COMPOUND_MOLAR_MASS } from './atomicMass.ts'
 import { formulaToDisplayLabel } from './chemicalFormula.ts'
 import { COPPER_BUILTIN_PHASE_FRACTIONS } from './copperPhaseStoichiometry.ts'
 import { buildInputPhaseRowKeys } from './copperDisplayOrder.ts'
@@ -186,24 +186,24 @@ export function buildBlendPhaseColumn(
 
 export type FurnaceBlendPhaseColumnInput =
   | { weight: number; phases: PhasePercentMap; moisture?: number; waterWeight?: number }
-  | { weight: number; oxygenWeightPct: { O2: number; N2: number } }
+  | { weight: number; oxygenWeightPct: { O2: number; N2: number; H2O?: number } }
 
 /** 入炉混料物相：原料 + 熔剂 + 燃料 + 富氧空气按非水质量加权（含 O₂/N₂ 行） */
 export function buildFurnaceBlendPhaseColumn(columns: FurnaceBlendPhaseColumnInput[]): {
   phases: PhasePercentMap
-  gasWeightPct: { O2: number; N2: number }
+  gasWeightPct: { O2: number; N2: number; H2O: number }
   moisture: number
 } {
   const active = columns.filter((column) => column.weight > 0)
   const solidColumns = active.filter((column): column is Extract<FurnaceBlendPhaseColumnInput, { phases: PhasePercentMap }> => 'phases' in column)
-  const gasColumns = active.filter((column): column is Extract<FurnaceBlendPhaseColumnInput, { oxygenWeightPct: { O2: number; N2: number } }> => 'oxygenWeightPct' in column)
+  const gasColumns = active.filter((column): column is Extract<FurnaceBlendPhaseColumnInput, { oxygenWeightPct: { O2: number; N2: number; H2O?: number } }> => 'oxygenWeightPct' in column)
   const solidWeight = solidColumns.reduce((sum, column) => sum + Math.max(0, column.weight), 0)
   const gasWeight = gasColumns.reduce((sum, column) => sum + Math.max(0, column.weight), 0)
   const nonWaterWeight = solidWeight + gasWeight
   if (nonWaterWeight <= 0) {
     return {
       phases: Object.fromEntries(INPUT_PHASE_ROW_KEYS.map((key) => [key, 0])) as PhasePercentMap,
-      gasWeightPct: { O2: 0, N2: 0 },
+      gasWeightPct: { O2: 0, N2: 0, H2O: 0 },
       moisture: 0,
     }
   }
@@ -220,11 +220,13 @@ export function buildFurnaceBlendPhaseColumn(columns: FurnaceBlendPhaseColumnInp
 
   let o2Sum = 0
   let n2Sum = 0
+  let gasWaterSum = 0
   let moistureSum = 0
   for (const column of active) {
     if ('oxygenWeightPct' in column) {
       o2Sum += column.weight * Math.max(0, column.oxygenWeightPct.O2)
       n2Sum += column.weight * Math.max(0, column.oxygenWeightPct.N2)
+      gasWaterSum += column.weight * Math.max(0, column.oxygenWeightPct.H2O ?? 0)
     } else {
       const water = materialWaterWeight({
         weight: column.weight,
@@ -237,25 +239,31 @@ export function buildFurnaceBlendPhaseColumn(columns: FurnaceBlendPhaseColumnInp
 
   return {
     phases,
-    gasWeightPct: { O2: o2Sum / nonWaterWeight, N2: n2Sum / nonWaterWeight },
+    gasWeightPct: { O2: o2Sum / nonWaterWeight, N2: n2Sum / nonWaterWeight, H2O: gasWaterSum / nonWaterWeight },
     moisture: moistureSum / Math.max(solidWeight, 1e-12),
   }
 }
 
-export function buildOxygenAirPhaseColumn(ratios: CopperRatios) {
-  const o2Pct = Math.max(0, ratios['O(氧)'] ?? 0)
-  const n2Pct = Math.max(0, ratios['N(氮)'] ?? 0)
-  const total = o2Pct + n2Pct
-  const o2 = total > 0 ? o2Pct : 0
-  const n2 = total > 0 ? n2Pct : 0
-  const oMoles = o2 / COMPOUND_MOLAR_MASS.O2
-  const nMoles = n2 / COMPOUND_MOLAR_MASS.N2
-  const moleTotal = oMoles + nMoles
+export function buildOxygenAirPhaseColumn(ratios: CopperRatios, dryWeight = 100, waterWeight = 0) {
+  const dry = Math.max(0, dryWeight)
+  const water = Math.max(0, waterWeight)
+  const o2Mass = dry * Math.max(0, ratios['O(氧)'] ?? 0) / 100
+  const n2Mass = dry * Math.max(0, ratios['N(氮)'] ?? 0) / 100
+  const totalMass = o2Mass + n2Mass + water
+  const o2 = totalMass > 0 ? (o2Mass / totalMass) * 100 : 0
+  const n2 = totalMass > 0 ? (n2Mass / totalMass) * 100 : 0
+  const h2o = totalMass > 0 ? (water / totalMass) * 100 : 0
+  const h2oMolarMass = 2 * atomicMass('H') + atomicMass('O')
+  const oMoles = o2Mass / COMPOUND_MOLAR_MASS.O2
+  const nMoles = n2Mass / COMPOUND_MOLAR_MASS.N2
+  const h2oMoles = water / h2oMolarMass
+  const moleTotal = oMoles + nMoles + h2oMoles
   return {
-    weightPct: { O2: o2, N2: n2 },
+    weightPct: { O2: o2, N2: n2, H2O: h2o },
     volumePct: {
       O2: moleTotal > 0 ? (oMoles / moleTotal) * 100 : 0,
       N2: moleTotal > 0 ? (nMoles / moleTotal) * 100 : 0,
+      H2O: moleTotal > 0 ? (h2oMoles / moleTotal) * 100 : 0,
     },
   }
 }

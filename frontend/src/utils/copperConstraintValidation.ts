@@ -76,6 +76,15 @@ function expandAllowedPoolKeys(config: OxySideBlowConstraintConfig, productKey: 
 }
 
 export function productCanCarryConstraintElement(
+  _config: OxySideBlowConstraintConfig,
+  _productKey: OxySideBlowProductKey,
+  constraintElement: ConstraintElementKey
+): boolean {
+  if (CONSTRAINT_PLACEHOLDER_ELEMENTS.has(constraintElement)) return false
+  return true
+}
+
+export function productHasConstraintElementCarrier(
   config: OxySideBlowConstraintConfig,
   productKey: OxySideBlowProductKey,
   constraintElement: ConstraintElementKey

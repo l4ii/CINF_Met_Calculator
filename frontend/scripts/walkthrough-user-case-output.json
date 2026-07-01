@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-06-22T07:42:52.298Z",
+  "generatedAt": "2026-06-30T02:57:20.728Z",
   "inputs": {
     "materials": [
       {
@@ -693,12 +693,12 @@
       "mass": 5.73
     },
     "secondaryAir": {
-      "formula": "O₂_mol = CuFeS2.S/4 + FeS2.S/2×0.7 + 煤.C×0.7；二次风 = O₂_mol×1.02×M_O / w_O(二次风)",
+      "formula": "O₂_mol = (CuFeS2.S/4 + FeS2.S/2×0.7)/S + 煤.C/C×0.7；二次风 = O₂_mol×1.02×M_O / w_O(二次风)",
       "cuFeS2MassTh": 120.3974,
       "feS2MassTh": 1.504,
       "fuelCarbonMassTh": 1.605,
       "oxygenMolesTarget": 0.6041,
-      "secondaryAirMassTh": 28.7693
+      "secondaryAirMassTh": 30.155
     },
     "matteGmc": {
       "gmc": 75,
@@ -715,9 +715,9 @@
   "chapter6_solver": {
     "valid": true,
     "converged": true,
-    "iterations": 30,
-    "equationCount": 97,
-    "objectiveEquationCount": 97,
+    "iterations": 22,
+    "equationCount": 99,
+    "objectiveEquationCount": 99,
     "equations": [
       {
         "id": "W:Cu(铜):smeltingSlag",
@@ -994,13 +994,13 @@
       {
         "id": "custom:2",
         "kind": "custom",
-        "expr": "55. (Input.二次风.O2 / O) / ((Input.混合铜精矿.CuFeS2.S / S / 4) + (Input.混合铜精矿.FeS2.S / S / 2) * 0.7 + Input.煤.C / C * 0.7) = 1.02",
+        "expr": "55. (Input.二次风.O2 / O) / (((Input.混合铜精矿.CuFeS2.S / 4) + (Input.混合铜精矿.FeS2.S / 2) * 0.7) / S + Input.煤.C / C * 0.7) = 1.02",
         "soft": false
       },
       {
         "id": "custom:3",
         "kind": "custom",
-        "expr": "56. ((Input.空气.O2 + Input.氧气.O2) / O * 22.4) / (Input.空气 + Input.氧气) = 0.85",
+        "expr": "56. (Input.空气.O2 / O2 + Input.氧气.O2 / O2) / (Input.空气.O2 / O2 + Input.空气.N2 / N2 + Input.空气.H2O / H2O + Input.氧气.O2 / O2 + Input.氧气.N2 / N2 + Input.氧气.H2O / H2O) = 0.85",
         "soft": false
       },
       {
@@ -1042,183 +1042,195 @@
       {
         "id": "custom:10",
         "kind": "custom",
-        "expr": "63. OutputE.白铜锍.S / ((-0.125 * 75 / 100 + 0.292) * Output.白铜锍) = 1",
+        "expr": "63. Output.烟气含尘.PbS / Output.烟气含尘 = 0",
         "soft": false
       },
       {
         "id": "custom:11",
         "kind": "custom",
-        "expr": "64. OutputE.白铜锍.Fe / ((-0.825 * 75 / 100 + 0.633) * Output.白铜锍) = 1",
+        "expr": "64. Output.烟气含尘.ZnS / Output.烟气含尘 = 0",
         "soft": false
       },
       {
         "id": "custom:12",
         "kind": "custom",
-        "expr": "65. Output.熔炼出炉烟气.As2O3.As / (Output.熔炼出炉烟气.As2O3.As + Output.烟气含尘.As2O3.As) = 0.6",
+        "expr": "65. OutputE.白铜锍.S / ((-0.125 * 75 / 100 + 0.292) * Output.白铜锍) = 1",
+        "soft": false
+      },
+      {
+        "id": "custom:13",
+        "kind": "custom",
+        "expr": "66. OutputE.白铜锍.Fe / ((-0.825 * 75 / 100 + 0.633) * Output.白铜锍) = 1",
+        "soft": false
+      },
+      {
+        "id": "custom:14",
+        "kind": "custom",
+        "expr": "67. Output.熔炼出炉烟气.As2O3.As / (Output.熔炼出炉烟气.As2O3.As + Output.烟气含尘.As2O3.As) = 0.6",
         "soft": false
       },
       {
         "id": "balance:Cu(铜)",
         "kind": "balance",
-        "expr": "66. Σ(OutputE.六产物.Cu(铜)) = Input.总投入.Cu(铜)"
+        "expr": "68. Σ(OutputE.六产物.Cu(铜)) = Input.总投入.Cu(铜)"
       },
       {
         "id": "balance:S (硫)",
         "kind": "balance",
-        "expr": "67. Σ(OutputE.六产物.S (硫)) = Input.总投入.S (硫)"
+        "expr": "69. Σ(OutputE.六产物.S (硫)) = Input.总投入.S (硫)"
       },
       {
         "id": "balance:Fe(铁)",
         "kind": "balance",
-        "expr": "68. Σ(OutputE.六产物.Fe(铁)) = Input.总投入.Fe(铁)"
+        "expr": "70. Σ(OutputE.六产物.Fe(铁)) = Input.总投入.Fe(铁)"
       },
       {
         "id": "balance:FeO(氧化亚铁)",
         "kind": "balance",
-        "expr": "69. Σ(OutputE.六产物.FeO(氧化亚铁)) = Input.总投入.FeO(氧化亚铁)"
+        "expr": "71. Σ(OutputE.六产物.FeO(氧化亚铁)) = Input.总投入.FeO(氧化亚铁)"
       },
       {
         "id": "balance:SiO₂(二氧化硅)",
         "kind": "balance",
-        "expr": "70. Σ(OutputE.六产物.SiO₂(二氧化硅)) = Input.总投入.SiO₂(二氧化硅)"
+        "expr": "72. Σ(OutputE.六产物.SiO₂(二氧化硅)) = Input.总投入.SiO₂(二氧化硅)"
       },
       {
         "id": "balance:CaO(氧化钙)",
         "kind": "balance",
-        "expr": "71. Σ(OutputE.六产物.CaO(氧化钙)) = Input.总投入.CaO(氧化钙)"
+        "expr": "73. Σ(OutputE.六产物.CaO(氧化钙)) = Input.总投入.CaO(氧化钙)"
       },
       {
         "id": "balance:MgO(氧化镁)",
         "kind": "balance",
-        "expr": "72. Σ(OutputE.六产物.MgO(氧化镁)) = Input.总投入.MgO(氧化镁)"
+        "expr": "74. Σ(OutputE.六产物.MgO(氧化镁)) = Input.总投入.MgO(氧化镁)"
       },
       {
         "id": "balance:Ag(银)",
         "kind": "balance",
-        "expr": "73. Σ(OutputE.六产物.Ag(银)) = Input.总投入.Ag(银)"
+        "expr": "75. Σ(OutputE.六产物.Ag(银)) = Input.总投入.Ag(银)"
       },
       {
         "id": "balance:Au(金)",
         "kind": "balance",
-        "expr": "74. Σ(OutputE.六产物.Au(金)) = Input.总投入.Au(金)"
+        "expr": "76. Σ(OutputE.六产物.Au(金)) = Input.总投入.Au(金)"
       },
       {
         "id": "balance:Pb(铅)",
         "kind": "balance",
-        "expr": "75. Σ(OutputE.六产物.Pb(铅)) = Input.总投入.Pb(铅)"
+        "expr": "77. Σ(OutputE.六产物.Pb(铅)) = Input.总投入.Pb(铅)"
       },
       {
         "id": "balance:As(砷)",
         "kind": "balance",
-        "expr": "76. Σ(OutputE.六产物.As(砷)) = Input.总投入.As(砷)"
+        "expr": "78. Σ(OutputE.六产物.As(砷)) = Input.总投入.As(砷)"
       },
       {
         "id": "balance:Zn(锌)",
         "kind": "balance",
-        "expr": "77. Σ(OutputE.六产物.Zn(锌)) = Input.总投入.Zn(锌)"
+        "expr": "79. Σ(OutputE.六产物.Zn(锌)) = Input.总投入.Zn(锌)"
       },
       {
         "id": "balance:Al₂O₃(三氧化二铝)",
         "kind": "balance",
-        "expr": "78. Σ(OutputE.六产物.Al₂O₃(三氧化二铝)) = Input.总投入.Al₂O₃(三氧化二铝)"
+        "expr": "80. Σ(OutputE.六产物.Al₂O₃(三氧化二铝)) = Input.总投入.Al₂O₃(三氧化二铝)"
       },
       {
         "id": "balance:Sb(锑)",
         "kind": "balance",
-        "expr": "79. Σ(OutputE.六产物.Sb(锑)) = Input.总投入.Sb(锑)"
+        "expr": "81. Σ(OutputE.六产物.Sb(锑)) = Input.总投入.Sb(锑)"
       },
       {
         "id": "balance:Ni(镍)",
         "kind": "balance",
-        "expr": "80. Σ(OutputE.六产物.Ni(镍)) = Input.总投入.Ni(镍)"
+        "expr": "82. Σ(OutputE.六产物.Ni(镍)) = Input.总投入.Ni(镍)"
       },
       {
         "id": "balance:Se(硒)",
         "kind": "balance",
-        "expr": "81. Σ(OutputE.六产物.Se(硒)) = Input.总投入.Se(硒)"
+        "expr": "83. Σ(OutputE.六产物.Se(硒)) = Input.总投入.Se(硒)"
       },
       {
         "id": "balance:Bi(铋)",
         "kind": "balance",
-        "expr": "82. Σ(OutputE.六产物.Bi(铋)) = Input.总投入.Bi(铋)"
+        "expr": "84. Σ(OutputE.六产物.Bi(铋)) = Input.总投入.Bi(铋)"
       },
       {
         "id": "balance:Hg(汞)",
         "kind": "balance",
-        "expr": "83. Σ(OutputE.六产物.Hg(汞)) = Input.总投入.Hg(汞)"
+        "expr": "85. Σ(OutputE.六产物.Hg(汞)) = Input.总投入.Hg(汞)"
       },
       {
         "id": "balance:Sn(锡)",
         "kind": "balance",
-        "expr": "84. Σ(OutputE.六产物.Sn(锡)) = Input.总投入.Sn(锡)"
+        "expr": "86. Σ(OutputE.六产物.Sn(锡)) = Input.总投入.Sn(锡)"
       },
       {
         "id": "balance:Te(碲)",
         "kind": "balance",
-        "expr": "85. Σ(OutputE.六产物.Te(碲)) = Input.总投入.Te(碲)"
+        "expr": "87. Σ(OutputE.六产物.Te(碲)) = Input.总投入.Te(碲)"
       },
       {
         "id": "balance:Cd(镉)",
         "kind": "balance",
-        "expr": "86. Σ(OutputE.六产物.Cd(镉)) = Input.总投入.Cd(镉)"
+        "expr": "88. Σ(OutputE.六产物.Cd(镉)) = Input.总投入.Cd(镉)"
       },
       {
         "id": "balance:H(氢)",
         "kind": "balance",
-        "expr": "87. Σ(OutputE.六产物.H(氢)) = Input.总投入.H(氢)"
+        "expr": "89. Σ(OutputE.六产物.H(氢)) = Input.总投入.H(氢)"
       },
       {
         "id": "balance:O(氧)",
         "kind": "balance",
-        "expr": "88. Σ(OutputE.六产物.O(氧)) = Input.总投入.O(氧)"
+        "expr": "90. Σ(OutputE.六产物.O(氧)) = Input.总投入.O(氧)"
       },
       {
         "id": "balance:N(氮)",
         "kind": "balance",
-        "expr": "89. Σ(OutputE.六产物.N(氮)) = Input.总投入.N(氮)"
+        "expr": "91. Σ(OutputE.六产物.N(氮)) = Input.总投入.N(氮)"
       },
       {
         "id": "balance:C (碳)",
         "kind": "balance",
-        "expr": "90. Σ(OutputE.六产物.C (碳)) = Input.总投入.C (碳)"
+        "expr": "92. Σ(OutputE.六产物.C (碳)) = Input.总投入.C (碳)"
       },
       {
         "id": "balance:Other(其他)",
         "kind": "balance",
-        "expr": "91. Σ(OutputE.六产物.Other(其他)) = Input.总投入.Other(其他)"
+        "expr": "93. Σ(OutputE.六产物.Other(其他)) = Input.总投入.Other(其他)"
       },
       {
         "id": "product_element_closure:smeltingSlag",
         "kind": "product_element_closure",
-        "expr": "92. Σ(OutputE.熔炼渣.所有元素) = Output.熔炼渣（元素w%合计=100%）"
+        "expr": "94. Σ(OutputE.熔炼渣.所有元素) = Output.熔炼渣（元素w%合计=100%）"
       },
       {
         "id": "product_element_closure:matte",
         "kind": "product_element_closure",
-        "expr": "93. Σ(OutputE.白铜锍.所有元素) = Output.白铜锍（元素w%合计=100%）"
+        "expr": "95. Σ(OutputE.白铜锍.所有元素) = Output.白铜锍（元素w%合计=100%）"
       },
       {
         "id": "product_element_closure:flueGas",
         "kind": "product_element_closure",
-        "expr": "94. Σ(OutputE.熔炼出炉烟气.所有元素) = Output.熔炼出炉烟气（元素w%合计=100%）"
+        "expr": "96. Σ(OutputE.熔炼出炉烟气.所有元素) = Output.熔炼出炉烟气（元素w%合计=100%）"
       },
       {
         "id": "product_element_closure:dust",
         "kind": "product_element_closure",
-        "expr": "95. Σ(OutputE.烟气含尘.所有元素) = Output.烟气含尘（元素w%合计=100%）"
+        "expr": "97. Σ(OutputE.烟气含尘.所有元素) = Output.烟气含尘（元素w%合计=100%）"
       },
       {
         "id": "product_element_closure:fugitive",
         "kind": "product_element_closure",
-        "expr": "96. Σ(OutputE.无组织排放.所有元素) = Output.无组织排放（元素w%合计=100%）"
+        "expr": "98. Σ(OutputE.无组织排放.所有元素) = Output.无组织排放（元素w%合计=100%）"
       },
       {
         "id": "product_element_closure:loss",
         "kind": "product_element_closure",
-        "expr": "97. Σ(OutputE.损失.所有元素) = Output.损失（元素w%合计=100%）"
+        "expr": "99. Σ(OutputE.损失.所有元素) = Output.损失（元素w%合计=100%）"
       }
     ],
-    "totalProductMass": 374.29,
+    "totalProductMass": 336.05,
     "products": {
       "smeltingSlag": {
         "name": "熔炼渣",
@@ -1241,7 +1253,7 @@
           },
           {
             "key": "FeO",
-            "mass": 50.9536,
+            "mass": 50.9535,
             "pct": 40.851
           },
           {
@@ -1326,14 +1338,14 @@
           },
           {
             "key": "Other",
-            "mass": 12.0714,
+            "mass": 12.0713,
             "pct": 9.678
           }
         ],
         "elementMass": {
           "Cu(铜)": 2.4946,
           "S (硫)": 0.7484,
-          "O(氧)": 17.2921,
+          "O(氧)": 17.292,
           "Fe(铁)": 53.7438,
           "As(砷)": 0.0834,
           "Pb(铅)": 0.4376,
@@ -1350,7 +1362,7 @@
           "Cd(镉)": 0.0397,
           "Ag(银)": 0.0014,
           "Te(碲)": 0.002,
-          "Other(其他)": 12.0714
+          "Other(其他)": 12.0713
         },
         "composition": {
           "Cu(铜)": 2,
@@ -1381,17 +1393,17 @@
         "phases": [
           {
             "key": "Cu2S",
-            "mass": 53.4029,
+            "mass": 53.4028,
             "pct": 93.923
           },
           {
             "key": "FeS",
-            "mass": 1.1125,
+            "mass": 1.1124,
             "pct": 1.957
           },
           {
             "key": "Fe3O4",
-            "mass": 0.143,
+            "mass": 0.1431,
             "pct": 0.252
           },
           {
@@ -1461,10 +1473,10 @@
           }
         ],
         "elementMass": {
-          "Cu(铜)": 42.6437,
+          "Cu(铜)": 42.6436,
           "S (硫)": 11.2721,
           "Fe(铁)": 0.8102,
-          "O(氧)": 0.0395,
+          "O(氧)": 0.0396,
           "Ni(镍)": 0.0266,
           "Pb(铅)": 0.3454,
           "Zn(锌)": 0.4464,
@@ -1501,54 +1513,54 @@
       },
       "flueGas": {
         "name": "熔炼出炉烟气",
-        "mass": 189.67,
+        "mass": 151.43,
         "phases": [
           {
             "key": "SO2",
-            "mass": 88.5081,
-            "pct": 46.664
+            "mass": 88.5169,
+            "pct": 58.453
           },
           {
             "key": "CO2",
-            "mass": 8.2383,
-            "pct": 4.343
+            "mass": 2.3575,
+            "pct": 1.557
           },
           {
             "key": "O2",
-            "mass": 3.6458,
-            "pct": 1.922
+            "mass": 3.3499,
+            "pct": 2.212
           },
           {
             "key": "N2",
-            "mass": 67.6647,
-            "pct": 35.675
+            "mass": 36.3045,
+            "pct": 23.974
           },
           {
             "key": "H2O",
-            "mass": 21.3721,
-            "pct": 11.268
+            "mass": 20.6713,
+            "pct": 13.651
           },
           {
             "key": "As2O3",
             "mass": 0.2423,
-            "pct": 0.128
+            "pct": 0.16
           }
         ],
         "elementMass": {
-          "S (硫)": 44.301,
-          "O(氧)": 72.8819,
-          "C (碳)": 2.2484,
-          "N(氮)": 67.6647,
-          "H(氢)": 2.3917,
+          "S (硫)": 44.3054,
+          "O(氧)": 67.6923,
+          "C (碳)": 0.6434,
+          "N(氮)": 36.3045,
+          "H(氢)": 2.3133,
           "As(砷)": 0.1835
         },
         "composition": {
-          "S (硫)": 23.357,
-          "O(氧)": 38.426,
-          "C (碳)": 1.185,
-          "N(氮)": 35.675,
-          "H(氢)": 1.261,
-          "As(砷)": 0.097
+          "S (硫)": 29.258,
+          "O(氧)": 44.701,
+          "C (碳)": 0.425,
+          "N(氮)": 23.974,
+          "H(氢)": 1.528,
+          "As(砷)": 0.121
         }
       },
       "dust": {
@@ -1566,9 +1578,14 @@
             "pct": 3.862
           },
           {
+            "key": "FeS",
+            "mass": 0.0621,
+            "pct": 2.143
+          },
+          {
             "key": "FeO",
-            "mass": 0.3823,
-            "pct": 13.188
+            "mass": 0.3315,
+            "pct": 11.436
           },
           {
             "key": "Fe3O4",
@@ -1577,23 +1594,13 @@
           },
           {
             "key": "PbO",
-            "mass": 0.3728,
-            "pct": 12.859
-          },
-          {
-            "key": "PbS",
-            "mass": 0.0259,
-            "pct": 0.892
+            "mass": 0.3969,
+            "pct": 13.692
           },
           {
             "key": "ZnO",
-            "mass": 1.0163,
-            "pct": 35.056
-          },
-          {
-            "key": "ZnS",
-            "mass": 0.0584,
-            "pct": 2.013
+            "mass": 1.065,
+            "pct": 36.737
           },
           {
             "key": "SeO2",
@@ -1672,9 +1679,9 @@
         },
         "composition": {
           "Cu(铜)": 15.767,
-          "S (硫)": 3.895,
+          "S (硫)": 3.894,
           "O(氧)": 13.301,
-          "Fe(铁)": 10.408,
+          "Fe(铁)": 10.407,
           "Pb(铅)": 12.71,
           "Zn(锌)": 29.515,
           "Se(硒)": 0.154,
@@ -2197,117 +2204,117 @@
       "石英石": 12.4876
     },
     "gasWeights": {
-      "空气": 54.9789,
-      "氧气": 51.2528,
-      "二次风": 28.7693,
+      "空气": 11.1595,
+      "氧气": 56.2339,
+      "二次风": 30.1551,
       "加料口漏风": 5.73
     }
   },
   "chapter8_validation": {
-    "maxRelativeResidual": 0.000075,
+    "maxRelativeResidual": 0.000087,
     "constraintResiduals": [
       {
-        "expr": "D% S (硫) → 烟气含尘 = 0.2%",
-        "value": 0.000008,
-        "target": 0,
-        "residual": 0.000008,
-        "relativeResidual": 0.000075
-      },
-      {
-        "expr": "D% Fe(铁) → 烟气含尘 = 0.55%",
-        "value": 0.000015,
-        "target": 0,
-        "residual": 0.000015,
-        "relativeResidual": 0.000049
-      },
-      {
         "expr": "元素守恒 S (硫)",
-        "value": 0.000543,
+        "value": 0.00489,
         "target": 0,
-        "residual": 0.000543,
-        "relativeResidual": 0.00001
+        "residual": 0.00489,
+        "relativeResidual": 0.000087
       },
       {
         "expr": "元素守恒 O(氧)",
-        "value": 0.000801,
+        "value": 0.006533,
         "target": 0,
-        "residual": 0.000801,
-        "relativeResidual": 0.000009
-      },
-      {
-        "expr": "产物元素闭合 烟气含尘：Σ元素 = 产物总量（w%合计=100%）",
-        "value": 0.000023,
-        "target": 0,
-        "residual": 0.000023,
-        "relativeResidual": 0.000008
+        "residual": 0.006533,
+        "relativeResidual": 0.000076
       },
       {
         "expr": "产物元素闭合 熔炼出炉烟气：Σ元素 = 产物总量（w%合计=100%）",
-        "value": 0.001336,
+        "value": 0.010343,
         "target": 0,
-        "residual": 0.001336,
-        "relativeResidual": 0.000007
+        "residual": 0.010343,
+        "relativeResidual": 0.000068
       },
       {
-        "expr": "Output.烟气含尘.Fe3O4.Fe / Output.烟气含尘.Fe",
-        "value": 0.014999,
-        "target": 0.015,
-        "residual": -0.000001,
+        "expr": "Output.熔炼出炉烟气.O2 / (Input.空气.O2 + Input.氧气.O2 + Input.二次风.O2 + Input.加料口漏风.O2)",
+        "value": 0.050004,
+        "target": 0.05,
+        "residual": 0.000004,
+        "relativeResidual": 0.000004
+      },
+      {
+        "expr": "(Input.空气.O2 / O2 + Input.氧气.O2 / O2) / (Input.空气.O2 / O2 + Input.空气.N2 / N2 + Input.空气.H2O / H2O + Input.氧气.O2 / O2 + Input.氧气.N2 / N2 + Input.氧气.H2O / H2O)",
+        "value": 0.849997,
+        "target": 0.85,
+        "residual": -0.000003,
+        "relativeResidual": 0.000003
+      },
+      {
+        "expr": "OutputE.白铜锍.S / ((-0.125 * 75 / 100 + 0.292) * Output.白铜锍)",
+        "value": 0.999998,
+        "target": 1,
+        "residual": -0.000002,
+        "relativeResidual": 0.000002
+      },
+      {
+        "expr": "元素守恒 Cu(铜)",
+        "value": -0.000079,
+        "target": 0,
+        "residual": -0.000079,
+        "relativeResidual": 0.000002
+      },
+      {
+        "expr": "元素守恒 N(氮)",
+        "value": 0.000053,
+        "target": 0,
+        "residual": 0.000053,
+        "relativeResidual": 0.000001
+      },
+      {
+        "expr": "产物元素闭合 熔炼渣：Σ元素 = 产物总量（w%合计=100%）",
+        "value": 0.000117,
+        "target": 0,
+        "residual": 0.000117,
+        "relativeResidual": 0.000001
+      },
+      {
+        "expr": "W% Cu(铜) @ 白铜锍 = 75%",
+        "value": 0.00004,
+        "target": 0,
+        "residual": 0.00004,
+        "relativeResidual": 0.000001
+      },
+      {
+        "expr": "产物元素闭合 白铜锍：Σ元素 = 产物总量（w%合计=100%）",
+        "value": 0.000053,
+        "target": 0,
+        "residual": 0.000053,
+        "relativeResidual": 0.000001
+      },
+      {
+        "expr": "(Input.二次风.O2 / O) / (((Input.混合铜精矿.CuFeS2.S / 4) + (Input.混合铜精矿.FeS2.S / 2) * 0.7) / S + Input.煤.C / C * 0.7)",
+        "value": 1.020001,
+        "target": 1.02,
+        "residual": 0.000001,
         "relativeResidual": 0.000001
       },
       {
         "expr": "元素守恒 Fe(铁)",
-        "value": 0.000015,
+        "value": -0.000033,
         "target": 0,
-        "residual": 0.000015,
+        "residual": -0.000033,
+        "relativeResidual": 0.000001
+      },
+      {
+        "expr": "OutputE.熔炼渣.Fe / (OutputE.熔炼渣.Si / Si * SiO2)",
+        "value": 2.000001,
+        "target": 2,
+        "residual": 0.000001,
         "relativeResidual": 0
       },
       {
-        "expr": "((Input.空气.O2 + Input.氧气.O2) / O * 22.4) / (Input.空气 + Input.氧气)",
-        "value": 0.85,
-        "target": 0.85,
-        "residual": 0,
-        "relativeResidual": 0
-      },
-      {
-        "expr": "Output.熔炼出炉烟气.O2 / (Input.空气.O2 + Input.氧气.O2 + Input.二次风.O2 + Input.加料口漏风.O2)",
-        "value": 0.05,
-        "target": 0.05,
-        "residual": 0,
-        "relativeResidual": 0
-      },
-      {
-        "expr": "元素守恒 N(氮)",
-        "value": 0,
-        "target": 0,
-        "residual": 0,
-        "relativeResidual": 0
-      },
-      {
-        "expr": "元素守恒 C (碳)",
-        "value": 0,
-        "target": 0,
-        "residual": 0,
-        "relativeResidual": 0
-      },
-      {
-        "expr": "(Input.二次风.O2 / O) / ((Input.混合铜精矿.CuFeS2.S / S / 4) + (Input.混合铜精矿.FeS2.S / S / 2) * 0.7 + Input.煤.C / C * 0.7)",
-        "value": 1.02,
-        "target": 1.02,
-        "residual": 0,
-        "relativeResidual": 0
-      },
-      {
-        "expr": "Output.熔炼渣.Fe3O4 / Output.熔炼渣",
-        "value": 0.15,
-        "target": 0.15,
-        "residual": 0,
-        "relativeResidual": 0
-      },
-      {
-        "expr": "元素守恒 Cu(铜)",
-        "value": 0,
-        "target": 0,
+        "expr": "Input.加料口漏风 / 5.73",
+        "value": 1,
+        "target": 1,
         "residual": 0,
         "relativeResidual": 0
       }

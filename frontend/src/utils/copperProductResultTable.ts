@@ -49,6 +49,9 @@ export function buildProductAllowedElementRows(
       union.add(el)
     }
   }
+  for (const entry of config.elementDistributions) {
+    if (!CONSTRAINT_PLACEHOLDER_ELEMENTS.has(entry.element)) union.add(entry.element)
+  }
   const ordered = sortOxyConstraintElementKeys(union)
   return ordered.map((constraintKey) => ({
     constraintKey,
@@ -57,12 +60,25 @@ export function buildProductAllowedElementRows(
   }))
 }
 
+function isElementConstrainedInProduct(
+  productKey: OxySideBlowProductKey,
+  constraintKey: ConstraintElementKey,
+  config: OxySideBlowConstraintConfig
+): boolean {
+  return config.elementDistributions.some(
+    (entry) => entry.element === constraintKey && entry.rules.some((rule) => rule.product === productKey)
+  )
+}
+
 export function isElementAllowedInProduct(
   productKey: OxySideBlowProductKey,
   constraintKey: ConstraintElementKey,
   config: OxySideBlowConstraintConfig
 ): boolean {
-  return resolveProductEffectiveAllowedElements(config, productKey).includes(constraintKey)
+  return (
+    resolveProductEffectiveAllowedElements(config, productKey).includes(constraintKey) ||
+    isElementConstrainedInProduct(productKey, constraintKey, config)
+  )
 }
 
 function compositionPercent(product: OxyProductResult, poolKeys: CopperElementKey[]): number {
@@ -141,7 +157,7 @@ export function buildProductResultPivotData(
   return rows
 }
 
-export function productResultColumnHeaders(config: OxySideBlowConstraintConfig): Array<{
+export function productResultColumnHeaders(_config: OxySideBlowConstraintConfig): Array<{
   key: OxySideBlowProductKey
   label: string
 }> {

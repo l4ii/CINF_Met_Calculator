@@ -7,10 +7,10 @@ import {
   useRef,
   useState,
   type DragEvent as ReactDragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type RefObject,
 } from 'react'
-import { flushSync } from 'react-dom'
 import type { SheetId } from '../../types'
 import { APP_NAME_ZH } from '../../constants/appCopy'
 import { btnPrimary, btnSecondary, cardBase, cardCompact, hintText, inputBase, inputSm, sectionTitle } from '../../theme/uiTheme'
@@ -31,7 +31,6 @@ import {
   batchTableNameColWidthFromLabels,
   computeLibraryDialogColWidths,
   computePhaseAssistTableLayout,
-  formatProductSharePercent,
 } from '../../utils/copperBatchTableLayout'
 import {
   OXY_PRODUCT_KEY_TO_CN,
@@ -44,9 +43,6 @@ import {
   type OxySideBlowConstraintConfig,
   type OxySideBlowProductKey,
 } from '../../utils/copperConstraintConfig.ts'
-import {
-  buildProductResultPivotData,
-} from '../../utils/copperProductResultTable.ts'
 import {
   autoFillOxyProductConstraintConfig,
   firstBlockingConstraintMessage,
@@ -178,7 +174,6 @@ import {
   COPPER_PRODUCT_KEYS,
   DEFAULT_COPPER_PRODUCT_MODEL,
   DEFAULT_COPPER_FUEL,
-  calculateCopperHeatBalance,
   calculateCopperProducts,
   normalizeCopperProductModel,
   type CopperFuelMaterial,
@@ -187,6 +182,13 @@ import {
   type CopperProductResult,
 } from '../../utils/copperProcessCalc'
 import {
+  calculateCopperHeatBalanceDetailed,
+  sourceMaterialFromColumn,
+  type CopperHeatBalanceResult,
+  type CopperHeatBalanceSourceMaterial,
+} from '../../utils/copperHeatBalance.ts'
+import {
+  classifyOxyConstraintAcceptance,
   parseConstraintExpression,
   solveOxySideBlowProducts,
   type OxyConstraintSolverResult,
@@ -196,6 +198,10 @@ import {
   oxyProductTableColumns,
   oxySolverToCopperProductResult,
 } from '../../utils/copperOxyProductBridge.ts'
+import {
+  validateOxySolverResultForFillBack,
+  validateRawMaterialPhaseInputs,
+} from '../../utils/copperOxySolverValidation.ts'
 import { CopperHeatBalancePlaceholderTables } from './CopperHeatBalancePlaceholderTables.tsx'
 import type { ProductElementTableProduct } from './CopperBatchProductElementTable.tsx'
 import { CopperProductionResultTable } from './CopperProductionResultTable.tsx'
@@ -548,11 +554,13 @@ interface CopperCaseRecord {
   manualPhaseCells: Record<string, boolean>
   manualSolventWeights: Record<string, boolean>
   manualFuelWeightValid: boolean
+  manualAirWeightValid?: boolean
   phaseCompleted: boolean
   productCalculated: boolean
   productFilledBack?: boolean
   productSolverResult?: OxyConstraintSolverResult | null
   heatBalanced: boolean
+  calculatedHeatBalance?: CopperHeatBalanceResult | null
   fuelLhv: string
   fuelEfficiency: string
   oxygenAirO2Pct: string
@@ -563,6 +571,7 @@ interface CopperCaseRecord {
   slagTemperature: string
   gasTemperature: string
   dustTemperature: string
+  lossTemperature: string
   heatLossMJh: string
   otherHeatMJh: string
   annualHours: string
@@ -917,14 +926,19 @@ function phaseTableColumnPhaseValue(column: PhaseTableColumn, key: string): numb
   if (column.kind === 'oxygen') {
     if (key === 'O2') return column.oxygenAir?.weightPct.O2 ?? 0
     if (key === 'N2') return column.oxygenAir?.weightPct.N2 ?? 0
+    if (key === 'H2O') return column.oxygenAir?.weightPct.H2O ?? 0
     return null
   }
   if (column.kind === 'product') {
+    if (column.productGasVolume && key in column.productGasVolume) {
+      return column.productGasVolume[key] ?? null
+    }
     return column.productPhases?.[key] ?? null
   }
   if (column.phaseReady === false) return null
   if (key === 'O2') return column.kind === 'blend' ? column.oxygenAir?.weightPct.O2 ?? 0 : null
   if (key === 'N2') return column.kind === 'blend' ? column.oxygenAir?.weightPct.N2 ?? 0 : null
+  if (key === 'H2O') return column.kind === 'blend' ? column.oxygenAir?.weightPct.H2O ?? 0 : null
   if (column.phaseContentsByKey && key in column.phaseContentsByKey) {
     return column.phaseContentsByKey[key] ?? 0
   }
@@ -942,9 +956,19 @@ function getPhaseExportValue(column: PhaseTableColumn, key: string) {
 function phaseExportColumnTotal(column: PhaseTableColumn) {
   if (column.phaseReady === false) return 0
   if (column.kind === 'oxygen') {
-    return (column.oxygenAir?.weightPct.O2 ?? 0) + (column.oxygenAir?.weightPct.N2 ?? 0)
+    return (
+      (column.oxygenAir?.weightPct.O2 ?? 0) +
+      (column.oxygenAir?.weightPct.N2 ?? 0) +
+      (column.oxygenAir?.weightPct.H2O ?? 0)
+    )
   }
   if (column.kind === 'product') {
+    if (column.productGasVolume) {
+      return Object.values(column.productGasVolume).reduce<number>(
+        (sum, value) => sum + (value ?? 0),
+        0,
+      )
+    }
     return Object.values(column.productPhases ?? {}).reduce<number>(
       (sum, value) => sum + (value ?? 0),
       0,
@@ -954,7 +978,12 @@ function phaseExportColumnTotal(column: PhaseTableColumn) {
     ? Object.values(column.phaseContentsByKey).reduce((sum, value) => sum + (value ?? 0), 0)
     : INPUT_PHASE_ROW_KEYS.reduce((sum, key) => sum + (column.phases?.[key] ?? 0), 0)
   if (column.kind !== 'blend') return phaseTotal
-  return phaseTotal + (column.oxygenAir?.weightPct.O2 ?? 0) + (column.oxygenAir?.weightPct.N2 ?? 0)
+  return (
+    phaseTotal +
+    (column.oxygenAir?.weightPct.O2 ?? 0) +
+    (column.oxygenAir?.weightPct.N2 ?? 0) +
+    (column.oxygenAir?.weightPct.H2O ?? 0)
+  )
 }
 
 function formatProductDistributionPercent(value: number) {
@@ -1262,6 +1291,49 @@ function cloneOxySolverResult(result: OxyConstraintSolverResult): OxyConstraintS
   return JSON.parse(JSON.stringify(result)) as OxyConstraintSolverResult
 }
 
+function cloneHeatBalanceResult(result: CopperHeatBalanceResult): CopperHeatBalanceResult {
+  return JSON.parse(JSON.stringify(result)) as CopperHeatBalanceResult
+}
+
+function normalizeHeatBalanceResult(value: unknown): CopperHeatBalanceResult | null {
+  const result = value as CopperHeatBalanceResult | null | undefined
+  if (!result || typeof result !== 'object') return null
+  if (
+    !Array.isArray(result.equations) ||
+    !Array.isArray(result.heatIncomeRows) ||
+    !Array.isArray(result.heatExpenditureRows) ||
+    !Array.isArray(result.inputPhysicalRows) ||
+    !Array.isArray(result.outputPhysicalRows)
+  ) return null
+  if (
+    typeof result.inputPhysicalHeatMJh !== 'number' ||
+    typeof result.outputPhysicalHeatMJh !== 'number' ||
+    typeof result.chemicalHeatMJh !== 'number' ||
+    typeof result.heatDeficitMJh !== 'number' ||
+    typeof result.requiredFuelWeight !== 'number'
+  ) return null
+  return cloneHeatBalanceResult(result)
+}
+
+function normalizeOxySolverAcceptance(result: OxyConstraintSolverResult): OxyConstraintSolverResult {
+  const allProductsClosed = OXY_SIDE_BLOW_PRODUCT_KEYS.every((key) => {
+    const product = result.products?.[key]
+    return product ? verifyOxyProductElementTotals(product) : false
+  })
+  const acceptanceLevel =
+    result.acceptanceLevel ?? classifyOxyConstraintAcceptance(result.maxRelativeResidual, allProductsClosed)
+  return {
+    ...result,
+    acceptanceLevel,
+    acceptable: result.acceptable ?? acceptanceLevel !== 'failed',
+  }
+}
+
+function verifyOxyProductElementTotals(product: OxyConstraintSolverResult['products'][OxySideBlowProductKey], tolerance = 0.5): boolean {
+  const total = Object.values(product.composition ?? {}).reduce((sum, value) => sum + (value ?? 0), 0)
+  return Math.abs(total - 100) <= tolerance || product.mass <= 0
+}
+
 function normalizeOxySolverResult(value: unknown): OxyConstraintSolverResult | null {
   const result = value as OxyConstraintSolverResult | null | undefined
   if (!result || typeof result !== 'object') return null
@@ -1280,7 +1352,7 @@ function normalizeOxySolverResult(value: unknown): OxyConstraintSolverResult | n
       product.composition
     )
   })
-  return hasProducts ? cloneOxySolverResult(result) : null
+  return hasProducts ? normalizeOxySolverAcceptance(cloneOxySolverResult(result)) : null
 }
 
 function buildProductSolverInputPhaseMass(
@@ -1297,7 +1369,101 @@ function buildProductSolverInputPhaseMass(
   }
 }
 
-function computeProductSolverResultFromCaseState(params: {
+const OXY_PRODUCT_SOLVER_MAX_PASSES = 3
+
+function applyOxySolverRecommendedInputs(params: {
+  result: OxyConstraintSolverResult
+  fuelColumn: CopperFuelMaterial
+  solventColumns: CopperMaterialColumn[]
+  airColumns: CopperMaterialColumn[]
+}) {
+  const fuelColumn = cloneFuelMaterial({
+    ...params.fuelColumn,
+    weight: params.result.recommended.fuelWeight,
+    waterWeight: params.result.recommended.fuelWaterWeight,
+    moisture: params.result.recommended.fuelMoisture,
+  })
+  const solventColumns = params.solventColumns.map((column) =>
+    cloneMaterialColumn({
+      ...column,
+      weight: params.result.recommended.solventWeights[column.name] ?? column.weight,
+    })
+  )
+  const airColumns = params.airColumns.map((column) =>
+    cloneMaterialColumn({
+      ...column,
+      weight: params.result.recommended.gasWeights[column.name] ?? column.weight,
+    })
+  )
+  return { fuelColumn, solventColumns, airColumns }
+}
+
+function solveOxySideBlowProductsIterative(params: {
+  rawMaterials: CopperMaterialColumn[]
+  rawFeed: ReturnType<typeof calculateWeightedComposition>
+  concentrateMass: number
+  inputPhaseMass?: Record<string, Record<string, number>>
+  fuelColumn: CopperFuelMaterial
+  solventColumns: CopperMaterialColumn[]
+  airColumns: CopperMaterialColumn[]
+  config: OxySideBlowConstraintConfig
+}): { result: OxyConstraintSolverResult; passes: number; fuelColumn: CopperFuelMaterial; solventColumns: CopperMaterialColumn[]; airColumns: CopperMaterialColumn[] } {
+  let fuelColumn = cloneFuelMaterial(params.fuelColumn)
+  let solventColumns = params.solventColumns.map(cloneMaterialColumn)
+  let airColumns = params.airColumns.map(cloneMaterialColumn)
+  let best: OxyConstraintSolverResult | null = null
+  let bestInputs = { fuelColumn, solventColumns, airColumns }
+  let passes = 0
+
+  const acceptanceRank = (result: OxyConstraintSolverResult) =>
+    result.acceptanceLevel === 'strict' ? 0 : result.acceptanceLevel === 'relaxed' ? 1 : 2
+  const isBetterResult = (candidate: OxyConstraintSolverResult, current: OxyConstraintSolverResult | null) => {
+    if (!current) return true
+    const candidateRank = acceptanceRank(candidate)
+    const currentRank = acceptanceRank(current)
+    if (candidateRank !== currentRank) return candidateRank < currentRank
+    return candidate.maxRelativeResidual < current.maxRelativeResidual
+  }
+
+  for (let pass = 0; pass < OXY_PRODUCT_SOLVER_MAX_PASSES; pass += 1) {
+    passes = pass + 1
+    const blendFeed = calculateWeightedComposition([
+      ...params.rawMaterials,
+      ...solventColumns,
+      fuelColumn,
+      ...airColumns,
+    ])
+    const result = solveOxySideBlowProducts({
+      blendFeed,
+      rawFeed: params.rawFeed,
+      rawMaterialColumns: params.rawMaterials,
+      concentrateMass: params.concentrateMass,
+      inputPhaseMass: params.inputPhaseMass,
+      fuelColumn,
+      solventColumns,
+      airColumns,
+      config: params.config,
+    })
+    const nextInputs = applyOxySolverRecommendedInputs({ result, fuelColumn, solventColumns, airColumns })
+
+    if (isBetterResult(result, best)) {
+      best = result
+      bestInputs = nextInputs
+    }
+    fuelColumn = nextInputs.fuelColumn
+    solventColumns = nextInputs.solventColumns
+    airColumns = nextInputs.airColumns
+
+    if (result.acceptanceLevel === 'strict') break
+  }
+
+  if (!best) {
+    throw new Error('产出求解未生成结果')
+  }
+  return { result: best, passes, ...bestInputs }
+}
+
+function restoreProductCalculationFromCaseState(params: {
   rawMaterials: CopperMaterialColumn[]
   solventColumns: CopperMaterialColumn[]
   fuelColumn: CopperFuelMaterial
@@ -1305,25 +1471,26 @@ function computeProductSolverResultFromCaseState(params: {
   phaseBatchResults: PhaseBatchResults | null | undefined
   materialPhaseRows: Record<string, MaterialPhaseAssistRow[]>
   productConstraintConfig: OxySideBlowConstraintConfig
-}): OxyConstraintSolverResult | null {
-  const blendFeed = calculateWeightedComposition([
-    ...params.rawMaterials,
-    ...params.solventColumns,
-    params.fuelColumn,
-    ...params.airColumns,
-  ])
-  if (blendFeed.totalWeight <= 0) return null
+}):
+  | {
+      result: OxyConstraintSolverResult
+      fuelColumn: CopperFuelMaterial
+      solventColumns: CopperMaterialColumn[]
+      airColumns: CopperMaterialColumn[]
+    }
+  | null {
+  if (
+    calculateWeightedComposition([
+      ...params.rawMaterials,
+      ...params.solventColumns,
+      params.fuelColumn,
+      ...params.airColumns,
+    ]).totalWeight <= 0
+  ) return null
   try {
-    return solveOxySideBlowProducts({
-      blendFeed,
-      rawFeed: calculateWeightedComposition(
-        params.rawMaterials.map((material) => ({
-          ...material,
-          waterWeight: 0,
-          moisture: 0,
-        }))
-      ),
-      rawMaterialColumns: params.rawMaterials,
+    const restored = solveOxySideBlowProductsIterative({
+      rawMaterials: params.rawMaterials,
+      rawFeed: calculateWeightedComposition(params.rawMaterials),
       concentrateMass: params.rawMaterials.reduce((sum, material) => sum + Math.max(0, material.weight), 0),
       inputPhaseMass: buildProductSolverInputPhaseMass(
         params.rawMaterials,
@@ -1335,6 +1502,12 @@ function computeProductSolverResultFromCaseState(params: {
       airColumns: params.airColumns,
       config: params.productConstraintConfig,
     })
+    return {
+      result: restored.result,
+      fuelColumn: restored.fuelColumn,
+      solventColumns: restored.solventColumns,
+      airColumns: restored.airColumns,
+    }
   } catch {
     return null
   }
@@ -1416,21 +1589,24 @@ function normalizeImportedCopperCase(payload: unknown, methodName: string): Copp
     manualPhaseCells: candidate.manualPhaseCells ?? {},
     manualSolventWeights: candidate.manualSolventWeights ?? {},
     manualFuelWeightValid: candidate.manualFuelWeightValid ?? false,
+    manualAirWeightValid: candidate.manualAirWeightValid ?? false,
     phaseCompleted: candidate.phaseCompleted ?? false,
     productCalculated: candidate.productCalculated ?? false,
     productFilledBack: candidate.productFilledBack ?? candidate.productCalculated ?? false,
     productSolverResult: normalizeOxySolverResult(candidate.productSolverResult),
     heatBalanced: candidate.heatBalanced ?? false,
+    calculatedHeatBalance: normalizeHeatBalanceResult(candidate.calculatedHeatBalance),
     fuelLhv: candidate.fuelLhv ?? String(DEFAULT_COPPER_FUEL.lowerHeatingValueMJkg),
     fuelEfficiency: candidate.fuelEfficiency ?? String(DEFAULT_COPPER_FUEL.combustionEfficiency),
     oxygenAirO2Pct: normalizeOxygenAirText(candidate.oxygenAirO2Pct, candidate.oxygenAirN2Pct).oxygen,
     oxygenAirN2Pct: normalizeOxygenAirText(candidate.oxygenAirO2Pct, candidate.oxygenAirN2Pct).nitrogen,
     oxygenSupplyCoefficient: candidate.oxygenSupplyCoefficient ?? '1.15',
     feedTemperature: candidate.feedTemperature ?? '25',
-    matteTemperature: candidate.matteTemperature ?? '1180',
-    slagTemperature: candidate.slagTemperature ?? '1250',
-    gasTemperature: candidate.gasTemperature ?? '1150',
-    dustTemperature: candidate.dustTemperature ?? '450',
+    matteTemperature: candidate.matteTemperature ?? '1300',
+    slagTemperature: candidate.slagTemperature ?? '1350',
+    gasTemperature: candidate.gasTemperature ?? '1350',
+    dustTemperature: candidate.dustTemperature ?? '1350',
+    lossTemperature: candidate.lossTemperature ?? '1350',
     heatLossMJh: candidate.heatLossMJh ?? '1500',
     otherHeatMJh: candidate.otherHeatMJh ?? '0',
     annualHours: candidate.annualHours ?? '7200',
@@ -1627,6 +1803,7 @@ function productOutputCellClass(
 }
 
 const WORKFLOW_FLOW_STEPS = ['原料', '原料投料量', '投入物相', '熔剂/空气/煤', '产出计算', '热平衡'] as const
+const HEAT_BALANCE_CALCULATION_STEPS = ['读取温度与热焓', '配平反应热', '汇总热收入/支出', '反算燃料煤'] as const
 type WorkflowStepStatus = 'completed' | 'active' | 'pending'
 
 function workflowStepMessage(step: number, message: string) {
@@ -1901,11 +2078,13 @@ export default function CopperWorkflow({
   const [ratioDrafts, setRatioDrafts] = useState<Record<string, string>>({})
   const [phaseCompleted, setPhaseCompleted] = useState(false)
   const [showElementAssist, setShowElementAssist] = useState(false)
+  const [showProductCalculationAssist, setShowProductCalculationAssist] = useState(false)
   const [showHeatBalanceAssist, setShowHeatBalanceAssist] = useState(false)
   const [heatBalanceEngaged, setHeatBalanceEngaged] = useState(false)
 
   const [elementTableView, setElementTableView] = useState<CopperElementDisplayMode>('compound')
   const [phaseElementView, setPhaseElementView] = useState<CopperElementDisplayMode>('compound')
+  const [productElementTableView, setProductElementTableView] = useState<CopperElementDisplayMode>('compound')
   const [productCalculated, setProductCalculated] = useState(false)
   const [productFilledBack, setProductFilledBack] = useState(false)
   const [oxySolverResult, setOxySolverResult] = useState<OxyConstraintSolverResult | null>(null)
@@ -1958,6 +2137,9 @@ export default function CopperWorkflow({
   }, [casePage, normalizedCasePage])
   const [activeCaseId, setActiveCaseId] = useState<string | null>(null)
   const [caseMessage, setCaseMessage] = useState<string | null>(null)
+  const [editingCaseNameId, setEditingCaseNameId] = useState<string | null>(null)
+  const [editingCaseNameDraft, setEditingCaseNameDraft] = useState('')
+  const skipCaseNameBlurCommitRef = useRef(false)
 
   useEffect(() => {
     if (!caseMessage) return
@@ -1984,13 +2166,20 @@ export default function CopperWorkflow({
   const [oxygenAirN2Pct, setOxygenAirN2Pct] = useState(DEFAULT_OXYGEN_AIR_N2_TEXT)
   const [oxygenSupplyCoefficient, setOxygenSupplyCoefficient] = useState('1.15')
   const [feedTemperature, setFeedTemperature] = useState('25')
-  const [matteTemperature, setMatteTemperature] = useState('1180')
-  const [slagTemperature, setSlagTemperature] = useState('1250')
-  const [gasTemperature, setGasTemperature] = useState('1150')
-  const [dustTemperature, setDustTemperature] = useState('450')
+  const [matteTemperature, setMatteTemperature] = useState('1300')
+  const [slagTemperature, setSlagTemperature] = useState('1350')
+  const [gasTemperature, setGasTemperature] = useState('1350')
+  const [dustTemperature, setDustTemperature] = useState('1350')
+  const [lossTemperature, setLossTemperature] = useState('1350')
   const [heatLossMJh, setHeatLossMJh] = useState('1500')
   const [otherHeatMJh, setOtherHeatMJh] = useState('0')
   const [heatBalanced, setHeatBalanced] = useState(false)
+  const [isHeatBalanceCalculating, setIsHeatBalanceCalculating] = useState(false)
+  const [heatBalanceCalculationStep, setHeatBalanceCalculationStep] = useState(0)
+  const [calculatedHeatBalance, setCalculatedHeatBalance] = useState<CopperHeatBalanceResult | null>(null)
+  useEffect(() => {
+    if (!heatBalanced) setCalculatedHeatBalance(null)
+  }, [heatBalanced])
   const [productConstraintConfig, setProductConstraintConfig] = useState<OxySideBlowConstraintConfig>(() =>
     createDefaultProductConstraintConfig()
   )
@@ -2054,10 +2243,6 @@ export default function CopperWorkflow({
     [rawMaterials]
   )
   const rawConcentrateWaterWeight = useMemo(() => totalWaterWeight(rawMaterials), [rawMaterials])
-  const furnaceFeedWithoutFuel = useMemo(
-    () => calculateWeightedComposition([...rawMaterials, ...solventColumns, ...airColumns]),
-    [airColumns, rawMaterials, solventColumns]
-  )
   const furnaceFeed = useMemo(
     () => calculateWeightedComposition([...rawMaterials, ...solventColumns, fuelColumn, ...airColumns]),
     [rawMaterials, solventColumns, fuelColumn, airColumns]
@@ -2115,9 +2300,16 @@ export default function CopperWorkflow({
   }, [productConstraintConfig.version, updateProductConstraintConfig])
 
   useEffect(() => {
+    if (batchTableView === 'balance') {
+      window.requestAnimationFrame(() => {
+        heatBalanceRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
+      return
+    }
     if (batchTableView === 'productPhase' || batchTableView === 'productElement') {
       window.requestAnimationFrame(() => {
         const target = hasProductResult ? calculationTableRef.current : productCalculationRef.current
+        if (!hasProductResult) setShowProductCalculationAssist(true)
         target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       })
       return
@@ -2149,7 +2341,6 @@ export default function CopperWorkflow({
     () => rawMaterials.reduce((sum, m) => sum + Math.max(0, m.weight), 0),
     [rawMaterials]
   )
-  const heatProductResult = useMemo(() => calculateCopperProducts(furnaceFeedWithoutFuel, productModel), [furnaceFeedWithoutFuel, productModel])
   const heatFuel = useMemo<CopperFuelMaterial>(
     () => ({
       ...fuelColumn,
@@ -2157,35 +2348,6 @@ export default function CopperWorkflow({
       combustionEfficiency: toNumber(fuelEfficiency, DEFAULT_COPPER_FUEL.combustionEfficiency),
     }),
     [fuelColumn, fuelEfficiency, fuelLhv]
-  )
-  const heatBalance = useMemo(
-    () =>
-      calculateCopperHeatBalance({
-        feed: furnaceFeedWithoutFuel,
-        products: heatProductResult,
-        fuel: heatFuel,
-        temperatures: {
-          feed: toNumber(feedTemperature, 25),
-          matte: toNumber(matteTemperature, 1180),
-          slag: toNumber(slagTemperature, 1250),
-          gas: toNumber(gasTemperature, 1150),
-          dust: toNumber(dustTemperature, 450),
-        },
-        heatLossMJh: toNumber(heatLossMJh, 1500),
-        otherHeatMJh: toNumber(otherHeatMJh, 0),
-      }),
-    [
-      dustTemperature,
-      feedTemperature,
-      furnaceFeedWithoutFuel,
-      gasTemperature,
-      heatFuel,
-      heatLossMJh,
-      heatProductResult,
-      matteTemperature,
-      otherHeatMJh,
-      slagTemperature,
-    ]
   )
 
   const rawWeightStatus = (materialId: string): SolveInputStatus =>
@@ -2257,6 +2419,7 @@ export default function CopperWorkflow({
     slagTemperature,
     gasTemperature,
     dustTemperature,
+    lossTemperature,
     heatLossMJh,
     otherHeatMJh,
     fuelLhv,
@@ -2313,14 +2476,8 @@ export default function CopperWorkflow({
   )
   const productSummary = useMemo(() => productSummaryColumn(displayProductResult), [displayProductResult])
   const productLoss = useMemo(() => productLossColumn(furnaceFeed.totalWeight, productSummary.mass), [furnaceFeed.totalWeight, productSummary.mass])
-  const fuelHeatMJt = Math.max(
-    0,
-    toNumber(fuelLhv, DEFAULT_COPPER_FUEL.lowerHeatingValueMJkg) *
-      1000 *
-      toNumber(fuelEfficiency, DEFAULT_COPPER_FUEL.combustionEfficiency)
-  )
   const constraintProductTableColumns = useMemo(() => {
-    if (!oxySolverResult?.valid || !productFilledBack) return null
+    if (!oxySolverResult?.acceptable || !productFilledBack) return null
     return [...oxyProductTableColumns(oxySolverResult), productSummary]
   }, [oxySolverResult, productFilledBack, productSummary])
   const productTableColumns = useMemo(
@@ -2351,7 +2508,7 @@ export default function CopperWorkflow({
     [productPhaseManual, productPhaseOverrides]
   )
   const productPhaseComposition = useMemo(() => {
-    if (oxySolverResult?.valid && productFilledBack) {
+    if (oxySolverResult?.acceptable && productFilledBack) {
       const oxyMaps = oxyProductPhasePercentMaps(oxySolverResult)
       const gasPhases = { ...oxyMaps.flueGas }
       for (const [phase, pct] of Object.entries(oxyMaps.fugitive)) {
@@ -2493,7 +2650,9 @@ export default function CopperWorkflow({
       header: '气',
       subHeader: column.name,
       weight: column.weight,
-      oxygenAir: buildOxygenAirPhaseColumn(column.ratios),
+      waterWeight: materialWaterWeight(column),
+      moisture: column.moisture ?? 0,
+      oxygenAir: buildOxygenAirPhaseColumn(column.ratios, column.weight, materialWaterWeight(column)),
     }))
     const furnaceBlend = buildFurnaceBlendPhaseColumn([
       ...rawColumns
@@ -2520,7 +2679,11 @@ export default function CopperWorkflow({
       },
       ...airCols.map((column) => ({
         weight: column.weight,
-        oxygenWeightPct: column.oxygenAir!.weightPct,
+        oxygenWeightPct: {
+          O2: airColumns.find((item) => item.id === column.id)?.ratios['O(氧)'] ?? 0,
+          N2: airColumns.find((item) => item.id === column.id)?.ratios['N(氮)'] ?? 0,
+          H2O: column.oxygenAir?.weightPct.H2O ?? 0,
+        },
       })),
     ])
     const blendPhaseContentsByKey = (() => {
@@ -2557,7 +2720,7 @@ export default function CopperWorkflow({
       phaseContentsByKey: blendPhaseContentsByKey,
       applicablePhaseKeys: blendSolidPhaseKeys,
       materialPhaseRowKeys: blendSolidPhaseKeys,
-      oxygenAir: { weightPct: furnaceBlend.gasWeightPct, volumePct: { O2: 0, N2: 0 } },
+      oxygenAir: { weightPct: furnaceBlend.gasWeightPct, volumePct: { O2: 0, N2: 0, H2O: 0 } },
       readOnly: true,
     }
     return [...rawColumns, ...solventCols, fuelCol, ...airCols, blendCol]
@@ -2583,6 +2746,10 @@ export default function CopperWorkflow({
           product.displayMode === 'phases' && product.phases && product.phases.length > 0
             ? Object.fromEntries(product.phases.map((phase) => [phase.key, phase.pct]))
             : null
+        const directPhaseMasses =
+          product.displayMode === 'phases' && product.phases && product.phases.length > 0
+            ? Object.fromEntries(product.phases.map((phase) => [phase.key, phase.mass]))
+            : null
         const legacyProductKey = product.key in PRODUCT_PHASE_ROWS ? (product.key as CopperProductKey) : null
         const phaseMap =
           directPhases ??
@@ -2605,9 +2772,10 @@ export default function CopperWorkflow({
           weight: productFilledBack ? product.mass : 0,
           productKey: product.key,
           productPhases: phaseMap,
+          productPhaseMasses: directPhaseMasses ?? undefined,
           productPhaseRowKeys: phaseRowKeys,
           productGasVolume:
-            product.key === 'gas' || product.key === 'flueGas'
+            product.key === 'gas' || product.key === 'flueGas' || product.key === 'fugitive'
               ? calculateGasVolumePercents(phaseMap ?? {})
               : undefined,
           readOnly: true,
@@ -2657,6 +2825,69 @@ export default function CopperWorkflow({
         : [],
     [activeProcessStageId, productFilledBack, productTableColumns]
   )
+  const heatInputMaterials = useMemo<CopperHeatBalanceSourceMaterial[]>(() => {
+    const materialById = new Map<string, CopperMaterialColumn>([
+      ...rawMaterials.map((material) => [material.id, material] as const),
+      ...solventColumns.map((material) => [material.id, material] as const),
+      [fuelColumn.id, fuelColumn],
+      ...airColumns.map((material) => [material.id, material] as const),
+    ])
+    return inputPhaseColumnData.flatMap((column) => {
+      if (column.kind === 'blend' || column.kind === 'concentrate') return []
+      const material = materialById.get(column.id)
+      if (!material || material.weight <= 0) return []
+      if (column.kind === 'oxygen') {
+        return [
+          sourceMaterialFromColumn(material, {
+            O2: column.oxygenAir?.weightPct.O2 ?? 0,
+            N2: column.oxygenAir?.weightPct.N2 ?? 0,
+          }),
+        ]
+      }
+      if (column.phaseReady === false) return []
+      const phaseContents = column.phaseContentsByKey ?? column.phases ?? {}
+      return [sourceMaterialFromColumn(material, phaseContents as Record<string, number>)]
+    })
+  }, [airColumns, fuelColumn, inputPhaseColumnData, rawMaterials, solventColumns])
+  const heatBalance = useMemo(
+    () =>
+      calculateCopperHeatBalanceDetailed({
+        inputMaterials: heatInputMaterials,
+        products: productFilledBack ? oxySolverResult : null,
+        fuel: heatFuel,
+        temperatures: {
+          feed: toNumber(feedTemperature, 25),
+          smeltingSlag: toNumber(slagTemperature, 1350),
+          matte: toNumber(matteTemperature, 1300),
+          flueGas: toNumber(gasTemperature, 1350),
+          dust: toNumber(dustTemperature, 1350),
+          fugitive: toNumber(gasTemperature, 1350),
+          loss: toNumber(lossTemperature, 1350),
+        },
+        heatLossMJh: toNumber(heatLossMJh, 1500),
+        otherHeatMJh: toNumber(otherHeatMJh, 0),
+      }),
+    [
+      dustTemperature,
+      feedTemperature,
+      gasTemperature,
+      heatFuel,
+      heatInputMaterials,
+      heatLossMJh,
+      lossTemperature,
+      matteTemperature,
+      otherHeatMJh,
+      oxySolverResult,
+      productFilledBack,
+      slagTemperature,
+    ]
+  )
+  const heatInputDryWeight = useMemo(
+    () => heatInputMaterials.reduce((sum, material) => sum + Math.max(0, material.dryWeight), 0),
+    [heatInputMaterials]
+  )
+  const heatMatteMass = productFilledBack && oxySolverResult?.acceptable ? oxySolverResult.products.matte.mass : 0
+  const visibleHeatBalance = heatBalanced ? calculatedHeatBalance : null
   const oxygenAirInputStatus: SolveInputStatus = manualAirWeightValid || productCalculated ? 'resolved' : 'pending'
   const rawColumnWidth = (material: CopperMaterialColumn) => Math.max(104, Math.min(136, 72 + Math.min(displayRawMaterialName(material.name).length, 7) * 9))
   const batchTableNameLabels = useMemo(() => {
@@ -2815,7 +3046,10 @@ export default function CopperWorkflow({
           ...rawMaterials.map((material) => formatTableNumber(materialWaterWeight(material))),
           ...solventColumns.map((material) => formatTableNumber(materialWaterWeight(material))),
           formatTableNumber(materialWaterWeight(fuelColumn)),
-          ...airColumns.map(() => ''),
+          ...airColumns.map((column) => {
+            const water = materialWaterWeight(column)
+            return water > 0 ? formatTableNumber(water) : ''
+          }),
           formatTableNumber(furnaceBlendWaterWeight * 24 * 330),
         ],
       },
@@ -2829,7 +3063,7 @@ export default function CopperWorkflow({
             formatTableNumber(material.weight + materialWaterWeight(material))
           ),
           formatTableNumber(fuelColumn.weight + materialWaterWeight(fuelColumn)),
-          ...airColumns.map((column) => formatTableNumber(column.weight)),
+          ...airColumns.map((column) => formatTableNumber(column.weight + materialWaterWeight(column))),
           formatTableNumber(furnaceFeed.totalWeight * 24 * 330),
         ],
       },
@@ -2856,20 +3090,23 @@ export default function CopperWorkflow({
       header: column.header,
       subHeader: column.subHeader,
     }))
-    const inputRowKeys = phaseTableRowKeys.filter((key) =>
+    const gasInputRowKeys = ['O2', 'N2', 'H2O'].filter((key) =>
+      inputPhaseColumnData.some((column) => column.kind === 'oxygen' && getPhaseExportValue(column, key) !== '')
+    )
+    const inputRowKeys = [...new Set([...gasInputRowKeys, ...phaseTableRowKeys.filter((key) =>
       inputPhaseColumnData.some((column) => {
         if (column.kind === 'product') return false
-        if (key === 'O2' || key === 'N2') return column.kind === 'oxygen' || column.kind === 'blend'
+        if (key === 'O2' || key === 'N2' || key === 'H2O') return column.kind === 'oxygen' || column.kind === 'blend'
         return column.kind !== 'oxygen' && getPhaseExportValue(column, key) !== ''
       })
-    )
+    )])]
     const inputValue = (column: PhaseTableColumn, key: string) => getPhaseExportValue(column, key)
     const phaseExportDryWeight = (column: PhaseTableColumn) => {
       if (column.kind === 'oxygen') return column.weight
       return column.weight
     }
     const phaseExportWaterWeight = (column: PhaseTableColumn) => {
-      if (column.kind === 'oxygen') return 0
+      if (column.kind === 'oxygen') return column.waterWeight ?? 0
       if (column.kind === 'blend') return column.waterWeight ?? furnaceBlendWaterWeight
       return column.waterWeight ?? 0
     }
@@ -3251,86 +3488,6 @@ export default function CopperWorkflow({
     const result = await saveCopperBatchExcelWorkbook(filename, html, getElectronExportWorkbookSaver())
     if (result.ok) {
       setWorkflowMessage(`已导出物相成分：${materialName}。`, 'success')
-    } else if ('error' in result && result.error) {
-      setWorkflowMessage(`导出失败：${result.error}`, 'error')
-    }
-  }
-
-  const exportProductCalculation = async () => {
-    if (!oxySolverResult?.valid) {
-      setWorkflowMessage(workflowStepMessage(5, '请先计算产出结果，再导出 Excel。'), 'flow')
-      return
-    }
-    const titlePrefix = `${APP_NAME_ZH} ${getCopperStageExportName(activeStage.name)} 产出计算`
-    const pivotRows = buildProductResultPivotData(oxySolverResult, productConstraintConfig)
-    const productElementRows = pivotRows.filter((row) => row.kind === 'element')
-
-    const elementColumns: CopperBatchExportColumn[] = [
-      { header: 't/h', subHeader: 't/h' },
-      ...productElementRows.map((row) => ({
-        header: elementSymbolLabel(row.label),
-        subHeader: elementSymbolLabel(row.label),
-      })),
-    ]
-    const elementRows: CopperBatchExportRow[] = OXY_SIDE_BLOW_PRODUCT_KEYS.map((pk) => ({
-      label: oxySolverResult.products[pk].name,
-      values: [
-        formatTableNumber(oxySolverResult.products[pk].mass),
-        ...productElementRows.map((row) => {
-          const value = row.values[pk]
-          return value == null ? '' : formatProductSharePercent(value)
-        }),
-      ],
-    }))
-
-    const maxPhaseCols = Math.max(
-      ...OXY_SIDE_BLOW_PRODUCT_KEYS.map((pk) => oxySolverResult.products[pk].phases.length),
-      1
-    )
-    const phaseColumns: CopperBatchExportColumn[] = [
-      { header: '名称', subHeader: '名称' },
-      { header: 't/h', subHeader: 't/h' },
-      ...Array.from({ length: maxPhaseCols }, (_, index) => ({
-        header: index === 0 ? '物相' : '',
-        subHeader: `物相${index + 1}`,
-      })),
-    ]
-    const phaseRows: CopperBatchExportRow[] = []
-    for (const pk of OXY_SIDE_BLOW_PRODUCT_KEYS) {
-      const product = oxySolverResult.products[pk]
-      const phaseLabels = Array.from({ length: maxPhaseCols }, (_, index) => {
-        const phase = product.phases[index]
-        return phase ? PRODUCT_PHASE_DISPLAY[phase.key] ?? phase.key : ''
-      })
-      const phasePcts = Array.from({ length: maxPhaseCols }, (_, index) => {
-        const phase = product.phases[index]
-        if (!phase) return ''
-        if (pk !== 'flueGas') return formatProductSharePercent(phase.pct)
-        const volumePercents = calculateGasVolumePercents(
-          Object.fromEntries(product.phases.map((item) => [item.key, item.pct]))
-        )
-        const volPct = volumePercents[phase.key as keyof typeof volumePercents] ?? 0
-        return formatProductSharePercent(volPct)
-      })
-      phaseRows.push({
-        label: `${product.name} · 物相`,
-        values: [product.name, formatTableNumber(product.mass), ...phaseLabels],
-      })
-      phaseRows.push({
-        label: `${product.name} · ${pk === 'flueGas' ? 'v%' : 'w%'}`,
-        values: ['', '', ...phasePcts],
-      })
-    }
-
-    const sheets: CopperBatchWorkbookSheet[] = [
-      { title: `${titlePrefix} · 物相组成`, columns: phaseColumns, rows: phaseRows },
-      { title: `${titlePrefix} · 元素组成`, columns: elementColumns, rows: elementRows },
-    ]
-    const filename = `${sanitizeExcelFilePart(APP_NAME_ZH)}_${sanitizeExcelFilePart(getCopperStageExportName(activeStage.name))}_产出计算_${formatExportDate()}.xls`
-    const html = buildCopperBatchWorkbookHtml(sheets)
-    const result = await saveCopperBatchExcelWorkbook(filename, html, getElectronExportWorkbookSaver())
-    if (result.ok) {
-      setWorkflowMessage('已导出产出计算结果。', 'success')
     } else if ('error' in result && result.error) {
       setWorkflowMessage(`导出失败：${result.error}`, 'error')
     }
@@ -4114,6 +4271,7 @@ export default function CopperWorkflow({
   }
 
   const scrollToProductCalculation = () => {
+    setShowProductCalculationAssist(true)
     window.requestAnimationFrame(() => {
       productCalculationRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
@@ -4121,35 +4279,41 @@ export default function CopperWorkflow({
 
   const openHeatBalanceAssist = () => {
     setShowHeatBalanceAssist(true)
-    if (productCalculated) {
-      setHeatBalanceEngaged(true)
-    }
   }
 
-  const handleHeatBalancePlaceholderDoubleClick = () => {
+  const openHeatBalanceWorkspace = (source: 'tab' | 'placeholder' = 'placeholder') => {
     if (!productFilledBack) {
-      setWorkflowMessage(workflowStepMessage(5, '请先计算产出并回填到配料总表。'), 'flow')
-      scrollToProductCalculation()
-      return
+      setWorkflowMessage(workflowStepMessage(5, '请先完成产出计算并回填到配料总表；可先在热平衡专区检查温度与燃料参数。'), 'flow')
+    } else if (source === 'tab' || source === 'placeholder') {
+      setWorkflowMessage(workflowStepMessage(6, '已打开热平衡计算专区，请确认温度设置后点击“热平衡计算”。'), 'flow')
     }
     openHeatBalanceAssist()
     scrollToAssist(heatBalanceRef)
   }
 
+  const handleHeatBalancePlaceholderClick = () => {
+    openHeatBalanceWorkspace('placeholder')
+  }
+
+  const handleHeatBalancePlaceholderKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    handleHeatBalancePlaceholderClick()
+  }
+
   const toggleHeatBalanceAssist = () => {
-    setShowHeatBalanceAssist((value) => {
-      const next = !value
-      if (next && productCalculated) {
-        setHeatBalanceEngaged(true)
-      }
-      return next
-    })
+    setShowHeatBalanceAssist((value) => !value)
   }
 
   const handleBatchTableViewChange = (view: BatchTableView) => {
     setBatchTableView(view)
+    if (view === 'balance') {
+      openHeatBalanceWorkspace('tab')
+      return
+    }
     if (view === 'productPhase' || view === 'productElement') {
       if (!hasProductResult) {
+        setShowProductCalculationAssist(true)
         scrollToProductCalculation()
         if (furnaceFeed.totalWeight > 0) {
           setWorkflowMessage(workflowStepMessage(5, '已打开产出计算专区，请点击“计算产出结果”。'), 'flow')
@@ -4251,33 +4415,47 @@ export default function CopperWorkflow({
       validPhaseResults.length > 0
         ? buildBlendPhaseMassFromMaterialResults(validPhaseResults, materialPhaseRows)
         : null
-    const inputPhaseMass = blendPhaseMass
-      ? {
-          混合铜精矿: blendPhaseMass,
-        }
-      : undefined
+    const phaseInputValidation = validateRawMaterialPhaseInputs({
+      rawMaterials,
+      phaseBatchResults,
+      blendPhaseMass,
+    })
+    if (!phaseInputValidation.ok) {
+      setWorkflowMessage(workflowStepMessage(4, phaseInputValidation.message ?? '投入物相未完成。'), 'error')
+      scrollToCalculationTable()
+      return
+    }
+    const inputPhaseMass = {
+      [PRODUCT_INPUT_PHASE_BLEND_NAME]: blendPhaseMass!,
+    }
     await advanceProductCalculationStep(1)
-    const constraintValidation = validateOxyProductConstraintConfig(productConstraintConfig)
+    const solvedConstraintConfig = autoFillOxyProductConstraintConfig(productConstraintConfig).config
+    const constraintValidation = validateOxyProductConstraintConfig(solvedConstraintConfig)
     const constraintBlocking = firstBlockingConstraintMessage(constraintValidation)
     if (constraintBlocking) {
       setWorkflowMessage(workflowStepMessage(5, constraintBlocking), 'error')
       return
     }
-    const solverResult = solveOxySideBlowProducts({
-      blendFeed: furnaceFeed,
-      rawFeed: rawConcentrateBlend,
-      rawMaterialColumns: rawMaterials,
+    const iterative = solveOxySideBlowProductsIterative({
+      rawMaterials,
+      rawFeed: rawBlend,
       concentrateMass,
       inputPhaseMass,
       fuelColumn,
       solventColumns,
       airColumns,
-      config: productConstraintConfig,
+      config: solvedConstraintConfig,
     })
+    const solverResult = iterative.result
+    const fillBackValidation = validateOxySolverResultForFillBack(solverResult, {
+      matteCopperGrade: FIXED_MATTE_COPPER_GRADE,
+      concentrateMass,
+    })
+    const canFillBack = solverResult.acceptable && fillBackValidation.ok
     await advanceProductCalculationStep(2)
     setOxySolverResult(solverResult)
     setProductCalculated(true)
-    setProductFilledBack(solverResult.valid)
+    setProductFilledBack(canFillBack)
     setProductPhaseManual(false)
     setProductPhaseOverrides({})
     setOutputPhaseDrafts({})
@@ -4287,57 +4465,62 @@ export default function CopperWorkflow({
     window.setTimeout(() => setBatchTableHighlight(false), 1000)
     const bridged = oxySolverToCopperProductResult(solverResult)
     if (
-      solverResult.recommended.fuelWeight > 0 &&
-      (!nearlyEqual(fuelColumn.weight, solverResult.recommended.fuelWeight) ||
-        !nearlyEqual(materialWaterWeight(fuelColumn), solverResult.recommended.fuelWaterWeight))
+      iterative.fuelColumn.weight > 0 &&
+      (!nearlyEqual(fuelColumn.weight, iterative.fuelColumn.weight) ||
+        !nearlyEqual(materialWaterWeight(fuelColumn), materialWaterWeight(iterative.fuelColumn)))
     ) {
       updateFuelColumn({
-        weight: solverResult.recommended.fuelWeight,
-        waterWeight: solverResult.recommended.fuelWaterWeight,
-        moisture: solverResult.recommended.fuelMoisture,
+        weight: iterative.fuelColumn.weight,
+        waterWeight: iterative.fuelColumn.waterWeight,
+        moisture: iterative.fuelColumn.moisture,
       })
     }
     if (
       solventColumns.some((column) => {
-        const solvedWeight = solverResult.recommended.solventWeights[column.name]
+        const solvedWeight = iterative.solventColumns.find((item) => item.id === column.id)?.weight
         return solvedWeight != null && !nearlyEqual(column.weight, solvedWeight)
       })
     ) {
       setSolventColumns((prev) =>
         prev.map((column) => {
-          const solvedWeight = solverResult.recommended.solventWeights[column.name]
-          return solvedWeight == null ? column : { ...column, weight: solvedWeight }
+          const solved = iterative.solventColumns.find((item) => item.id === column.id)
+          return solved == null ? column : { ...column, weight: solved.weight }
         })
       )
       setManualSolventWeights((prev) => ({
         ...prev,
         ...Object.fromEntries(
           solventColumns
-            .filter((column) => solverResult.recommended.solventWeights[column.name] != null)
+            .filter((column) => iterative.solventColumns.some((item) => item.id === column.id))
             .map((column) => [column.id, true])
         ),
       }))
     }
     if (
       airColumns.some((column) => {
-        const solvedWeight = solverResult.recommended.gasWeights[column.name]
+        const solvedWeight = iterative.airColumns.find((item) => item.id === column.id)?.weight
         return solvedWeight != null && !nearlyEqual(column.weight, solvedWeight)
       })
     ) {
       setAirColumns((prev) =>
         prev.map((column) => {
-          const solvedWeight = solverResult.recommended.gasWeights[column.name]
-          return solvedWeight == null ? column : { ...column, weight: solvedWeight }
+          const solved = iterative.airColumns.find((item) => item.id === column.id)
+          return solved == null ? column : { ...column, weight: solved.weight }
         })
       )
     }
-    const convergeNote = solverResult.valid
-      ? ''
-      : ` ${solverResult.message ?? '产出约束未完全满足，请检查配料或约束配置。'}`
-    const actionNote = solverResult.valid
+    const convergeNote =
+      solverResult.acceptanceLevel === 'strict'
+        ? ` 已自动迭代 ${iterative.passes} 轮并严格收敛。`
+        : solverResult.acceptanceLevel === 'relaxed'
+          ? ` 已自动迭代 ${iterative.passes} 轮；当前结果近似收敛，最大相对残差 ${solverResult.maxRelativeResidual.toFixed(4)}。${solverResult.message ?? ''}`
+          : ` 已自动迭代 ${iterative.passes} 轮；${solverResult.message ?? '产出约束未完全满足，请检查配料或约束配置。'}`
+    const actionNote = canFillBack
       ? '已自动回填到配料总表产出-产物物相表与产出-产物元素表。'
-      : '当前结果不可回填，请先修正输入或约束。'
-    if (solverResult.valid) {
+      : fillBackValidation.ok
+        ? '当前结果不可回填，请先修正输入或约束。'
+        : `${fillBackValidation.message ?? '当前结果未通过产出校验，不可回填。'}`
+    if (canFillBack) {
       scrollToCalculationTable('start')
     }
     setWorkflowMessage(
@@ -4345,43 +4528,11 @@ export default function CopperWorkflow({
         5,
         `产出计算完成：产物总量 ${format(bridged.totalProductMass)} t/h（${formatCopperProductMassSummary(bridged, activeProcessStageId)}）。${convergeNote}${actionNote}`
       ),
-      solverResult.valid ? 'success' : 'warning'
+      canFillBack && solverResult.acceptanceLevel === 'strict' ? 'success' : 'warning'
     )
     } finally {
       setIsProductCalculating(false)
     }
-  }
-
-  const applyProductResultsToBatchTable = () => {
-    if (!oxySolverResult) {
-      setWorkflowMessage(workflowStepMessage(5, '请先计算产出结果，再回填到配料总表。'), 'flow')
-      scrollToProductCalculation()
-      return
-    }
-    if (!oxySolverResult.valid) {
-      setWorkflowMessage(
-        workflowStepMessage(5, oxySolverResult.message ?? '产出约束未完全满足，不能回填当前预览结果。请检查配料或约束配置后重新计算。'),
-        'error'
-      )
-      scrollToProductCalculation()
-      return
-    }
-    flushSync(() => {
-      setProductCalculated(true)
-      setProductFilledBack(true)
-      setBatchTableView('productPhase')
-      setBatchTableHighlight(true)
-    })
-    window.setTimeout(() => setBatchTableHighlight(false), 1000)
-    scrollToCalculationTable('start')
-    const bridged = oxySolverToCopperProductResult(oxySolverResult)
-    setWorkflowMessage(
-      workflowStepMessage(
-        5,
-        `已回填产出-产物物相表与产出-产物元素表：产物总量 ${format(bridged.totalProductMass)} t/h（${formatCopperProductMassSummary(bridged, activeProcessStageId)}）。`
-      ),
-      'success'
-    )
   }
 
   const productConstraintAutoFillMessage = (fills: ReturnType<typeof autoFillOxyProductConstraintConfig>['autoFills']) => {
@@ -4931,9 +5082,10 @@ export default function CopperWorkflow({
     setEquipmentAdjustments((prev) => ({ ...prev, [id]: value }))
   }
 
-  const runHeatBalanceCalculation = () => {
-    if (!productCalculated) {
-      setWorkflowMessage(workflowStepMessage(5, '请先完成产出计算。'), 'flow')
+  const runHeatBalanceCalculation = async () => {
+    if (isHeatBalanceCalculating) return
+    if (!productFilledBack) {
+      setWorkflowMessage(workflowStepMessage(5, '请先完成产出计算并回填到配料总表。'), 'flow')
       scrollToProductCalculation()
       return
     }
@@ -4943,14 +5095,34 @@ export default function CopperWorkflow({
       scrollToAssist(heatBalanceRef)
       return
     }
-    setHeatBalanced(true)
-    setWorkflowMessage(
-      workflowStepMessage(
-        6,
-        `热平衡计算完成：热缺口 ${format(Math.max(0, heatBalance.heatDeficitMJh), 0)} MJ/h，推荐燃料煤 ${format(heatBalance.requiredFuelWeight)} t/h。热平衡算法优化中，当前结果仅供参考。`
-      ),
-      'success'
-    )
+    openHeatBalanceAssist()
+    setIsHeatBalanceCalculating(true)
+    setHeatBalanceCalculationStep(0)
+    setHeatBalanced(false)
+    try {
+      const advanceHeatBalanceStep = async (step: number) => {
+        setHeatBalanceCalculationStep(step)
+        await new Promise<void>((resolve) => {
+          window.requestAnimationFrame(() => window.setTimeout(resolve, 120))
+        })
+      }
+      for (let step = 0; step < HEAT_BALANCE_CALCULATION_STEPS.length; step += 1) {
+        await advanceHeatBalanceStep(step)
+      }
+      setCalculatedHeatBalance(heatBalance)
+      setHeatBalanced(true)
+      setHeatBalanceEngaged(true)
+      setWorkflowMessage(
+        workflowStepMessage(
+          6,
+          `热平衡计算完成：热缺口 ${format(Math.max(0, heatBalance.heatDeficitMJh), 0)} MJ/h，推荐燃料煤 ${format(heatBalance.requiredFuelWeight)} t/h。热平衡算法优化中，当前结果仅供参考。`
+        ),
+        'success'
+      )
+      scrollToAssist(heatBalanceRef)
+    } finally {
+      setIsHeatBalanceCalculating(false)
+    }
   }
 
   const appendDraftPhaseRow = (materialId: string) => {
@@ -5200,11 +5372,13 @@ export default function CopperWorkflow({
       manualPhaseCells: { ...manualPhaseCells },
       manualSolventWeights: { ...manualSolventWeights },
       manualFuelWeightValid,
+      manualAirWeightValid,
       phaseCompleted,
       productCalculated,
       productFilledBack,
       productSolverResult: productCalculated && oxySolverResult ? cloneOxySolverResult(oxySolverResult) : null,
       heatBalanced,
+      calculatedHeatBalance: heatBalanced && calculatedHeatBalance ? cloneHeatBalanceResult(calculatedHeatBalance) : null,
       fuelLhv,
       fuelEfficiency,
       oxygenAirO2Pct,
@@ -5215,6 +5389,7 @@ export default function CopperWorkflow({
       slagTemperature,
       gasTemperature,
       dustTemperature,
+      lossTemperature,
       heatLossMJh,
       otherHeatMJh,
       annualHours,
@@ -5271,21 +5446,24 @@ export default function CopperWorkflow({
       manualPhaseCells: {},
       manualSolventWeights: {},
       manualFuelWeightValid: false,
+      manualAirWeightValid: false,
       phaseCompleted: false,
       productCalculated: false,
       productFilledBack: false,
       productSolverResult: null,
       heatBalanced: false,
+      calculatedHeatBalance: null,
       fuelLhv: String(DEFAULT_COPPER_FUEL.lowerHeatingValueMJkg),
       fuelEfficiency: String(DEFAULT_COPPER_FUEL.combustionEfficiency),
       oxygenAirO2Pct: DEFAULT_OXYGEN_AIR_O2_TEXT,
       oxygenAirN2Pct: DEFAULT_OXYGEN_AIR_N2_TEXT,
       oxygenSupplyCoefficient: '1.15',
       feedTemperature: '25',
-      matteTemperature: '1180',
-      slagTemperature: '1250',
-      gasTemperature: '1150',
-      dustTemperature: '450',
+      matteTemperature: '1300',
+      slagTemperature: '1350',
+      gasTemperature: '1350',
+      dustTemperature: '1350',
+      lossTemperature: '1350',
       heatLossMJh: '1500',
       otherHeatMJh: '0',
       annualHours: '7200',
@@ -5340,9 +5518,9 @@ export default function CopperWorkflow({
 
   const openCopperCase = (record: CopperCaseRecord) => {
     const nextRawMaterials = (record.rawMaterials?.length ? record.rawMaterials : createDefaultCopperMaterials()).map(cloneMaterialColumn)
-    const nextSolventColumns = (record.solventColumns?.length ? record.solventColumns : createDefaultSolventColumns()).map(cloneMaterialColumn)
-    const nextAirColumns = normalizeProcessAirColumns(record.airColumns, record.oxygenAirColumn)
-    const nextFuelColumn = record.fuelColumn ? cloneFuelMaterial(record.fuelColumn) : cloneFuelMaterial(DEFAULT_COPPER_FUEL)
+    let nextSolventColumns = (record.solventColumns?.length ? record.solventColumns : createDefaultSolventColumns()).map(cloneMaterialColumn)
+    let nextAirColumns = normalizeProcessAirColumns(record.airColumns, record.oxygenAirColumn)
+    let nextFuelColumn = record.fuelColumn ? cloneFuelMaterial(record.fuelColumn) : cloneFuelMaterial(DEFAULT_COPPER_FUEL)
     const nextPhaseBatchResults = record.phaseBatchResults ?? null
     const nextProductConstraintConfig = normalizeOxyConstraintConfig(record.productConstraintConfig)
     const nextMaterialPhaseRows = Object.fromEntries(
@@ -5351,26 +5529,30 @@ export default function CopperWorkflow({
         ensureMaterialPhaseRows(rows),
       ])
     )
-    const savedProductSolverResult = record.productCalculated
-      ? normalizeOxySolverResult(record.productSolverResult)
+    const savedProductSolverResult = normalizeOxySolverResult(record.productSolverResult)
+    const recomputedProductState = record.productCalculated && !savedProductSolverResult
+      ? restoreProductCalculationFromCaseState({
+          rawMaterials: nextRawMaterials,
+          solventColumns: nextSolventColumns,
+          fuelColumn: nextFuelColumn,
+          airColumns: nextAirColumns,
+          phaseBatchResults: nextPhaseBatchResults,
+          materialPhaseRows: nextMaterialPhaseRows,
+          productConstraintConfig: nextProductConstraintConfig,
+        })
       : null
-    const restoredProductSolverResult =
-      savedProductSolverResult ??
-      (record.productCalculated
-        ? computeProductSolverResultFromCaseState({
-            rawMaterials: nextRawMaterials,
-            solventColumns: nextSolventColumns,
-            fuelColumn: nextFuelColumn,
-            airColumns: nextAirColumns,
-            phaseBatchResults: nextPhaseBatchResults,
-            materialPhaseRows: nextMaterialPhaseRows,
-            productConstraintConfig: nextProductConstraintConfig,
-          })
-        : null)
+    if (recomputedProductState) {
+      nextSolventColumns = recomputedProductState.solventColumns
+      nextAirColumns = recomputedProductState.airColumns
+      nextFuelColumn = recomputedProductState.fuelColumn
+    }
+    const restoredProductSolverResult = savedProductSolverResult ?? recomputedProductState?.result ?? null
     const restoredProductCalculated = Boolean(record.productCalculated && restoredProductSolverResult)
     const restoredProductFilledBack = Boolean(
-      (record.productFilledBack ?? record.productCalculated ?? false) && restoredProductSolverResult?.valid
+      (record.productFilledBack ?? record.productCalculated ?? false) && restoredProductSolverResult?.acceptable
     )
+    const restoredHeatBalance = normalizeHeatBalanceResult(record.calculatedHeatBalance)
+    const restoredHeatBalanced = Boolean(record.heatBalanced && restoredHeatBalance)
     setRawMaterials(nextRawMaterials)
     setRawWeightDrafts(record.rawWeightDrafts ?? Object.fromEntries(nextRawMaterials.map((material) => [material.id, material.weight > 0 ? String(material.weight) : ''])))
     setWaterWeightDrafts({})
@@ -5385,11 +5567,14 @@ export default function CopperWorkflow({
     setManualPhaseCells(record.manualPhaseCells ?? {})
     setManualSolventWeights(record.manualSolventWeights ?? {})
     setManualFuelWeightValid(record.manualFuelWeightValid ?? false)
+    setManualAirWeightValid(record.manualAirWeightValid ?? false)
     setPhaseCompleted(record.phaseCompleted ?? false)
     setProductCalculated(restoredProductCalculated)
     setProductFilledBack(restoredProductFilledBack)
     setOxySolverResult(restoredProductSolverResult)
-    setHeatBalanced(record.heatBalanced ?? false)
+    setHeatBalanced(restoredHeatBalanced)
+    setCalculatedHeatBalance(restoredHeatBalance)
+    setHeatBalanceEngaged(restoredHeatBalanced)
     setFuelLhv(record.fuelLhv ?? String(DEFAULT_COPPER_FUEL.lowerHeatingValueMJkg))
     setFuelEfficiency(record.fuelEfficiency ?? String(DEFAULT_COPPER_FUEL.combustionEfficiency))
     const nextOxygenAirText = normalizeOxygenAirText(record.oxygenAirO2Pct, record.oxygenAirN2Pct)
@@ -5397,10 +5582,11 @@ export default function CopperWorkflow({
     setOxygenAirN2Pct(nextOxygenAirText.nitrogen)
     setOxygenSupplyCoefficient(record.oxygenSupplyCoefficient ?? '1.15')
     setFeedTemperature(record.feedTemperature ?? '25')
-    setMatteTemperature(record.matteTemperature ?? '1180')
-    setSlagTemperature(record.slagTemperature ?? '1250')
-    setGasTemperature(record.gasTemperature ?? '1150')
-    setDustTemperature(record.dustTemperature ?? '450')
+    setMatteTemperature(record.matteTemperature ?? '1300')
+    setSlagTemperature(record.slagTemperature ?? '1350')
+    setGasTemperature(record.gasTemperature ?? '1350')
+    setDustTemperature(record.dustTemperature ?? '1350')
+    setLossTemperature(record.lossTemperature ?? '1350')
     setHeatLossMJh(record.heatLossMJh ?? '1500')
     setOtherHeatMJh(record.otherHeatMJh ?? '0')
     setAnnualHours(record.annualHours ?? '7200')
@@ -5457,13 +5643,54 @@ export default function CopperWorkflow({
     onStageSelect(normalizeCopperCaseStageId(record.stageId))
   }
 
-  const renameActiveCase = (nextName: string) => {
+  const renameCopperCase = (recordId: string | null, nextName: string, options?: { showMessage?: boolean }) => {
     const trimmed = nextName.trim()
-    if (!activeCaseId || !trimmed) return
-    const current = caseRecords.find((record) => record.id === activeCaseId)
+    if (!recordId || !trimmed) return null
+    const current = caseRecords.find((record) => record.id === recordId)
     if (!current || current.name === trimmed) return
     const updated = { ...current, name: trimmed, updatedAt: new Date().toISOString() }
-    persistCopperCases([updated, ...caseRecords.filter((record) => record.id !== activeCaseId)])
+    persistCopperCases([updated, ...caseRecords.filter((record) => record.id !== recordId)])
+    if (activeCaseId === recordId) {
+      onActiveCaseNameChange?.(trimmed)
+    }
+    if (options?.showMessage) {
+      setCaseMessage(`已修改案例名称：${trimmed}`)
+    }
+    return updated
+  }
+
+  const renameActiveCase = (nextName: string) => {
+    return renameCopperCase(activeCaseId, nextName)
+  }
+
+  const startEditingCaseName = (record: CopperCaseRecord) => {
+    setEditingCaseNameId(record.id)
+    setEditingCaseNameDraft(record.name)
+  }
+
+  const cancelEditingCaseName = () => {
+    setEditingCaseNameId(null)
+    setEditingCaseNameDraft('')
+  }
+
+  const commitEditingCaseName = () => {
+    if (!editingCaseNameId) return
+    const current = caseRecords.find((record) => record.id === editingCaseNameId)
+    const trimmed = editingCaseNameDraft.trim()
+    if (!current || !trimmed) {
+      cancelEditingCaseName()
+      return
+    }
+    renameCopperCase(current.id, trimmed, { showMessage: true })
+    cancelEditingCaseName()
+  }
+
+  const handleEditingCaseNameBlur = () => {
+    if (skipCaseNameBlurCommitRef.current) {
+      skipCaseNameBlurCommitRef.current = false
+      return
+    }
+    commitEditingCaseName()
   }
 
   const exportCopperCaseFile = (record?: CopperCaseRecord | null) => {
@@ -5663,8 +5890,21 @@ export default function CopperWorkflow({
 
   useEffect(() => {
     if (!caseTitleDraft) return
-    renameActiveCase(caseTitleDraft)
+    const renameTimer = window.setTimeout(() => {
+      renameActiveCase(caseTitleDraft)
+    }, 250)
+    return () => window.clearTimeout(renameTimer)
   }, [caseTitleDraft])
+
+  useEffect(() => {
+    const handleRenameActiveCase = (event: Event) => {
+      if (!(event instanceof CustomEvent)) return
+      const nextName = typeof event.detail?.name === 'string' ? event.detail.name : ''
+      if (nextName) renameActiveCase(nextName)
+    }
+    window.addEventListener('metcal:copper-rename-active-case', handleRenameActiveCase)
+    return () => window.removeEventListener('metcal:copper-rename-active-case', handleRenameActiveCase)
+  })
 
   useEffect(() => {
     const handleBackWorkspace = () => confirmSaveBeforeCaseNavigation('raw_material')
@@ -5714,9 +5954,9 @@ export default function CopperWorkflow({
           </button>
         </div>
         {hasResult && (
-          <div className={assistAlertPanelClassName(darkMode, oxySolverResult?.valid ? 'success' : 'warning')}>
+          <div className={assistAlertPanelClassName(darkMode, oxySolverResult?.acceptanceLevel === 'strict' ? 'success' : 'warning')}>
             {productFilledBack
-              ? `已回填：产出结果已写入配料总表产出-产物物相表与产出-产物元素表${
+              ? `${oxySolverResult?.acceptanceLevel === 'relaxed' ? `近似收敛（最大相对残差 ${format(oxySolverResult.maxRelativeResidual, 4)}）：` : '已回填：'}产出结果已写入配料总表产出-产物物相表与产出-产物元素表${
                   recommendedFuelWeight > 0 ? `；推荐燃料煤 ${format(recommendedFuelWeight)} t/h` : ''
                 }。`
               : `已计算但未回填：产物总量 ${format(tableProductResult.totalProductMass)} t/h（${formatCopperProductMassSummary(
@@ -5724,29 +5964,21 @@ export default function CopperWorkflow({
                   activeProcessStageId
                 )}）。${
                   recommendedFuelWeight > 0 ? ` 推荐燃料煤 ${format(recommendedFuelWeight)} t/h。` : ''
-                }${oxySolverResult && !oxySolverResult.valid ? ` ${oxySolverResult.message ?? '产出约束未完全满足，当前不可回填。'}` : ''}`}
+                }${oxySolverResult && !oxySolverResult.acceptable ? ` ${oxySolverResult.message ?? '产出约束未完全满足，当前不可回填。'}` : ''}`}
           </div>
-        )}
-        {oxySolverResult && (
-          <details className={`rounded-lg border text-sm ${darkMode ? 'border-gray-600 bg-gray-900/40' : 'border-gray-200 bg-white'}`} open={!oxySolverResult.valid}>
-            <summary className={`cursor-pointer px-3 py-2 font-semibold ${darkMode ? 'text-gray-100' : 'text-gray-800'}`}>
-              求解方程：1. 列举方程（{oxySolverResult.equationCount} 条） 2. 求解
-            </summary>
-            <div className={`border-t px-3 py-2 ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
-              <div className={`${hintText(darkMode)} mb-2`}>
-                硬方程 {oxySolverResult.equationCount} 条；目标函数方程 {oxySolverResult.objectiveEquationCount} 条。
-              </div>
-              <ol className={`max-h-72 list-decimal space-y-1 overflow-auto pl-5 font-mono text-xs leading-relaxed ${darkMode ? 'text-gray-200' : 'text-gray-700'}`}>
-                {oxySolverResult.equations.map((equation) => (
-                  <li key={equation.id}>{equation.expr.replace(/^\d+\.\s*/, '')}</li>
-                ))}
-              </ol>
-            </div>
-          </details>
         )}
       </div>
     )
   }
+
+  const renderProductCalculationIntro = () => (
+    <div className={`${hintText(darkMode)} mt-4 space-y-1 text-sm leading-relaxed`}>
+      <p>打开方式：在配料总表切换到产出-产物物相表或产出-产物元素表，未完成产出时会自动打开本区。</p>
+      <p>
+        计算说明：先列举六产物元素闭合、元素质量守恒、元素约束与自定义约束方程，再求解熔炼渣、白铜锍、烟气、烟尘、无组织排放与损失的质量、物相组成及元素组成。
+      </p>
+    </div>
+  )
 
   const renderProductResultPlaceholder = () => (
     <div
@@ -5855,12 +6087,42 @@ export default function CopperWorkflow({
                   {pagedCaseRecords.map((record) => (
                     <tr key={record.id} className={`border-t ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
                       <td className="px-3 py-2">
-                        <button
-                          className={`font-medium transition-colors hover:text-blue-600 ${darkMode ? 'text-gray-100 hover:text-blue-300' : 'text-gray-900'}`}
-                          onClick={() => openCopperCase(record)}
-                        >
-                          {record.name}
-                        </button>
+                        {editingCaseNameId === record.id ? (
+                          <input
+                            className={`${inputSm(darkMode)} h-8 w-full px-2 text-left font-medium`}
+                            value={editingCaseNameDraft}
+                            autoFocus
+                            onFocus={(event) => event.currentTarget.select()}
+                            onChange={(event) => setEditingCaseNameDraft(event.target.value)}
+                            onBlur={handleEditingCaseNameBlur}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                commitEditingCaseName()
+                                skipCaseNameBlurCommitRef.current = true
+                                event.currentTarget.blur()
+                              }
+                              if (event.key === 'Escape') {
+                                event.preventDefault()
+                                cancelEditingCaseName()
+                                skipCaseNameBlurCommitRef.current = true
+                                event.currentTarget.blur()
+                              }
+                            }}
+                          />
+                        ) : (
+                          <button
+                            className={`font-medium transition-colors hover:text-blue-600 ${darkMode ? 'text-gray-100 hover:text-blue-300' : 'text-gray-900'}`}
+                            title="左键打开，右键修改名称"
+                            onClick={() => openCopperCase(record)}
+                            onContextMenu={(event) => {
+                              event.preventDefault()
+                              startEditingCaseName(record)
+                            }}
+                          >
+                            {record.name}
+                          </button>
+                        )}
                       </td>
                       <td className="px-3 py-2 text-center font-mono">{formatStoredCaseTime(record.createdAt)}</td>
                       <td className="px-3 py-2 text-center font-mono">{formatStoredCaseTime(record.updatedAt)}</td>
@@ -5999,6 +6261,15 @@ export default function CopperWorkflow({
           description="正在计算产物组成，请稍候…"
           steps={['列举方程', '求解', '生成产物表']}
           currentStep={productCalculationStep}
+        />
+      )}
+      {isHeatBalanceCalculating && (
+        <IteratingOverlay
+          darkMode={darkMode}
+          title="热平衡计算中"
+          description="正在汇总热收入、热支出与燃料煤需求，请稍候…"
+          steps={[...HEAT_BALANCE_CALCULATION_STEPS]}
+          currentStep={heatBalanceCalculationStep}
         />
       )}
       <WorkflowMessageToast
@@ -6347,6 +6618,39 @@ export default function CopperWorkflow({
                 />
               </>
             )}
+            {batchTableView === 'productElement' && (
+              <button
+                type="button"
+                role="switch"
+                aria-checked={productElementTableView === 'element'}
+                aria-label="产出表元素转换"
+                title={
+                  productElementTableView === 'compound'
+                    ? '将 SiO₂/Al₂O₃/CaO/MgO 拆解为 Si/Al/Ca/Mg 与 O 元素显示'
+                    : '恢复化合物列显示'
+                }
+                className="inline-flex cursor-pointer items-center gap-2 border-0 bg-transparent p-0"
+                onClick={() => setProductElementTableView((v) => (v === 'compound' ? 'element' : 'compound'))}
+              >
+                <span className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>元素转换</span>
+                <span
+                  aria-hidden
+                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                    productElementTableView === 'element'
+                      ? 'bg-blue-600'
+                      : darkMode
+                        ? 'bg-gray-600'
+                        : 'bg-gray-300'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                      productElementTableView === 'element' ? 'translate-x-4' : 'translate-x-0.5'
+                    }`}
+                  />
+                </span>
+              </button>
+            )}
             <button type="button" className={btnSecondary(darkMode)} onClick={exportCalculationTable}>
               导出Excel
             </button>
@@ -6453,9 +6757,6 @@ export default function CopperWorkflow({
               onOutputDraftChange={updateOutputPhaseDraft}
               onOutputDraftCommit={commitOutputPhaseDraft}
             />
-            <p className={`${hintText(darkMode)} text-sm leading-relaxed`}>
-              物相 w% 为干基质量分数（相对干料 t/h）；含水行仅展示含水质量，物相列显示「—」，不参与物相合计。
-            </p>
           </div>
         ) : batchTableView === 'productPhase' ? (
           <div
@@ -6473,7 +6774,7 @@ export default function CopperWorkflow({
                 darkMode={darkMode}
                 result={oxySolverResult}
                 mode="phase"
-                phaseTitle="产出-产物物相表（固体/熔体 w%，烟气 v%）"
+                phaseTitle="产出-产物物相表"
                 config={productConstraintConfig}
               />
             ) : (
@@ -6497,6 +6798,7 @@ export default function CopperWorkflow({
                 result={oxySolverResult}
                 mode="element"
                 elementTitle="产出-产物元素表（w%）"
+                elementDisplayMode={productElementTableView}
                 config={productConstraintConfig}
               />
             ) : (
@@ -6506,9 +6808,14 @@ export default function CopperWorkflow({
         ) : batchTableView === 'balance' ? (
           <div key="balance-batch-view" className="space-y-3 batch-table-view-enter">
             <div
-              className={`overflow-hidden rounded-lg border ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}
-              onDoubleClick={handleHeatBalancePlaceholderDoubleClick}
-              title="双击打开热平衡计算专区"
+              role="button"
+              tabIndex={0}
+              className={`cursor-pointer overflow-hidden rounded-lg border transition ${
+                darkMode ? 'border-gray-600 hover:border-blue-500' : 'border-gray-200 hover:border-blue-400'
+              }`}
+              onClick={handleHeatBalancePlaceholderClick}
+              onKeyDown={handleHeatBalancePlaceholderKeyDown}
+              title="点击跳转到热平衡计算专区"
             >
               <table className="w-full table-fixed text-sm">
                 <thead className={darkMode ? 'bg-gray-800 text-gray-100' : 'bg-gray-50 text-gray-700'}>
@@ -6518,7 +6825,7 @@ export default function CopperWorkflow({
                 </thead>
                 <tbody>
                   <tr>
-                    <td className={`px-3 py-6 text-center ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>—</td>
+                    <td className={`px-3 py-6 text-center ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>点击进入热平衡计算专区</td>
                   </tr>
                 </tbody>
               </table>
@@ -7184,8 +7491,17 @@ export default function CopperWorkflow({
       <div ref={productCalculationRef} className={cardCompact(darkMode)}>
         <div className="flex w-full flex-wrap items-center justify-between gap-3">
           <h3 className={`${sectionTitle(darkMode)} mb-0`}>产出计算</h3>
+          <button
+            type="button"
+            className={btnSecondary(darkMode)}
+            onClick={() => setShowProductCalculationAssist((value) => !value)}
+          >
+            {showProductCalculationAssist ? '折叠' : '展开'}
+          </button>
         </div>
-        {renderProductCalculationPanel('product-standalone-calculation', 'mt-4')}
+        {renderProductCalculationIntro()}
+        {showProductCalculationAssist &&
+          renderProductCalculationPanel('product-standalone-calculation', 'mt-4', { showIntro: false })}
       </div>
 
       <div ref={heatBalanceRef} className={cardCompact(darkMode)}>
@@ -7196,42 +7512,98 @@ export default function CopperWorkflow({
           </button>
         </div>
         <div className={`${hintText(darkMode)} mt-4 space-y-1 text-sm leading-relaxed`}>
-          <p>打开方式：完成产出计算后，在本区设置各股物料温度、炉体热损失与富氧空气参数，预览热收支表后点击「计算热平衡」。</p>
+          <p>打开方式：在配料总表点击“热平衡计算”tab 进入本区；也可直接展开本区设置温度、炉体热损失与燃料参数。</p>
           <p>
-            计算说明：以入炉物料显热与化学反应热为热收入，熔炼产物带出显热与自然散热为热支出，平衡后求取燃料煤需求量；分项物理热表结构与 Excel 工作表一致。
+            计算说明：依据投入/产出表中的 25℃、1300℃、1350℃热焓，先列出并配平主要反应，再以入炉物料显热与化学反应热为热收入，产物带出显热与自然散热为热支出，平衡后求取燃料煤需求量。
           </p>
         </div>
         {showHeatBalanceAssist && (
           <div className="mt-4 space-y-4">
-            <div>
-              <div className={`mb-2 text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>温度设置</div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                <LabeledInput darkMode={darkMode} label="入炉料温度 (℃)" value={feedTemperature} onChange={(value) => updateHeatField(setFeedTemperature, value)} />
-                <LabeledInput darkMode={darkMode} label="冰铜/粗铜温度 (℃)" value={matteTemperature} onChange={(value) => updateHeatField(setMatteTemperature, value)} />
-                <LabeledInput darkMode={darkMode} label="炉渣温度 (℃)" value={slagTemperature} onChange={(value) => updateHeatField(setSlagTemperature, value)} />
-                <LabeledInput darkMode={darkMode} label="烟气温度 (℃)" value={gasTemperature} onChange={(value) => updateHeatField(setGasTemperature, value)} />
-                <LabeledInput darkMode={darkMode} label="烟尘温度 (℃)" value={dustTemperature} onChange={(value) => updateHeatField(setDustTemperature, value)} />
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.75fr)]">
+              <div className={`rounded-lg border p-3 ${darkMode ? 'border-gray-600 bg-gray-900/20' : 'border-gray-200 bg-white'}`}>
+                <div className={`mb-3 text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>温度设置</div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  <LabeledInput darkMode={darkMode} label="入炉料温度 (℃)" value={feedTemperature} onChange={(value) => updateHeatField(setFeedTemperature, value)} />
+                  <LabeledInput darkMode={darkMode} label="白铜锍温度 (℃)" value={matteTemperature} onChange={(value) => updateHeatField(setMatteTemperature, value)} />
+                  <LabeledInput darkMode={darkMode} label="熔炼渣温度 (℃)" value={slagTemperature} onChange={(value) => updateHeatField(setSlagTemperature, value)} />
+                  <LabeledInput darkMode={darkMode} label="熔炼烟气温度 (℃)" value={gasTemperature} onChange={(value) => updateHeatField(setGasTemperature, value)} />
+                  <LabeledInput darkMode={darkMode} label="烟气含尘温度 (℃)" value={dustTemperature} onChange={(value) => updateHeatField(setDustTemperature, value)} />
+                  <LabeledInput darkMode={darkMode} label="损失温度 (℃)" value={lossTemperature} onChange={(value) => updateHeatField(setLossTemperature, value)} />
+                </div>
+              </div>
+              <div className={`rounded-lg border p-3 ${darkMode ? 'border-gray-600 bg-gray-900/20' : 'border-gray-200 bg-white'}`}>
+                <div className={`mb-3 text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>计算基准</div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 xl:grid-cols-1">
+                  <BlendMetric darkMode={darkMode} label="热平衡入炉料" value={`${format(heatInputDryWeight)} t/h`} />
+                  <BlendMetric darkMode={darkMode} label="氧气" value={`${format(oxygenAirColumn.weight)} t/h`} />
+                  <BlendMetric darkMode={darkMode} label="白铜锍" value={`${format(heatMatteMass)} t/h`} />
+                </div>
               </div>
             </div>
-            <div>
-              <div className={`mb-2 text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>热支出与燃料参数</div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                <LabeledInput darkMode={darkMode} label="炉体热损失 (MJ/h)" value={heatLossMJh} onChange={(value) => updateHeatField(setHeatLossMJh, value)} />
-                <LabeledInput darkMode={darkMode} label="其他热支出 (MJ/h)" value={otherHeatMJh} onChange={(value) => updateHeatField(setOtherHeatMJh, value)} />
-                <LabeledInput darkMode={darkMode} label="煤低位发热量 (MJ/kg)" value={fuelLhv} onChange={(value) => updateHeatField(setFuelLhv, value)} />
-                <LabeledInput darkMode={darkMode} label="燃烧效率" value={fuelEfficiency} onChange={(value) => updateHeatField(setFuelEfficiency, value)} />
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <div className={`rounded-lg border p-3 ${darkMode ? 'border-gray-600 bg-gray-900/20' : 'border-gray-200 bg-white'}`}>
+                <div className={`mb-3 text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>热支出与燃料</div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <LabeledInput darkMode={darkMode} label="炉体热损失 (MJ/h)" value={heatLossMJh} onChange={(value) => updateHeatField(setHeatLossMJh, value)} />
+                  <LabeledInput darkMode={darkMode} label="其他热支出 (MJ/h)" value={otherHeatMJh} onChange={(value) => updateHeatField(setOtherHeatMJh, value)} />
+                  <LabeledInput darkMode={darkMode} label="煤低位发热量 (MJ/kg)" value={fuelLhv} onChange={(value) => updateHeatField(setFuelLhv, value)} />
+                  <LabeledInput darkMode={darkMode} label="燃烧效率" value={fuelEfficiency} onChange={(value) => updateHeatField(setFuelEfficiency, value)} />
+                </div>
+              </div>
+              <div className={`rounded-lg border p-3 ${darkMode ? 'border-gray-600 bg-gray-900/20' : 'border-gray-200 bg-white'}`}>
+                <div className={`mb-3 text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>供氧条件</div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
+                  <LabeledInput darkMode={darkMode} label="氧气 O (%)" value={oxygenAirO2Pct} onChange={(value) => updateOxygenAirComposition(value, oxygenAirN2Pct)} />
+                  <LabeledInput darkMode={darkMode} label="氧气 N (%)" value={oxygenAirN2Pct} onChange={(value) => updateOxygenAirComposition(oxygenAirO2Pct, value)} />
+                  <LabeledInput darkMode={darkMode} label="供氧系数" value={oxygenSupplyCoefficient} onChange={(value) => updateHeatField(setOxygenSupplyCoefficient, value)} />
+                </div>
               </div>
             </div>
-            <div>
-              <div className={`mb-2 text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>氧气参数</div>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                <LabeledInput darkMode={darkMode} label="氧气 O (%)" value={oxygenAirO2Pct} onChange={(value) => updateOxygenAirComposition(value, oxygenAirN2Pct)} />
-                <LabeledInput darkMode={darkMode} label="氧气 N (%)" value={oxygenAirN2Pct} onChange={(value) => updateOxygenAirComposition(oxygenAirO2Pct, value)} />
-                <LabeledInput darkMode={darkMode} label="供氧系数" value={oxygenSupplyCoefficient} onChange={(value) => updateHeatField(setOxygenSupplyCoefficient, value)} />
+            <div className={`rounded-lg border px-3 py-3 ${darkMode ? 'border-blue-800 bg-blue-950/20' : 'border-blue-200 bg-blue-50'}`}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className={`text-sm font-semibold ${darkMode ? 'text-blue-100' : 'text-blue-900'}`}>计算过程</div>
+                  <div className={`mt-1 text-xs leading-relaxed ${darkMode ? 'text-blue-200/80' : 'text-blue-800'}`}>
+                    点击后按热焓读取、反应热、热收支、燃料煤四步生成结果；修改参数后需要重新计算。
+                  </div>
+                </div>
+                <button
+                  className={btnPrimary(darkMode)}
+                  onClick={() => void runHeatBalanceCalculation()}
+                  disabled={!productFilledBack || !heatInputValid || isHeatBalanceCalculating}
+                >
+                  {isHeatBalanceCalculating ? '热平衡计算中…' : '热平衡计算'}
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {HEAT_BALANCE_CALCULATION_STEPS.map((label, index) => {
+                  const active = isHeatBalanceCalculating && index <= heatBalanceCalculationStep
+                  const done = Boolean(visibleHeatBalance)
+                  return (
+                    <span
+                      key={label}
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                        active || done
+                          ? darkMode
+                            ? 'bg-blue-800 text-blue-100'
+                            : 'bg-blue-100 text-blue-800'
+                          : darkMode
+                            ? 'bg-gray-800 text-gray-500'
+                            : 'bg-white text-gray-500'
+                      }`}
+                    >
+                      {index + 1}. {label}
+                    </span>
+                  )
+                })}
               </div>
             </div>
-            <CopperHeatBalancePlaceholderTables darkMode={darkMode} />
-            {heatBalanced && (
+            {!visibleHeatBalance && (
+              <div className={`rounded-lg border px-4 py-6 text-center text-sm ${darkMode ? 'border-gray-600 bg-gray-900/20 text-gray-400' : 'border-gray-200 bg-gray-50 text-gray-500'}`}>
+                当前仅显示参数设置。点击“热平衡计算”后生成热收支表、反应热方程式和分项物理热结果。
+              </div>
+            )}
+            {visibleHeatBalance && (
               <div className="space-y-4">
                 <div className={`overflow-auto rounded-lg border ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
                   <table className="w-full min-w-[720px] table-fixed text-sm">
@@ -7244,12 +7616,12 @@ export default function CopperWorkflow({
                     </thead>
                     <tbody>
                       {[
-                        ['投入物理热', formatTableDisplayValue(heatBalance.inputPhysicalHeatMJh), 'MJ/h'],
-                        ['氧化化学热', formatTableDisplayValue(heatBalance.chemicalHeatMJh), 'MJ/h'],
-                        ['产物物理热', formatTableDisplayValue(heatBalance.outputPhysicalHeatMJh), 'MJ/h'],
-                        ['总热损失', formatTableDisplayValue(heatBalance.heatLossMJh + heatBalance.otherHeatMJh), 'MJ/h'],
-                        ['热缺口', formatTableDisplayValue(Math.max(0, heatBalance.heatDeficitMJh)), 'MJ/h'],
-                        ['推荐燃料煤', formatTableDisplayValue(heatBalance.requiredFuelWeight), 't/h'],
+                        ['投入物理热', formatTableDisplayValue(visibleHeatBalance.inputPhysicalHeatMJh), 'MJ/h'],
+                        ['化学反应热', formatTableDisplayValue(visibleHeatBalance.chemicalHeatMJh), 'MJ/h'],
+                        ['产物物理热', formatTableDisplayValue(visibleHeatBalance.outputPhysicalHeatMJh), 'MJ/h'],
+                        ['总热损失', formatTableDisplayValue(visibleHeatBalance.heatLossMJh + visibleHeatBalance.otherHeatMJh), 'MJ/h'],
+                        ['热缺口', formatTableDisplayValue(Math.max(0, visibleHeatBalance.heatDeficitMJh)), 'MJ/h'],
+                        ['推荐燃料煤', formatTableDisplayValue(visibleHeatBalance.requiredFuelWeight), 't/h'],
                       ].map(([label, value, unit]) => (
                         <tr key={label} className={`border-t ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
                           <td className="px-2 py-1.5 text-center font-medium">{label}</td>
@@ -7264,37 +7636,29 @@ export default function CopperWorkflow({
                   <div className={heatFormulaCardClass(darkMode)}>
                     <div className={`text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>燃料煤求解</div>
                     <div className="mt-1 font-mono text-sm">
-                      max(0, {format(heatBalance.heatDeficitMJh, 0)}) / {format(fuelHeatMJt, 0)} = {format(heatBalance.requiredFuelWeight)} t/h
+                      max(0, {format(visibleHeatBalance.heatDeficitMJh, 0)}) / {format(visibleHeatBalance.fuelHeatMJt, 0)} = {format(visibleHeatBalance.requiredFuelWeight)} t/h
                     </div>
                   </div>
                   <div className={heatFormulaCardClass(darkMode)}>
-                    <div className={`text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>计算基准</div>
+                    <div className={`text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>结果状态</div>
                     <div className="mt-1 grid grid-cols-1 gap-1 font-mono text-sm">
-                      <span>热平衡入炉料 {format(furnaceFeedWithoutFuel.totalWeight)} t/h</span>
-                      <span>氧气 {format(oxygenAirColumn.weight)} t/h</span>
-                      <span>{getStageProductName(activeProcessStageId, heatProductResult.products.matte)} {format(heatProductResult.products.matte.mass)} t/h</span>
+                      <span>热平衡残差 {format(visibleHeatBalance.balanceAfterFuelMJh, 0)} MJ/h</span>
+                      <span>有效燃料热 {format(visibleHeatBalance.fuelEffectiveHeatMJh, 0)} MJ/h</span>
                     </div>
                   </div>
                 </div>
+                <CopperHeatBalancePlaceholderTables darkMode={darkMode} result={visibleHeatBalance} />
               </div>
             )}
-            {heatBalanceEngaged && (
-              <>
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <button
-                    className={btnPrimary(darkMode)}
-                    onClick={runHeatBalanceCalculation}
-                    disabled={!productCalculated || !heatInputValid}
-                  >
-                    计算热平衡
-                  </button>
-                </div>
-                {heatBalanced && (
-                  <div className={assistAlertPanelClassName(darkMode, 'success')}>
-                    热平衡残差约 {format(heatBalance.balanceAfterFuelMJh, 0)} MJ/h；推荐燃料煤 {format(heatBalance.requiredFuelWeight)} t/h。
-                  </div>
-                )}
-              </>
+            {heatBalanceEngaged && visibleHeatBalance && (
+              <div className={assistAlertPanelClassName(darkMode, 'success')}>
+                热平衡残差约 {format(visibleHeatBalance.balanceAfterFuelMJh, 0)} MJ/h；推荐燃料煤 {format(visibleHeatBalance.requiredFuelWeight)} t/h。
+              </div>
+            )}
+            {!productFilledBack && (
+              <div className={assistAlertPanelClassName(darkMode, 'warning')}>
+                请先完成产出计算并回填到配料总表；热平衡参数可以先填写，结果需在产出回填后计算。
+              </div>
             )}
           </div>
         )}

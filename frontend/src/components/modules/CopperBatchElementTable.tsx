@@ -24,7 +24,7 @@ import {
   BatchTableNumericReadonly,
 } from './BatchTableNumericCell'
 import { batchTableSampleText, formatBatchTableTooltip } from '../../utils/batchTableNumeric'
-import { calculateGasVolumePercents } from '../../utils/copperProductPhaseCalc'
+import { calculateGasMixtureStandardVolumeNm3h, calculateGasVolumePercents } from '../../utils/copperProductPhaseCalc'
 import {
   calculateKnownTotal,
   materialWaterWeight,
@@ -79,6 +79,18 @@ function dataCellClass(dark: boolean, tone: ElementTableTone) {
   return `border-t px-1 py-1.5 align-middle text-center text-sm ${elementTableToneClass(dark, tone)}`
 }
 
+function gasMassInputClass(dark: boolean, status: SolveInputStatus) {
+  const statusColor =
+    status === 'resolved'
+      ? dark
+        ? '!text-sky-50'
+        : '!text-sky-950'
+      : dark
+        ? '!text-sky-100'
+        : '!text-sky-950'
+  return `!h-6 !rounded-none !border-0 !bg-transparent !px-0.5 !shadow-none !ring-0 ${statusColor} focus:!border-0 focus:!ring-0`
+}
+
 function elementTableColumnCount(elementCount: number) {
   return elementCount + 4
 }
@@ -87,6 +99,15 @@ const WATER_H_KEY = 'H(氢)' as const
 const WATER_O_KEY = 'O(氧)' as const
 const GAS_ATTENTION_ELEMENT_KEYS = new Set<CopperElementKey>(['H(氢)', 'O(氧)', 'C (碳)', 'N(氮)'])
 const WATER_ELEMENT_RATIOS = waterElementRatios()
+
+function gasPhaseWeightPct(ratios: CopperRatios, waterWeightPct = 0) {
+  const dryShare = Math.max(0, 100 - Math.max(0, waterWeightPct))
+  return {
+    O2: (dryShare * Math.max(0, ratios['O(氧)'] ?? 0)) / 100,
+    N2: (dryShare * Math.max(0, ratios['N(氮)'] ?? 0)) / 100,
+    H2O: Math.max(0, waterWeightPct),
+  }
+}
 
 function categoryCellWithDelete(label: string, onDelete?: () => void, dark = false) {
   return (
@@ -167,7 +188,7 @@ function renderHorizontalPhaseCells(
   const phases = product.phases ?? []
   const phaseCell = productOutputCellClass(darkMode, 'resolved', 'single', 'middle')
   const volumePercents =
-    product.key === 'flueGas' && rowKind === 'pct' && phases.length > 0
+    (product.key === 'flueGas' || product.key === 'fugitive') && rowKind === 'pct' && phases.length > 0
       ? calculateGasVolumePercents(Object.fromEntries(phases.map((phase) => [phase.key, phase.pct])))
       : null
 
@@ -185,7 +206,7 @@ function renderHorizontalPhaseCells(
             }
             if (rowKind === 'pct') {
               const displayPct = volumePercents?.[phase.key as keyof typeof volumePercents] ?? phase.pct
-              const pctKind = product.key === 'flueGas' ? 'v%' : 'w%'
+              const pctKind = product.key === 'flueGas' || product.key === 'fugitive' ? 'v%' : 'w%'
               const helpTitle = `${phase.label} ${pctKind} · 质量 ${formatBatchTableTooltip(phase.mass)} t/h`
               return (
                 <td key={`${product.key}-pct-${phase.key}`} className={`${phaseCell} whitespace-nowrap px-1`}>
@@ -340,7 +361,9 @@ export function CopperBatchElementTable({
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [viewportWidth, setViewportWidth] = useState(0)
+  const [gasInputUnit, setGasInputUnit] = useState<'mass' | 'volume'>('mass')
   const theadCls = darkMode ? 'bg-gray-800 text-gray-300' : 'bg-gray-50 text-gray-600'
+  const gasInputUnitLabel = gasInputUnit === 'volume' ? 'Nm³/h' : 't/h'
   const displayElementKeys = useMemo(
     () => buildElementTableDisplayKeys(elementKeys, elementDisplayMode),
     [elementDisplayMode, elementKeys]
@@ -666,6 +689,27 @@ export function CopperBatchElementTable({
     )
   }
   const annualInputFactor = 24 * 330
+  const renderGasUnitToggle = () => (
+    <button
+      type="button"
+      className={`absolute right-0.5 top-0.5 inline-flex h-5 w-5 items-center justify-center rounded text-xs font-semibold transition ${
+        darkMode ? 'text-blue-200 hover:bg-gray-700' : 'text-blue-700 hover:bg-blue-50'
+      }`}
+      title={`切换气体投入显示单位（当前 ${gasInputUnitLabel}）`}
+      aria-label="切换气体投入显示单位"
+      onClick={() => setGasInputUnit((unit) => (unit === 'mass' ? 'volume' : 'mass'))}
+    >
+      ⇆
+    </button>
+  )
+
+  const gasInputDisplayWeight = (column: CopperMaterialColumn) => {
+    if (gasInputUnit === 'mass') return column.weight
+    const waterWeight = materialWaterWeight(column)
+    const totalMass = Math.max(0, column.weight) + waterWeight
+    const waterWeightPct = totalMass > 0 ? (waterWeight / totalMass) * 100 : 0
+    return calculateGasMixtureStandardVolumeNm3h(totalMass, gasPhaseWeightPct(column.ratios, waterWeightPct))
+  }
 
   return (
     <div
@@ -693,7 +737,7 @@ export function CopperBatchElementTable({
             >
               名称
             </th>
-            <th className="px-1 py-1.5 text-center text-sm font-semibold">t/h</th>
+            <th className="px-1 py-1.5 text-center text-sm font-semibold">投入</th>
             {displayElementKeys.map((element) => (
               <th key={element} className="px-0.5 py-1.5 text-center text-sm font-semibold">
                 {elementTableHeaderLabel(element, elementDisplayMode)}
@@ -889,19 +933,37 @@ export function CopperBatchElementTable({
                   气
                 </td>
               )}
-              <td className={stickyCellClass(darkMode, 'oxygen', 'name')} style={nameColStyle(nameColWidth)}>
-                {column.name}
+              <td
+                className={`${stickyCellClass(darkMode, 'oxygen', 'name')} relative`}
+                style={nameColStyle(nameColWidth)}
+              >
+                <span>{column.name}</span>
+                {index === 0 ? renderGasUnitToggle() : null}
               </td>
               <td className={dataCellClass(darkMode, 'oxygen')}>
-                <BatchTableNumericMassCell
-                  darkMode={darkMode}
-                  editable
-                  className={solveInputClass(darkMode, oxygenAirInputStatus)}
-                  helpTitle="步骤4：气体投料量，可直接手动输入（空气 t/h 可为 0）。"
-                  value={ratioDrafts[`gas-weight:${column.id}`] ?? column.weight}
-                  onChange={(next) => onGasWeightChange(column.id, next)}
-                  onBlur={() => onGasWeightBlur(column.id)}
-                />
+                <div className="grid min-h-8 grid-rows-[minmax(1.5rem,1fr)_1rem] items-center">
+                  {gasInputUnit === 'mass' ? (
+                    <BatchTableNumericMassCell
+                      darkMode={darkMode}
+                      editable
+                      className={gasMassInputClass(darkMode, oxygenAirInputStatus)}
+                      helpTitle="步骤4：气体投料量，可直接手动输入（空气 t/h 可为 0）。"
+                      value={ratioDrafts[`gas-weight:${column.id}`] ?? column.weight}
+                      onChange={(next) => onGasWeightChange(column.id, next)}
+                      onBlur={() => onGasWeightBlur(column.id)}
+                    />
+                  ) : (
+                    <BatchTableNumericReadonly
+                      darkMode={darkMode}
+                      value={gasInputDisplayWeight(column)}
+                      helpTitle={`${column.name} 标准体积（由当前质量与 O2/N2/H2O 组成换算）`}
+                      className="text-sm"
+                    />
+                  )}
+                  <span className={`text-[11px] leading-none ${darkMode ? 'text-gray-300' : 'text-gray-500'}`}>
+                    {gasInputUnitLabel}
+                  </span>
+                </div>
               </td>
               {renderElementCells('oxygen', column.ratios, { kind: 'gas', id: column.id })}
               {renderTotalCell(column.ratios, 'oxygen')}

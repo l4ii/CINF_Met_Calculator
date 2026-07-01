@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { appSubtitleForLang, appTitleForLang } from '../../constants/appCopy'
+import BackIconButton from '../BackIconButton'
 // @ts-ignore - react-katex types
 import { InlineMath } from 'react-katex'
 import 'katex/dist/katex.min.css'
@@ -176,9 +177,10 @@ export interface AboutPageProps {
   darkMode: boolean
   language: 'zh' | 'en'
   aboutDepartment: string
+  onBackToHome?: () => void
 }
 
-export default function AboutPage({ darkMode, language, aboutDepartment }: AboutPageProps) {
+export default function AboutPage({ darkMode, language, aboutDepartment, onBackToHome }: AboutPageProps) {
   const appTitle = appTitleForLang(language)
   const appSubtitle = appSubtitleForLang(language)
 
@@ -224,8 +226,16 @@ export default function AboutPage({ darkMode, language, aboutDepartment }: About
 
   const cases = caseStudies[aboutDepartment as keyof typeof caseStudies] || []
   const deptName = departmentNames[aboutDepartment as keyof typeof departmentNames] || ''
-  const wrapCls = `flex-[4] overflow-y-auto ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`
-  const pageCls = 'max-w-[calc(100vw*4/5)] mx-auto p-6'
+  const wrapCls = `flex-1 min-w-0 overflow-y-auto ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`
+  const pageCls = 'w-full max-w-none px-3 py-4 sm:px-5 lg:px-6 2xl:px-8 2xl:py-6'
+  const backButton = (
+    <BackIconButton
+      label={language === 'en' ? 'Back to Home' : '返回主页面'}
+      darkMode={darkMode}
+      onClick={onBackToHome}
+      className="mb-3"
+    />
+  )
 
   if (aboutDepartment === 'research') {
     const researchCenters: Record<string, { name: string; image: string; placeholder: string }> = {
@@ -273,8 +283,9 @@ export default function AboutPage({ darkMode, language, aboutDepartment }: About
 
     return (
       <div className={wrapCls}>
-        <div className={pageCls} style={{ maxWidth: 'min(calc(100vw*4/5), 1440px)' }}>
+        <div className={pageCls}>
           <div className="mb-5">
+            {backButton}
             <h1 className={`text-2xl font-bold mb-2 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{appTitle}</h1>
             <p className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{appSubtitle}</p>
           </div>
@@ -294,7 +305,7 @@ export default function AboutPage({ darkMode, language, aboutDepartment }: About
             const isOdd = idx % 2 === 1
             return (
               <div key={key} className={`mb-10 ${panelCls}`}>
-                <div className="grid grid-cols-1 lg:grid-cols-2">
+                <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
                   <div
                     className={`flex flex-col ${isOdd ? 'order-1 lg:order-2 border-b lg:border-b-0 lg:border-l' : 'border-b lg:border-b-0 lg:border-r'} ${darkMode ? 'border-gray-600' : 'border-slate-200'}`}
                   >
@@ -398,8 +409,9 @@ export default function AboutPage({ darkMode, language, aboutDepartment }: About
       <>
         <MunicipalImageLightbox open={municipalLightbox != null} src={municipalLightbox?.src ?? null} alt={municipalLightbox?.alt ?? ''} onClose={() => setMunicipalLightbox(null)} />
         <div className={wrapCls}>
-          <div className={pageCls} style={{ maxWidth: 'min(calc(100vw*4/5), 1440px)' }}>
+          <div className={pageCls}>
             <div className="mb-5">
+              {backButton}
               <h1 className={`text-2xl font-bold mb-2 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{appTitle}</h1>
               <p className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{appSubtitle}</p>
             </div>
@@ -407,7 +419,7 @@ export default function AboutPage({ darkMode, language, aboutDepartment }: About
               className={`mb-10 rounded-2xl border px-5 py-7 sm:px-10 sm:py-9 ${darkMode ? 'border-gray-600 bg-gradient-to-br from-slate-900/95 via-gray-900 to-slate-950' : 'border-slate-200/90 bg-gradient-to-br from-white via-slate-50/80 to-blue-50/50 shadow-sm'}`}
             >
               <p className={sectionKickerCls}>长沙有色冶金设计研究院有限公司 · 冶金事业部</p>
-              <div className="grid grid-cols-1 gap-8 lg:grid-cols-2 lg:gap-10 xl:gap-12 lg:items-start">
+              <div className="grid grid-cols-1 gap-8 lg:grid-cols-2 lg:gap-10 xl:gap-12 2xl:grid-cols-[minmax(0,1.2fr)_minmax(26rem,0.8fr)] lg:items-start">
                 <div className="min-w-0">
                   <h2 className={`text-2xl sm:text-3xl font-bold tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>冶金工程 · 废水处理及矿浆输送技术</h2>
                   <div className={`mt-4 leading-relaxed text-[15px] sm:text-base ${darkMode ? 'text-gray-200' : 'text-slate-800'}`}>
@@ -429,7 +441,7 @@ export default function AboutPage({ darkMode, language, aboutDepartment }: About
               </div>
             </div>
             <div className={`mb-10 ${panelCls}`}>
-              <div className="grid grid-cols-1 lg:grid-cols-2">
+              <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
                 <div className={`flex flex-col border-b lg:border-b-0 lg:border-r ${darkMode ? 'border-gray-600' : 'border-slate-200'}`}>
                   <div className="aspect-video w-full overflow-hidden bg-black/[0.03] dark:bg-black/20">{muniClickImg(4, '采选废水治理工程资料配图', 'h-full w-full object-cover')}</div>
                   <p className={capCls}>图 1　采选废水治理 · 点击配图可放大</p>
@@ -460,7 +472,7 @@ export default function AboutPage({ darkMode, language, aboutDepartment }: About
             </div>
 
             <div className={`mb-10 ${panelCls}`}>
-              <div className="grid grid-cols-1 lg:grid-cols-2">
+              <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
                 <div className="order-2 lg:order-1 flex flex-col justify-center p-6 sm:p-8">
                   <p className={sectionKickerCls}>工程业绩 · Ⅱ</p>
                   <h3 className={sectionTitleCls}>冶炼废水治理</h3>
@@ -491,7 +503,7 @@ export default function AboutPage({ darkMode, language, aboutDepartment }: About
             </div>
 
             <div className={`mb-10 ${panelCls}`}>
-              <div className="grid grid-cols-1 lg:grid-cols-2">
+              <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
                 <div className={`flex flex-col border-b lg:border-b-0 lg:border-r ${darkMode ? 'border-gray-600' : 'border-slate-200'}`}>
                   <div className="aspect-video w-full overflow-hidden bg-black/[0.03] dark:bg-black/20">{muniClickImg(12, '市政污水处理工程资料配图', 'h-full w-full object-cover')}</div>
                   <p className={capCls}>图 3　市政污水厂提标与工业废水 · 点击配图可放大</p>
@@ -523,7 +535,7 @@ export default function AboutPage({ darkMode, language, aboutDepartment }: About
             </div>
 
             <div className={`mb-10 ${panelCls}`}>
-              <div className="grid grid-cols-1 lg:grid-cols-2">
+              <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
                 <div className="order-2 lg:order-1 flex flex-col justify-center p-6 sm:p-8">
                   <p className={sectionKickerCls}>工程业绩 · Ⅳ</p>
                   <h3 className={sectionTitleCls}>矿浆输送</h3>
@@ -593,8 +605,9 @@ export default function AboutPage({ darkMode, language, aboutDepartment }: About
 
     return (
       <div className={wrapCls}>
-        <div className={pageCls} style={{ maxWidth: 'min(calc(100vw*4/5), 1440px)' }}>
+        <div className={pageCls}>
           <div className="mb-5">
+            {backButton}
             <h1 className={`text-2xl font-bold mb-2 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{appTitle}</h1>
             <p className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{appSubtitle}</p>
           </div>
@@ -602,7 +615,7 @@ export default function AboutPage({ darkMode, language, aboutDepartment }: About
             className={`mb-10 rounded-2xl border px-5 py-7 sm:px-10 sm:py-9 ${darkMode ? 'border-gray-600 bg-gradient-to-br from-slate-900/95 via-gray-900 to-slate-950' : 'border-slate-200/90 bg-gradient-to-br from-white via-slate-50/80 to-blue-50/50 shadow-sm'}`}
           >
             <p className={sectionKickerCls}>长沙有色冶金设计研究院有限公司 · 企业概况</p>
-            <div className="grid grid-cols-1 gap-8 lg:grid-cols-2 lg:gap-10 xl:gap-12 lg:items-stretch">
+            <div className="grid grid-cols-1 gap-8 lg:grid-cols-2 lg:gap-10 xl:gap-12 2xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:items-stretch">
               <div className="min-w-0 flex flex-col justify-center">
                 <h2 className={`text-2xl sm:text-3xl font-bold tracking-tight leading-snug ${darkMode ? 'text-white' : 'text-slate-900'}`}>
                   有色金属行业全产业链
@@ -646,8 +659,8 @@ export default function AboutPage({ darkMode, language, aboutDepartment }: About
           </div>
 
           <div className={`mb-8 ${panelCls}`}>
-            <div className="grid grid-cols-1 gap-6 p-6 sm:p-8 lg:grid-cols-[minmax(0,360px)_1fr] lg:items-start lg:gap-10 xl:grid-cols-[minmax(0,420px)_1fr] xl:gap-12">
-              <div className="mx-auto w-full max-w-[min(100%,360px)] shrink-0 sm:max-w-[380px] lg:mx-0 lg:max-w-none xl:max-w-[420px]">
+            <div className="grid grid-cols-1 gap-6 p-6 sm:p-8 lg:grid-cols-[minmax(0,360px)_1fr] lg:items-start lg:gap-10 xl:grid-cols-[minmax(0,420px)_1fr] xl:gap-12 2xl:grid-cols-[minmax(0,460px)_1fr]">
+              <div className="mx-auto w-full max-w-[min(100%,360px)] shrink-0 sm:max-w-[380px] lg:mx-0 lg:max-w-none xl:max-w-[420px] 2xl:max-w-[460px]">
                 <div className={`overflow-hidden rounded-xl border shadow-sm ${darkMode ? 'border-gray-600 bg-black/20' : 'border-slate-200/90 bg-slate-100'}`}>
                   <img
                     src="./pic1.png"
@@ -785,8 +798,9 @@ export default function AboutPage({ darkMode, language, aboutDepartment }: About
 
   return (
     <div className={wrapCls}>
-      <div className={pageCls} style={{ maxWidth: 'min(calc(100vw*4/5), 1440px)' }}>
+      <div className={pageCls}>
         <div className="mb-5">
+          {backButton}
           <h1 className={`text-2xl font-bold mb-2 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{appTitle}</h1>
           <p className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{appSubtitle}</p>
         </div>

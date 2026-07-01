@@ -211,7 +211,7 @@ const cuFeS2S = cuFeS2Mass * 0.5346 // S fraction in CuFeS2 from stoichiometry ~
 const feS2S = feS2Mass * 0.5338
 const fuelCarbonMass = initialUnpacked.fuelMass * ((normalizeCopperRatios(fuelColumn.ratios)['C (碳)'] ?? 0) / 100)
 const oxygenMolesTarget =
-  cuFeS2S / atomicMass('S') / 4 + (feS2S / atomicMass('S') / 2) * 0.7 + (fuelCarbonMass / atomicMass('C')) * 0.7
+  (cuFeS2S / 4 + (feS2S / 2) * 0.7) / atomicMass('S') + (fuelCarbonMass / atomicMass('C')) * 0.7
 
 function applyRecommendedWeights(fuel, solvents, air, recommended) {
   const nextFuel = { ...fuel, weight: recommended.fuelWeight }
@@ -389,7 +389,7 @@ const output = {
     },
     secondaryAir: {
       formula:
-        'O₂_mol = CuFeS2.S/4 + FeS2.S/2×0.7 + 煤.C×0.7；二次风 = O₂_mol×1.02×M_O / w_O(二次风)',
+        'O₂_mol = (CuFeS2.S/4 + FeS2.S/2×0.7)/S + 煤.C/C×0.7；二次风 = O₂_mol×1.02×M_O / w_O(二次风)',
       cuFeS2MassTh: round(cuFeS2Mass, 4),
       feS2MassTh: round(feS2Mass, 4),
       fuelCarbonMassTh: round(fuelCarbonMass, 4),

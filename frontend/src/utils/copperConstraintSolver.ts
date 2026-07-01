@@ -40,8 +40,15 @@ export interface OxyConstraintSolverInput extends OxyConstraintBaseInput {
   config?: OxySideBlowConstraintConfig
 }
 
+export type OxyConstraintAcceptanceLevel = 'strict' | 'relaxed' | 'failed'
+
+export const OXY_STRICT_RELATIVE_RESIDUAL = 0.001
+export const OXY_RELAXED_RELATIVE_RESIDUAL = 0.005
+
 export interface OxyConstraintSolverResult {
   valid: boolean
+  acceptable: boolean
+  acceptanceLevel: OxyConstraintAcceptanceLevel
   converged: boolean
   stage: 'stage1' | 'stage2' | 'complete'
   message?: string
@@ -95,9 +102,10 @@ function compositionFromElementMass(
 function buildOxyProductResults(
   outputPhases: Record<OxySideBlowProductKey, Record<string, number>>,
   productMasses: Partial<Record<OxySideBlowProductKey, number>>,
-  config: OxySideBlowConstraintConfig
+  config: OxySideBlowConstraintConfig,
+  outputElementMasses?: Record<OxySideBlowProductKey, Partial<Record<CopperElementKey, number>>>
 ): Record<OxySideBlowProductKey, OxyProductResult> {
-  const built = buildProductsFromPhases(outputPhases, config, productMasses)
+  const built = buildProductsFromPhases(outputPhases, config, productMasses, outputElementMasses)
   const results = {} as Record<OxySideBlowProductKey, OxyProductResult>
   for (const pk of OXY_SIDE_BLOW_PRODUCT_KEYS) {
     const def = config.products[pk]
@@ -144,7 +152,12 @@ export function solveOxySideBlowProducts(input: OxyConstraintSolverInput): OxyCo
   const solved = solveOxyConstraintSystemStrict(input, config)
   const specs = buildUnknownSpecs(config, input)
   const unpacked = unpackProjectedUnknowns(solved.x, specs, input, config)
-  const products = buildOxyProductResults(unpacked.outputPhases, unpacked.productMasses, config)
+  const products = buildOxyProductResults(
+    unpacked.outputPhases,
+    unpacked.productMasses,
+    config,
+    unpacked.outputElementMasses
+  )
   const constraintResiduals = buildResidualRowsFromSolution(solved.x, input, config)
   const totalProductMass = OXY_SIDE_BLOW_PRODUCT_KEYS.reduce((sum, pk) => sum + products[pk].mass, 0)
   const gasWeights = Object.fromEntries(unpacked.airColumns.map((col) => [col.name, col.weight]))
@@ -153,7 +166,9 @@ export function solveOxySideBlowProducts(input: OxyConstraintSolverInput): OxyCo
     .map((pk) => ({ pk, total: productElementTotal(products[pk]) }))
     .filter((row) => !verifyProductElementTotals(products[row.pk]))
   const allProductsClosed = productClosureIssues.length === 0
-  const valid = solved.converged && allProductsClosed
+  const acceptanceLevel = classifyOxyConstraintAcceptance(solved.maxRelativeResidual, allProductsClosed)
+  const acceptable = acceptanceLevel !== 'failed'
+  const valid = acceptanceLevel === 'strict'
   const worstResiduals = constraintResiduals
     .slice()
     .filter((row) => !row.soft)
@@ -175,16 +190,20 @@ export function solveOxySideBlowProducts(input: OxyConstraintSolverInput): OxyCo
   }))
   const message = valid
     ? undefined
-    : !solved.converged
-      ? `已列举 ${equationCount} 条硬方程并求解；当前约束无精确可行解，最大相对残差 ${solved.maxRelativeResidual.toFixed(4)}。${worstNote}`
-      : `部分产物元素合计未闭合至 100%：${productClosureIssues
-          .map((row) => `${OXY_PRODUCT_KEY_TO_CN[row.pk]} 合计 ${Number(row.total.toFixed(3)).toString()}%`)
-          .join('；')}`
+    : acceptable
+      ? `当前结果近似收敛，最大相对残差 ${solved.maxRelativeResidual.toFixed(4)}（允许上限 ${OXY_RELAXED_RELATIVE_RESIDUAL}）。${worstNote}`
+      : !allProductsClosed
+        ? `部分产物元素合计未闭合至 100%：${productClosureIssues
+            .map((row) => `${OXY_PRODUCT_KEY_TO_CN[row.pk]} 合计 ${Number(row.total.toFixed(3)).toString()}%`)
+            .join('；')}`
+        : `已列举 ${equationCount} 条硬方程并求解；当前约束无可接受解，最大相对残差 ${solved.maxRelativeResidual.toFixed(4)}。${worstNote}`
 
   return {
     valid,
+    acceptable,
+    acceptanceLevel,
     converged: solved.converged,
-    stage: solved.converged ? 'complete' : 'stage2',
+    stage: acceptable ? 'complete' : 'stage2',
     message,
     products,
     totalProductMass,
@@ -203,6 +222,16 @@ export function solveOxySideBlowProducts(input: OxyConstraintSolverInput): OxyCo
     objectiveEquationCount,
     elementBalanceResiduals: computeGlobalElementBalanceResiduals(unpacked.balanceFeed, products),
   }
+}
+
+export function classifyOxyConstraintAcceptance(
+  maxRelativeResidual: number,
+  allProductsClosed = true
+): OxyConstraintAcceptanceLevel {
+  if (!allProductsClosed || !Number.isFinite(maxRelativeResidual)) return 'failed'
+  if (maxRelativeResidual <= OXY_STRICT_RELATIVE_RESIDUAL) return 'strict'
+  if (maxRelativeResidual <= OXY_RELAXED_RELATIVE_RESIDUAL) return 'relaxed'
+  return 'failed'
 }
 
 export function productElementTotal(product: OxyProductResult): number {

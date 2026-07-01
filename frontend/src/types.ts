@@ -16,21 +16,32 @@ export interface SmeltMethod {
   id: string
   name: string
   smeltTypeId: string
+  sectionId?: string
   /** 方法简介，结合长沙有色院业绩推广 */
   description?: string
+}
+
+/** 冶炼工艺分区 */
+export interface SmeltSection {
+  id: string
+  name: string
+  methods: SmeltMethod[]
 }
 
 /** 冶炼类型 */
 export interface SmeltType {
   id: string
   name: string
-  methods: SmeltMethod[]
+  sections: SmeltSection[]
+  methods?: SmeltMethod[]
 }
 
 /** 选中的冶炼方法（用于 Sidebar 与主内容） */
 export interface SelectedMethod {
   smeltTypeId: string
   smeltTypeName: string
+  sectionId?: string
+  sectionName?: string
   smeltMethodId: string
   smeltMethodName: string
   description?: string
@@ -41,34 +52,89 @@ export const SMELT_TYPES: SmeltType[] = [
   {
     id: 'cu',
     name: '铜冶炼',
-    methods: [
-      { id: 'oxy-side-blast', name: '富氧侧吹法', smeltTypeId: 'cu' },
-      { id: 'flash', name: '闪速炼铜法', smeltTypeId: 'cu' },
+    sections: [
+      {
+        id: 'pyro',
+        name: '火法冶炼',
+        methods: [
+          { id: 'side-blown', name: '侧吹炉', smeltTypeId: 'cu', sectionId: 'pyro' },
+          { id: 'flash', name: '闪速炉', smeltTypeId: 'cu', sectionId: 'pyro' },
+        ],
+      },
+      {
+        id: 'hydro',
+        name: '湿法冶炼',
+        methods: [],
+      },
     ],
   },
   {
     id: 'pb',
     name: '铅冶炼',
-    methods: [
-      { id: 'oxy-side-blast', name: '富氧侧吹法', smeltTypeId: 'pb' },
-      { id: 'flash', name: '闪速熔炼法', smeltTypeId: 'pb' },
+    sections: [
+      {
+        id: 'pyro',
+        name: '火法冶炼',
+        methods: [
+          { id: 'side-blown', name: '侧吹炉', smeltTypeId: 'pb', sectionId: 'pyro' },
+          { id: 'ausmelt', name: '奥斯麦特炉', smeltTypeId: 'pb', sectionId: 'pyro' },
+          { id: 'flash', name: '闪速炉', smeltTypeId: 'pb', sectionId: 'pyro' },
+          { id: 'kivcet', name: '基夫赛特炉', smeltTypeId: 'pb', sectionId: 'pyro' },
+        ],
+      },
     ],
   },
   {
     id: 'zn',
     name: '锌冶炼',
-    methods: [
-      { id: 'oxy-side-blast', name: '富氧侧吹法', smeltTypeId: 'zn' },
+    sections: [
+      {
+        id: 'pyro',
+        name: '火法冶炼',
+        methods: [
+          { id: 'isp', name: 'ISP炉', smeltTypeId: 'zn', sectionId: 'pyro' },
+          { id: 'electric', name: '电炉', smeltTypeId: 'zn', sectionId: 'pyro' },
+        ],
+      },
+      {
+        id: 'hydro',
+        name: '湿法冶炼',
+        methods: [
+          { id: 'pressure-leaching', name: '加压浸出', smeltTypeId: 'zn', sectionId: 'hydro' },
+          { id: 'atmospheric-leaching', name: '常压浸出', smeltTypeId: 'zn', sectionId: 'hydro' },
+        ],
+      },
     ],
   },
   {
     id: 'sb',
     name: '锑冶炼',
-    methods: [
-      { id: 'oxy-side-blast', name: '富氧侧吹法', smeltTypeId: 'sb' },
+    sections: [
+      {
+        id: 'pyro',
+        name: '火法冶炼',
+        methods: [
+          { id: 'side-blown', name: '侧吹炉', smeltTypeId: 'sb', sectionId: 'pyro' },
+        ],
+      },
     ],
   },
 ]
+
+export type SmeltAlgorithmKind = 'copper-side-blown' | 'antimony-side-blown' | 'none'
+
+export function getSmeltTypeMethods(smeltType: SmeltType): SmeltMethod[] {
+  return smeltType.sections.flatMap((section) => section.methods)
+}
+
+export function getSelectedSmeltAlgorithm(method?: Pick<SelectedMethod, 'smeltTypeId' | 'sectionId' | 'smeltMethodId'> | null): SmeltAlgorithmKind {
+  if (!method) return 'none'
+  const isPyro = method.sectionId == null || method.sectionId === 'pyro'
+  const isSideBlown = method.smeltMethodId === 'side-blown' || method.smeltMethodId === 'oxy-side-blast'
+  if (method.smeltTypeId === 'cu' && isPyro && isSideBlown) return 'copper-side-blown'
+  if (method.smeltTypeId === 'sb' && isPyro && isSideBlown) return 'antimony-side-blown'
+  return 'none'
+}
 
 /** Sheet 配置 */
 export const SHEETS: { id: SheetId; name: string }[] = [

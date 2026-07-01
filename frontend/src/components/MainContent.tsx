@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
-import { SMELT_TYPES, type SelectedMethod, type SheetId } from '../types'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { getSelectedSmeltAlgorithm, SHEETS, type SelectedMethod, type SheetId } from '../types'
 import RawMaterialPhaseOxygen from './modules/RawMaterialPhaseOxygen'
 import ProductDisplay from './modules/ProductDisplay'
-import LeadFlashBlendOptimizer from './modules/LeadFlashBlendOptimizer'
 import CopperWorkflow from './modules/CopperWorkflow'
 import ElementDistributionFab from './ElementDistributionFab'
 import ErrorBoundary from './ErrorBoundary'
+import BackIconButton from './BackIconButton'
 import { cardBase, descText } from '../theme/uiTheme'
 import AboutPage from './shell/AboutPage'
 import SettingsPage from './shell/SettingsPage'
@@ -24,6 +24,7 @@ interface MainContentProps {
   onDarkModeChange?: (dark: boolean) => void
   onLanguageChange?: (lang: 'zh' | 'en') => void
   onSheetSelect?: (sheet: SheetId) => void
+  onBackToHome?: () => void
 }
 
 export default function MainContent({
@@ -37,6 +38,7 @@ export default function MainContent({
   onDarkModeChange,
   onLanguageChange,
   onSheetSelect,
+  onBackToHome,
 }: MainContentProps) {
   const isEn = language === 'en'
   const appTitle = appTitleForLang(language)
@@ -46,6 +48,30 @@ export default function MainContent({
   const [copperCaseTitleDraft, setCopperCaseTitleDraft] = useState('')
   const [hasActiveCopperCase, setHasActiveCopperCase] = useState(false)
   const mainScrollRef = useRef<HTMLDivElement>(null)
+  const committedCopperCaseTitleRef = useRef('')
+  const skipCopperTitleBlurCommitRef = useRef(false)
+  const handleActiveCopperCaseNameChange = useCallback((name: string | null) => {
+    setHasActiveCopperCase(Boolean(name))
+    committedCopperCaseTitleRef.current = name ?? ''
+    setCopperCaseTitleDraft((current) => {
+      const next = name ?? ''
+      return current === next ? current : next
+    })
+  }, [])
+  const commitCopperCaseTitle = useCallback(() => {
+    const nextName = copperCaseTitleDraft.trim()
+    if (!nextName) {
+      setCopperCaseTitleDraft(committedCopperCaseTitleRef.current)
+      return
+    }
+    setCopperCaseTitleDraft(nextName)
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('metcal:copper-rename-active-case', { detail: { name: nextName } }))
+    }
+  }, [copperCaseTitleDraft])
+  const cancelCopperCaseTitleEdit = useCallback(() => {
+    setCopperCaseTitleDraft(committedCopperCaseTitleRef.current)
+  }, [])
 
   useEffect(() => {
     mainScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
@@ -59,7 +85,11 @@ export default function MainContent({
       language,
       aboutDepartment: aboutDepartment ?? null,
       selectedMethod: selectedMethod
-        ? { smeltTypeName: selectedMethod.smeltTypeName, smeltMethodName: selectedMethod.smeltMethodName }
+        ? {
+            smeltTypeName: selectedMethod.smeltTypeName,
+            sectionName: selectedMethod.sectionName,
+            smeltMethodName: selectedMethod.smeltMethodName,
+          }
         : null,
       activeSheet,
       materialCount: mats.length,
@@ -78,7 +108,14 @@ export default function MainContent({
   ])
 
   if (currentView === 'about' && aboutDepartment) {
-    return <AboutPage darkMode={darkMode} language={language} aboutDepartment={aboutDepartment} />
+    return (
+      <AboutPage
+        darkMode={darkMode}
+        language={language}
+        aboutDepartment={aboutDepartment}
+        onBackToHome={onBackToHome}
+      />
+    )
   }
 
   if (currentView === 'settings') {
@@ -89,13 +126,14 @@ export default function MainContent({
         darkModeValue={darkModeValue}
         onDarkModeChange={onDarkModeChange}
         onLanguageChange={onLanguageChange}
+        onBackToHome={onBackToHome}
       />
     )
   }
 
   if (!selectedMethod) {
     return (
-      <div className={`flex-1 flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
+      <div className={`flex-1 min-w-0 flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
         <div className={darkMode ? 'text-gray-400' : 'text-gray-500'}>
           {isEn ? 'Please select a smelting method from the left sidebar.' : '请从左侧选择冶炼类型'}
         </div>
@@ -114,18 +152,27 @@ export default function MainContent({
     cu_equipment: isEn ? 'Copper equipment selection' : '铜设备选型',
   }
 
-  const selectedMethodDisplayName = (() => {
-    if (!isEn) return selectedMethod.smeltMethodName
-    const smeltType = SMELT_TYPES.find((s) => s.id === selectedMethod.smeltTypeId)
-    const method = smeltType?.methods.find((m) => m.id === selectedMethod.smeltMethodId)
-    if (!method) return selectedMethod.smeltMethodName
-    if (method.id === 'oxy-side-blast') return 'Oxygen-Enriched Side-Blown'
-    if (method.id === 'flash') return 'Flash Smelting'
-    return method.name
-  })()
-  const isLeadFlash = selectedMethod.smeltTypeId === 'pb' && selectedMethod.smeltMethodId === 'flash'
-  const isCopper = selectedMethod.smeltTypeId === 'cu'
-  const copperHeaderTitle = copperCaseTitleDraft || selectedMethodDisplayName
+  const selectedMethodDisplayName = selectedMethod.smeltMethodName
+  const selectedPathLabel = selectedMethod.sectionName
+    ? `${selectedMethod.smeltTypeName} / ${selectedMethod.sectionName} / ${selectedMethodDisplayName}`
+    : `${selectedMethod.smeltTypeName} / ${selectedMethodDisplayName}`
+  const selectedAlgorithm = getSelectedSmeltAlgorithm(selectedMethod)
+  const isCopperSideBlown = selectedAlgorithm === 'copper-side-blown'
+  const isAntimonySideBlown = selectedAlgorithm === 'antimony-side-blown'
+  const copperWorkflowMethodId = selectedMethod.smeltMethodId === 'side-blown' ? 'oxy-side-blast' : selectedMethod.smeltMethodId
+  const placeholderMessage = isEn
+    ? `${selectedPathLabel} calculation module is under development.`
+    : `${selectedPathLabel}计算模块开发中，敬请期待。`
+  const sheetNameEn: Record<SheetId, string> = {
+    raw_material: 'Batching Calculation',
+    product: 'Product Calculation',
+    heat_balance: 'Heat Balance',
+    furnace: 'Furnace Design',
+    cu_smelting: 'Smelting',
+    cu_converting: 'Converting',
+    cu_refining: 'Refining',
+    cu_equipment: 'Equipment Selection',
+  }
   const requestCopperWorkspaceBack = () => {
     if (typeof window === 'undefined') {
       onSheetSelect?.('raw_material')
@@ -133,27 +180,29 @@ export default function MainContent({
     }
     window.dispatchEvent(new CustomEvent('metcal:copper-back-workspace'))
   }
+  const handleHeaderBack = () => {
+    if (activeSheet !== 'raw_material') {
+      if (isCopperSideBlown) {
+        requestCopperWorkspaceBack()
+      } else {
+        onSheetSelect?.('raw_material')
+      }
+      return
+    }
+    onBackToHome?.()
+  }
+  const headerBackLabel = activeSheet === 'raw_material'
+    ? isEn ? 'Back to Home' : '返回主页面'
+    : isEn ? 'Back to Workspace' : '返回项目工作区'
 
   return (
-    <div className={`flex-[4] min-h-0 flex flex-col overflow-hidden ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
-      <div className="flex-shrink-0 px-4 pt-2 pb-1">
+    <div className={`flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+      <div className="flex-shrink-0 px-3 pt-2 pb-1 sm:px-4 2xl:px-6">
         <h1 className={`text-2xl font-bold mb-1 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{appTitle}</h1>
         <p className={`text-sm mb-4 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{appSubtitle}</p>
-        {isCopper && hasActiveCopperCase ? (
-          <div className="mb-1 flex items-center gap-2">
-            <button
-              type="button"
-              aria-label="返回工作区"
-              title="返回工作区"
-              className={`flex h-8 w-8 items-center justify-center rounded border text-lg font-semibold leading-none transition-colors ${
-                darkMode
-                  ? 'border-gray-600 bg-gray-800 text-gray-100 hover:bg-gray-700'
-                  : 'border-gray-300 bg-white text-gray-800 hover:bg-gray-100'
-              }`}
-              onClick={requestCopperWorkspaceBack}
-            >
-              ‹
-            </button>
+        <div className="mb-1 flex flex-wrap items-center gap-2">
+          <BackIconButton label={headerBackLabel} darkMode={darkMode} onClick={handleHeaderBack} />
+          {isCopperSideBlown && activeSheet !== 'raw_material' && hasActiveCopperCase ? (
             <input
               aria-label="案例名"
               className={`ml-2 w-full max-w-xl rounded border bg-transparent px-2 py-1 text-lg font-semibold outline-none transition-colors ${
@@ -161,67 +210,97 @@ export default function MainContent({
                   ? 'border-gray-700 text-gray-100 focus:border-blue-500'
                   : 'border-transparent text-gray-900 hover:border-gray-300 focus:border-blue-500'
               }`}
-              value={copperHeaderTitle}
+              value={copperCaseTitleDraft}
               onChange={(event) => setCopperCaseTitleDraft(event.target.value)}
+              onBlur={() => {
+                if (skipCopperTitleBlurCommitRef.current) {
+                  skipCopperTitleBlurCommitRef.current = false
+                  return
+                }
+                commitCopperCaseTitle()
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  commitCopperCaseTitle()
+                  skipCopperTitleBlurCommitRef.current = true
+                  event.currentTarget.blur()
+                }
+                if (event.key === 'Escape') {
+                  event.preventDefault()
+                  cancelCopperCaseTitleEdit()
+                  skipCopperTitleBlurCommitRef.current = true
+                  event.currentTarget.blur()
+                }
+              }}
             />
-          </div>
-        ) : (
-          <h2 className={`text-lg font-semibold mb-1 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{selectedMethodDisplayName}</h2>
-        )}
+          ) : (
+            <h2 className={`text-lg font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{selectedMethodDisplayName}</h2>
+          )}
+        </div>
+        <div className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{selectedPathLabel}</div>
         {selectedMethod.description && (
-          <p className={`text-sm leading-relaxed max-w-3xl ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{selectedMethod.description}</p>
+          <p className={`text-sm leading-relaxed max-w-5xl ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{selectedMethod.description}</p>
         )}
       </div>
 
       <div ref={mainScrollRef} className="flex-1 min-h-0 overflow-y-auto">
-        <div className="w-full max-w-none mx-auto px-3 py-3 xl:px-4">
-          {isCopper && (
+        <div className="w-full max-w-none px-3 py-3 xl:px-4 2xl:px-6">
+          {isAntimonySideBlown && (
+            <div
+              className={`mb-3 flex flex-wrap gap-2 rounded-lg border p-2 ${
+                darkMode ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'
+              }`}
+            >
+              {SHEETS.map((sheet) => {
+                const sheetActive = activeSheet === sheet.id
+                const label = isEn ? (sheetNameEn[sheet.id] ?? sheet.name) : sheet.name
+                return (
+                  <button
+                    key={sheet.id}
+                    type="button"
+                    onClick={() => onSheetSelect?.(sheet.id)}
+                    className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                      sheetActive
+                        ? darkMode ? 'bg-blue-700 text-white' : 'bg-blue-600 text-white'
+                        : darkMode
+                        ? 'text-gray-300 hover:bg-gray-800'
+                        : 'text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          {isCopperSideBlown && (
             <ErrorBoundary>
               <CopperWorkflow
                 darkMode={darkMode}
                 language={language}
                 activeSheet={activeSheet}
                 onStageSelect={onSheetSelect ?? (() => undefined)}
-                smeltMethodId={selectedMethod.smeltMethodId}
+                smeltMethodId={copperWorkflowMethodId}
                 smeltMethodName={selectedMethod.smeltMethodName}
                 caseTitleDraft={copperCaseTitleDraft}
-                onActiveCaseNameChange={(name) => {
-                  setHasActiveCopperCase(Boolean(name))
-                  setCopperCaseTitleDraft(name ?? '')
-                }}
+                onActiveCaseNameChange={handleActiveCopperCaseNameChange}
               />
             </ErrorBoundary>
           )}
-          {!isCopper && activeSheet === 'raw_material' && (
+          {isAntimonySideBlown && activeSheet === 'raw_material' && (
             <ErrorBoundary>
               <div className="flex flex-col gap-6">
-                {isLeadFlash ? (
-                  <LeadFlashBlendOptimizer darkMode={darkMode} language={language} />
-                ) : (
-                  <RawMaterialPhaseOxygen darkMode={darkMode} language={language} />
-                )}
+                <RawMaterialPhaseOxygen darkMode={darkMode} language={language} />
               </div>
             </ErrorBoundary>
           )}
-          {!isCopper && activeSheet === 'product' && (
+          {isAntimonySideBlown && activeSheet === 'product' && (
             <ErrorBoundary>
-              {isLeadFlash ? (
-                <div className={`${cardBase(darkMode)} mb-6`}>
-                  <p className={descText(darkMode)}>
-                    {isEn
-                      ? 'Phase calculation for lead flash smelting will use the optimized blend from the blending page and calculate sulfide/oxide phase assumptions.'
-                      : '物相计算将读取配矿计算得到的优化混料，并进一步计算硫化物、氧化物与返料物相假设。当前先完成约束配矿工作流。'}
-                  </p>
-                  <div className={`p-6 rounded-lg border-2 border-dashed ${darkMode ? 'border-gray-600 bg-gray-800/40 text-gray-400' : 'border-gray-300 bg-gray-50 text-gray-500'}`}>
-                    {isEn ? 'Lead flash phase calculation is under development.' : '闪速炼铅物相计算开发中。'}
-                  </div>
-                </div>
-              ) : (
-                <ProductDisplay darkMode={darkMode} language={language} />
-              )}
+              <ProductDisplay darkMode={darkMode} language={language} />
             </ErrorBoundary>
           )}
-          {!isCopper && activeSheet === 'heat_balance' && (
+          {isAntimonySideBlown && activeSheet === 'heat_balance' && (
             <>
               <div className={`${cardBase(darkMode)} mb-6`}>
                 <p className={descText(darkMode)}>{sheetDescriptions.heat_balance}</p>
@@ -232,7 +311,7 @@ export default function MainContent({
               <ElementDistributionFab darkMode={darkMode} />
             </>
           )}
-          {!isCopper && activeSheet === 'furnace' && (
+          {isAntimonySideBlown && activeSheet === 'furnace' && (
             <>
               <div className={`${cardBase(darkMode)} mb-6`}>
                 <p className={descText(darkMode)}>{sheetDescriptions.furnace}</p>
@@ -242,6 +321,14 @@ export default function MainContent({
               </div>
               <ElementDistributionFab darkMode={darkMode} />
             </>
+          )}
+          {selectedAlgorithm === 'none' && (
+            <div className={`${cardBase(darkMode)} mb-6`}>
+              <p className={descText(darkMode)}>{placeholderMessage}</p>
+              <div className={`p-6 rounded-lg border-2 border-dashed ${darkMode ? 'border-gray-600 bg-gray-800/40 text-gray-400' : 'border-gray-300 bg-gray-50 text-gray-500'}`}>
+                {isEn ? 'Feature under development, coming soon.' : '功能开发中，敬请期待'}
+              </div>
+            </div>
           )}
         </div>
       </div>

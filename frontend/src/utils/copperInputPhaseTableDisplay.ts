@@ -18,7 +18,10 @@ export type InputPhaseDisplayColumn = {
   materialPhaseRowKeys?: string[]
   applicablePhaseKeys?: string[]
   phaseReady?: boolean
-  oxygenAir?: { weightPct: { O2: number; N2: number }; volumePct?: { O2: number; N2: number } }
+  oxygenAir?: {
+    weightPct: { O2: number; N2: number; H2O?: number }
+    volumePct?: { O2: number; N2: number; H2O?: number }
+  }
   readOnly?: boolean
   moisture?: number
   waterWeight?: number
@@ -43,6 +46,7 @@ function phaseColumnValue(column: InputPhaseDisplayColumn, rowKey: string): numb
   if (column.kind === 'oxygen') {
     if (rowKey === 'O2') return column.oxygenAir?.weightPct.O2 ?? null
     if (rowKey === 'N2') return column.oxygenAir?.weightPct.N2 ?? null
+    if (rowKey === 'H2O') return column.oxygenAir?.weightPct.H2O ?? null
     return null
   }
   if (column.phaseReady === false) return null
@@ -155,6 +159,9 @@ export function buildInputPhaseDisplayPlan<Column extends InputPhaseDisplayColum
 
   const materialRows: InputPhaseDisplayRow<Column>[] = []
   if (rawSummaryColumn) {
+    if (params.rawExpanded) {
+      materialRows.push(...rawColumns.map((column) => ({ role: 'raw-detail' as const, column })))
+    }
     materialRows.push({
       role: 'raw-summary',
       column: rawSummaryColumn,
@@ -162,9 +169,6 @@ export function buildInputPhaseDisplayPlan<Column extends InputPhaseDisplayColum
       expanded: params.rawExpanded,
       count: rawColumns.length,
     })
-    if (params.rawExpanded) {
-      materialRows.push(...rawColumns.map((column) => ({ role: 'raw-detail' as const, column })))
-    }
   } else {
     materialRows.push(...rawColumns.map((column) => ({ role: 'raw-detail' as const, column })))
   }

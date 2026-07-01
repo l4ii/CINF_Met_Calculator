@@ -1,24 +1,9 @@
 import type { AssistantWorkspaceSnapshot } from '../context/AssistantContext'
 import { APP_NAME_EN, APP_NAME_ZH, APP_ORG_NAME_EN } from '../constants/appCopy'
-import { SHEETS, SMELT_TYPES, type SheetId } from '../types'
+import { SMELT_TYPES } from '../types'
 
 function normalize(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, ' ')
-}
-
-function sheetCatalog(language: 'zh' | 'en'): { id: string; name: string; group: string }[] {
-  const sheetNamesEn: Record<SheetId, string> = {
-    raw_material: 'Raw batching',
-    product: 'Product output',
-    heat_balance: 'Heat balance',
-    furnace: 'Furnace design',
-  }
-  const group = language === 'en' ? 'Main sheets' : '主内容页签'
-  return SHEETS.map((s) => ({
-    id: s.id,
-    name: language === 'en' ? sheetNamesEn[s.id] : s.name,
-    group,
-  }))
 }
 
 export function buildAssistantWelcome(language: 'zh' | 'en'): string {
@@ -61,7 +46,6 @@ export function tryRuleBasedAssistantReply(
   const q = normalize(raw)
   if (!q) return null
   const zh = language === 'zh'
-  const nav = ABOUT_NAV[language]
 
   if (
     zh
@@ -77,8 +61,8 @@ export function tryRuleBasedAssistantReply(
   if (zh ? /侧栏|左边|导航|在哪|找不到|切换/.test(raw) : /\bsidebar\b|\bnavigation\b|\bwhere\b.*\b(find|open)/i.test(q)) {
     const groups = [...new Set(SMELT_TYPES.map((t) => t.name))].slice(0, 8)
     return zh
-      ? `请在左侧展开冶炼类型（如：${groups.join('、')}），点选具体冶炼方法后，右侧会出现「配矿计算」等页签；「设置」「了解我们」也在侧栏底部区域。`
-      : `Expand smelting categories on the left, pick a method, then switch sheets like Raw batching / Product in the main pane. Settings and About live in the sidebar footer area.`
+      ? `请在左侧展开冶炼类型（如：${groups.join('、')}），再进入「火法冶炼」或「湿法冶炼」分区点选具体炉型/方法；可用算法会在右侧显示「配矿计算」等页签。「设置」「了解我们」也在侧栏底部区域。`
+      : `Expand smelting categories on the left, then choose a Pyrometallurgy or Hydrometallurgy method. Available calculation sheets appear in the main pane. Settings and About live in the sidebar footer area.`
   }
 
   if (
@@ -108,14 +92,17 @@ export function tryRuleBasedAssistantReply(
     return zh ? `请点击侧栏底部的「设置」，可切换浅色/暗色主题与中英文界面。` : `Open Settings from the sidebar footer to switch theme and UI language.`
   }
 
-  if (snapshot?.selectedMethod && zh ? /当前|这次|选了什么/.test(raw) : /\bcurrent\b.*\b(method|selection)\b/i.test(raw)) {
+  const asksCurrentSelection = zh ? /当前|这次|选了什么/.test(raw) : /\bcurrent\b.*\b(method|selection)\b/i.test(raw)
+  if (snapshot?.selectedMethod && asksCurrentSelection) {
     const m = snapshot.selectedMethod
+    const path = [m.smeltTypeName, m.sectionName, m.smeltMethodName].filter(Boolean).join(' → ')
     return zh
-      ? `当前选择的冶炼路径：${m.smeltTypeName} → ${m.smeltMethodName}；活动页签：${snapshot.activeSheet}。`
-      : `Current path: ${m.smeltTypeName} → ${m.smeltMethodName}; active sheet: ${snapshot.activeSheet}.`
+      ? `当前选择的冶炼路径：${path}；活动页签：${snapshot.activeSheet}。`
+      : `Current path: ${path}; active sheet: ${snapshot.activeSheet}.`
   }
 
-  if (snapshot?.mixTotalWeight != null && zh ? /混合|总重|配料总量/.test(raw) : /\bmix(ed)?\b.*\b(total|weight)\b/i.test(raw)) {
+  const asksMixTotal = zh ? /混合|总重|配料总量/.test(raw) : /\bmix(ed)?\b.*\b(total|weight)\b/i.test(raw)
+  if (snapshot?.mixTotalWeight != null && asksMixTotal) {
     return zh
       ? `当前混合矿等相关总重量约 ${snapshot.mixTotalWeight.toFixed(3)}（单位与界面一致）；配料条目数 ${snapshot.materialCount}。`
       : `Approx. mixed batch total weight ${snapshot.mixTotalWeight.toFixed(3)} (same units as UI); ${snapshot.materialCount} material rows.`

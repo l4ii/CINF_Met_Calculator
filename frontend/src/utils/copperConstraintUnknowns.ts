@@ -1,6 +1,6 @@
 import { COPPER_BUILTIN_PHASE_FRACTIONS } from './copperPhaseStoichiometry.ts'
 import { phaseFractionsFromFormula } from './chemicalFormula.ts'
-import { atomicMass } from './atomicMass.ts'
+import { atomicMass, COMPOUND_MOLAR_MASS } from './atomicMass.ts'
 import {
   constraintFeedMetalMass,
   expandAssayDisplayMassForBalance,
@@ -10,11 +10,16 @@ import {
 import {
   OXY_PRODUCT_KEY_TO_CN,
   OXY_SIDE_BLOW_PRODUCT_KEYS,
+  type ConstraintElementKey,
   type OxySideBlowConstraintConfig,
   type OxySideBlowProductKey,
 } from './copperConstraintConfig.ts'
 import type { ConstraintSymbolTable } from './copperConstraintExpression.ts'
-import { isBlankConstraintRuleValue, resolveConstraintRuleValue } from './copperConstraintValidation.ts'
+import {
+  autoFillOxyProductConstraintConfig,
+  isBlankConstraintRuleValue,
+  resolveConstraintRuleValue,
+} from './copperConstraintValidation.ts'
 import {
   calculateWeightedComposition,
   calculateKnownTotal,
@@ -81,15 +86,23 @@ export function deriveConstrainedFuelColumn(
   }
 }
 
-export type UnknownKind = 'product_mass' | 'output_phase' | 'input_mass' | 'solvent_mass'
+export type UnknownKind = 'product_mass' | 'output_phase' | 'output_element' | 'input_mass' | 'solvent_mass'
 
 export interface UnknownSpec {
   id: string
   kind: UnknownKind
   productKey?: OxySideBlowProductKey
   phaseKey?: string
+  elementKey?: CopperElementKey
   inputName?: InputMassUnknownName
   solventIndex?: number
+}
+
+type OutputElementConstraintSpec = {
+  productKey: OxySideBlowProductKey
+  constraintElement: ConstraintElementKey
+  elementKey: CopperElementKey
+  initialMass: number
 }
 
 export interface OxyConstraintBaseInput {
@@ -106,6 +119,7 @@ export interface OxyConstraintBaseInput {
 export interface UnpackedUnknowns {
   productMasses: Record<OxySideBlowProductKey, number>
   outputPhases: Record<OxySideBlowProductKey, Record<string, number>>
+  outputElementMasses: Record<OxySideBlowProductKey, Partial<Record<CopperElementKey, number>>>
   fuelMass: number
   solventMasses: number[]
   gasMass: Record<InputMassUnknownName, number>
@@ -203,6 +217,36 @@ function calculateBalanceWeightedComposition(materials: CopperMaterialColumn[]):
   return { totalWeight, elementWeights, ratios }
 }
 
+function outputBoundaryElementMass(column: CopperMaterialColumn): Partial<Record<CopperElementKey, number>> {
+  const masses = { ...columnBalanceElementMass(column) }
+  if (column.kind === 'fuel') {
+    masses['C (碳)'] = 0
+  }
+  if (column.kind === 'gas' && (column.airRole === 'secondary' || column.airRole === 'feed_leak')) {
+    masses['N(氮)'] = 0
+  }
+  return masses
+}
+
+function calculateOutputBoundaryWeightedComposition(materials: CopperMaterialColumn[]): WeightedComposition {
+  const totalWeight = materials.reduce(
+    (sum, material) => sum + Math.max(0, material.weight) + solverWaterWeight(material),
+    0
+  )
+  const elementWeights = emptyCopperRatios()
+  for (const material of materials) {
+    const masses = outputBoundaryElementMass(material)
+    for (const element of COPPER_ELEMENT_KEYS) {
+      elementWeights[element] += Math.max(0, masses[element] ?? 0)
+    }
+  }
+  const ratios = emptyCopperRatios()
+  for (const element of COPPER_ELEMENT_KEYS) {
+    ratios[element] = totalWeight > 0 ? (elementWeights[element] / totalWeight) * 100 : 0
+  }
+  return { totalWeight, elementWeights, ratios }
+}
+
 function calculateSolverDisplayComposition(materials: CopperMaterialColumn[]): WeightedComposition {
   const totalWeight = materials.reduce(
     (sum, material) => sum + Math.max(0, material.weight) + solverWaterWeight(material),
@@ -279,6 +323,74 @@ function phaseConstraintElementFraction(phaseKey: string, constraintElement: str
   return compoundFraction * binding.poolMetalFraction
 }
 
+function productHasPhaseCarrier(
+  config: OxySideBlowConstraintConfig,
+  productKey: OxySideBlowProductKey,
+  constraintElement: string
+): boolean {
+  return config.products[productKey].phases.some(
+    (phaseKey) => phaseConstraintElementFraction(phaseKey, constraintElement) > 1e-12
+  )
+}
+
+function isCopperElementKey(key: string): key is CopperElementKey {
+  return (COPPER_ELEMENT_KEYS as readonly string[]).includes(key)
+}
+
+function constrainedOutputElementSpecs(
+  config: OxySideBlowConstraintConfig,
+  baseInput?: OxyConstraintBaseInput
+): OutputElementConstraintSpec[] {
+  const preparedConfig = autoFillOxyProductConstraintConfig(config).config
+  const specs: OutputElementConstraintSpec[] = []
+  const seen = new Set<string>()
+  const rawFeed = baseInput ? resolveRawDisplayFeed(baseInput) : null
+  const rawBalanceFeed = baseInput && rawFeed ? resolveRawBalanceFeed(baseInput, rawFeed) : null
+  const fuelColumn = baseInput ? deriveConstrainedFuelColumn(baseInput, preparedConfig) : null
+  const dynamicSolidBalanceFeed = fuelColumn
+    ? calculateBalanceWeightedComposition([...baseInput!.solventColumns, fuelColumn])
+    : null
+  const distributionFeed =
+    rawBalanceFeed && dynamicSolidBalanceFeed
+      ? combineWeightedCompositions([rawBalanceFeed, dynamicSolidBalanceFeed])
+      : null
+  const productMassHint = Math.max(rawFeed?.totalWeight ?? baseInput?.concentrateMass ?? 1, 1) / OXY_SIDE_BLOW_PRODUCT_KEYS.length
+
+  for (const entry of preparedConfig.elementDistributions) {
+    const binding = resolveConstraintElementBinding(entry.element)
+    if (!isCopperElementKey(binding.poolKey)) continue
+
+    for (const rule of entry.rules) {
+      if (isBlankConstraintRuleValue(rule.value)) continue
+      if (productHasPhaseCarrier(preparedConfig, rule.product, entry.element)) continue
+
+      const key = `${rule.product}:${binding.poolKey}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      const percent = resolveConfigNumber(
+        rule.value,
+        preparedConfig.variables,
+        `${entry.element} ${OXY_PRODUCT_KEY_TO_CN[rule.product]} ${rule.type}`
+      )
+      const initialMass =
+        rule.type === 'D%'
+          ? (percent / 100) *
+            (distributionFeed
+              ? constraintFeedMetalMass(entry.element, distributionFeed)
+              : 0)
+          : (percent / 100) * productMassHint
+      specs.push({
+        productKey: rule.product,
+        constraintElement: entry.element,
+        elementKey: binding.poolKey,
+        initialMass: Math.max(0, initialMass),
+      })
+    }
+  }
+
+  return specs
+}
+
 function singleCarrierPhase(
   config: OxySideBlowConstraintConfig,
   productKey: OxySideBlowProductKey,
@@ -315,6 +427,7 @@ function directlySolvedWPercentPhaseTargets(
 
 function directlySolvedWPercentPhaseIds(config: OxySideBlowConstraintConfig): Set<string> {
   const ids = new Set<string>()
+  for (const id of directlyZeroProductPhaseIds(config)) ids.add(id)
   const targets = directlySolvedWPercentPhaseTargets(config)
   for (const [productKey, entries] of Object.entries(targets) as [
     OxySideBlowProductKey,
@@ -329,8 +442,28 @@ function productPhaseMass(phases: Record<string, number>): number {
   return Object.values(phases).reduce((sum, value) => sum + Math.max(0, value), 0)
 }
 
+function directlyZeroProductPhaseIds(config: OxySideBlowConstraintConfig): Set<string> {
+  const ids = new Set<string>()
+  for (const entry of config.customConstraints) {
+    if (Math.abs(entry.target) > 1e-12) continue
+    const match = entry.expr.trim().match(/^Output\.([^.]+)\.([A-Za-z0-9₂₃•]+)\s*\/\s*Output\.\1$/u)
+    if (!match) continue
+    const productKey = OXY_SIDE_BLOW_PRODUCT_KEYS.find((key) => OXY_PRODUCT_KEY_TO_CN[key] === match[1])
+    const phaseKey = match[2]
+    if (productKey && phaseKey && config.products[productKey].phases.includes(phaseKey)) {
+      ids.add(`${productKey}:${phaseKey}`)
+    }
+  }
+  return ids
+}
+
 export function applyDirectlySolvablePhaseConstraints(unpacked: UnpackedUnknowns, config: OxySideBlowConstraintConfig) {
   const directShareTargets: Partial<Record<OxySideBlowProductKey, Array<{ phaseKey: string; share: number }>>> = {}
+
+  for (const id of directlyZeroProductPhaseIds(config)) {
+    const [productKey, phaseKey] = id.split(':') as [OxySideBlowProductKey, string]
+    if (unpacked.outputPhases[productKey]) unpacked.outputPhases[productKey][phaseKey] = 0
+  }
 
   for (const entry of config.elementDistributions) {
     for (const rule of entry.rules) {
@@ -375,10 +508,7 @@ export function applyDirectlySolvablePhaseConstraints(unpacked: UnpackedUnknowns
   }
 }
 
-function deriveElementMassFromPhases(
-  phases: Record<string, number>,
-  options: { display: boolean }
-): Partial<Record<CopperElementKey, number>> {
+function deriveElementMassFromPhases(phases: Record<string, number>): Partial<Record<CopperElementKey, number>> {
   const out: Partial<Record<CopperElementKey, number>> = {}
   for (const [phaseKey, mass] of Object.entries(phases)) {
     if (mass <= 0) continue
@@ -394,6 +524,7 @@ function deriveElementMassFromPhases(
 export function buildUnknownSpecs(config: OxySideBlowConstraintConfig, baseInput?: OxyConstraintBaseInput): UnknownSpec[] {
   const specs: UnknownSpec[] = []
   const directlySolvedWPhases = directlySolvedWPercentPhaseIds(config)
+  const directElementSpecs = constrainedOutputElementSpecs(config, baseInput)
   for (const productKey of OXY_SIDE_BLOW_PRODUCT_KEYS) {
     specs.push({
       id: `product:${productKey}`,
@@ -411,6 +542,14 @@ export function buildUnknownSpecs(config: OxySideBlowConstraintConfig, baseInput
         phaseKey,
       })
     }
+  }
+  for (const spec of directElementSpecs) {
+    specs.push({
+      id: `outE:${spec.productKey}:${spec.elementKey}`,
+      kind: 'output_element',
+      productKey: spec.productKey,
+      elementKey: spec.elementKey,
+    })
   }
   for (const [solventIndex, solvent] of (baseInput?.solventColumns ?? []).entries()) {
     specs.push({
@@ -436,6 +575,9 @@ export function packUnknowns(unpacked: UnpackedUnknowns, specs: UnknownSpec[]): 
     }
     if (spec.kind === 'output_phase' && spec.productKey && spec.phaseKey) {
       return Math.max(0, unpacked.outputPhases[spec.productKey]?.[spec.phaseKey] ?? 0)
+    }
+    if (spec.kind === 'output_element' && spec.productKey && spec.elementKey) {
+      return Math.max(0, unpacked.outputElementMasses[spec.productKey]?.[spec.elementKey] ?? 0)
     }
     if (spec.kind === 'solvent_mass' && spec.solventIndex != null) {
       return Math.max(0, unpacked.solventColumns[spec.solventIndex]?.weight ?? 0)
@@ -485,6 +627,42 @@ function columnElementFraction(column: CopperMaterialColumn | undefined, element
   return columnBalanceElementMass(unitColumn)[element] ?? 0
 }
 
+function gasPhaseMasses(column: CopperMaterialColumn): Record<string, number> {
+  const dryWeight = Math.max(0, column.weight)
+  const ratios = closeRatiosForBalance(column.ratios)
+  return {
+    O2: (dryWeight * Math.max(0, ratios['O(氧)'] ?? 0)) / 100,
+    N2: (dryWeight * Math.max(0, ratios['N(氮)'] ?? 0)) / 100,
+    H2O: solverWaterWeight(column),
+  }
+}
+
+function gasMoleRatesPerDryTon(column: CopperMaterialColumn | undefined): { o2: number; total: number } {
+  if (!column) return { o2: 0, total: 0 }
+  const phases = gasPhaseMasses({ ...column, weight: 1 })
+  const h2oMolarMass = 2 * atomicMass('H') + atomicMass('O')
+  const o2 = phases.O2 / COMPOUND_MOLAR_MASS.O2
+  const n2 = phases.N2 / COMPOUND_MOLAR_MASS.N2
+  const h2o = phases.H2O / h2oMolarMass
+  return { o2, total: o2 + n2 + h2o }
+}
+
+function oxygenGasMassForVolumeFraction(
+  totalDryMass: number,
+  processAir: CopperMaterialColumn | undefined,
+  oxygen: CopperMaterialColumn | undefined,
+  targetO2VolumeFraction: number
+): number | null {
+  const total = Math.max(0, totalDryMass)
+  const target = Math.min(0.999999, Math.max(0.000001, targetO2VolumeFraction))
+  const air = gasMoleRatesPerDryTon(processAir)
+  const oxy = gasMoleRatesPerDryTon(oxygen)
+  const denominator = target * (oxy.total - air.total) - (oxy.o2 - air.o2)
+  if (total <= 0 || Math.abs(denominator) <= 1e-12) return null
+  const oxygenMass = (total * (air.o2 - target * air.total)) / denominator
+  return Math.min(total, Math.max(0, oxygenMass))
+}
+
 function applyHardInputMassConstraints(
   unpacked: UnpackedUnknowns,
   baseInput: OxyConstraintBaseInput,
@@ -497,8 +675,7 @@ function applyHardInputMassConstraints(
 
 function applyInitialInputMassGuess(
   unpacked: UnpackedUnknowns,
-  baseInput: OxyConstraintBaseInput,
-  config: OxySideBlowConstraintConfig
+  baseInput: OxyConstraintBaseInput
 ) {
   unpacked.gasMass['加料口漏风'] = 5.73
 
@@ -507,8 +684,7 @@ function applyInitialInputMassGuess(
   const feS2Sulfur = Math.max(0, phases.FeS2 ?? 0) * phaseFraction('FeS2', 'S (硫)')
   const fuelCarbon = unpacked.fuelMass * ((closeRatiosForBalance(baseInput.fuelColumn.ratios)['C (碳)'] ?? 0) / 100)
   const oxygenMolesTarget =
-    (cuFeS2Sulfur / atomicMass('S') / 4) +
-    (feS2Sulfur / atomicMass('S') / 2) * 0.7 +
+    (cuFeS2Sulfur / 4 + (feS2Sulfur / 2) * 0.7) / atomicMass('S') +
     (fuelCarbon / atomicMass('C')) * 0.7
   const secondaryAir = findAirColumn(unpacked.airColumns, '二次风')
   const secondaryOxygenFraction = columnElementFraction(secondaryAir, 'O(氧)')
@@ -518,17 +694,11 @@ function applyInitialInputMassGuess(
 
   const processAir = findAirColumn(unpacked.airColumns, '空气')
   const oxygen = findAirColumn(unpacked.airColumns, '氧气')
-  const airOxygenFraction = columnElementFraction(processAir, 'O(氧)')
-  const oxygenOxygenFraction = columnElementFraction(oxygen, 'O(氧)')
-  const targetOxygenFraction = 0.85 * atomicMass('O') / 22.4
   const totalPrimaryOxygenGas = Math.max(0, unpacked.gasMass['空气'] ?? 0) + Math.max(0, unpacked.gasMass['氧气'] ?? 0)
-  if (totalPrimaryOxygenGas > 0 && oxygenOxygenFraction > airOxygenFraction) {
-    const oxygenShare = Math.min(
-      1,
-      Math.max(0, (targetOxygenFraction - airOxygenFraction) / (oxygenOxygenFraction - airOxygenFraction))
-    )
-    unpacked.gasMass['氧气'] = totalPrimaryOxygenGas * oxygenShare
-    unpacked.gasMass['空气'] = totalPrimaryOxygenGas - unpacked.gasMass['氧气']
+  const oxygenMass = oxygenGasMassForVolumeFraction(totalPrimaryOxygenGas, processAir, oxygen, 0.85)
+  if (oxygenMass != null) {
+    unpacked.gasMass['氧气'] = oxygenMass
+    unpacked.gasMass['空气'] = totalPrimaryOxygenGas - oxygenMass
   }
 }
 
@@ -672,6 +842,9 @@ export function unpackUnknowns(
   const outputPhases = Object.fromEntries(
     OXY_SIDE_BLOW_PRODUCT_KEYS.map((pk) => [pk, {} as Record<string, number>])
   ) as Record<OxySideBlowProductKey, Record<string, number>>
+  const outputElementMasses = Object.fromEntries(
+    OXY_SIDE_BLOW_PRODUCT_KEYS.map((pk) => [pk, {} as Partial<Record<CopperElementKey, number>>])
+  ) as Record<OxySideBlowProductKey, Partial<Record<CopperElementKey, number>>>
 
   const constrainedFuelColumn = config ? deriveConstrainedFuelColumn(baseInput, config) : baseInput.fuelColumn
   let fuelMass = Math.max(0, constrainedFuelColumn.weight)
@@ -689,6 +862,8 @@ export function unpackUnknowns(
       productMasses[spec.productKey] = value
     } else if (spec.kind === 'output_phase' && spec.productKey && spec.phaseKey) {
       outputPhases[spec.productKey][spec.phaseKey] = value
+    } else if (spec.kind === 'output_element' && spec.productKey && spec.elementKey) {
+      outputElementMasses[spec.productKey][spec.elementKey] = value
     } else if (spec.kind === 'solvent_mass' && spec.solventIndex != null) {
       if (solventColumns[spec.solventIndex]) {
         solventColumns[spec.solventIndex] = { ...solventColumns[spec.solventIndex]!, weight: value }
@@ -716,23 +891,22 @@ export function unpackUnknowns(
   const rawBalanceFeed = resolveRawBalanceFeed(baseInput, rawFeed)
   const dynamicSolidFeed = calculateSolverDisplayComposition([...solventColumns, fuelColumn])
   const dynamicSolidBalanceFeed = calculateBalanceWeightedComposition([...solventColumns, fuelColumn])
+  const dynamicSolidBoundaryFeed = calculateOutputBoundaryWeightedComposition([...solventColumns, fuelColumn])
   const blendFeed = combineWeightedCompositions([rawFeed, dynamicSolidFeed])
   const distributionFeed = combineWeightedCompositions([rawBalanceFeed, dynamicSolidBalanceFeed])
+  const boundaryDistributionFeed = combineWeightedCompositions([rawBalanceFeed, dynamicSolidBoundaryFeed])
   const gasBalanceFeed = calculateBalanceWeightedComposition(airColumns)
-  const balanceFeed = combineWeightedCompositions([distributionFeed, gasBalanceFeed])
+  const balanceFeed = combineWeightedCompositions([boundaryDistributionFeed, gasBalanceFeed])
   const solventMasses = solventColumns.map((col) => Math.max(0, col.weight))
   const rawWaterMass = baseInput.rawMaterialColumns?.length
     ? calculateInputWaterMass(baseInput.rawMaterialColumns)
     : Math.max(0, rawFeed.totalWeight - Math.max(0, baseInput.concentrateMass))
-  const gasHydrogenMass = gasBalanceFeed.elementWeights['H(氢)'] ?? 0
-  const h2oMolarMass = 2 * atomicMass('H') + atomicMass('O')
-  const gasHydrogenWaterMass =
-    gasHydrogenMass > 0 ? gasHydrogenMass * (h2oMolarMass / (2 * atomicMass('H'))) : 0
-  const waterMass = rawWaterMass + calculateInputWaterMass([...solventColumns, fuelColumn]) + gasHydrogenWaterMass
+  const waterMass = rawWaterMass + calculateInputWaterMass([...solventColumns, fuelColumn, ...airColumns])
 
   return {
     productMasses,
     outputPhases,
+    outputElementMasses,
     fuelMass,
     solventMasses,
     gasMass,
@@ -770,10 +944,25 @@ function productMassesFromPhaseSums(
   ) as Record<OxySideBlowProductKey, number>
 }
 
+function mergeElementMasses(
+  ...sources: Array<Partial<Record<CopperElementKey, number>> | undefined>
+): Partial<Record<CopperElementKey, number>> {
+  const out: Partial<Record<CopperElementKey, number>> = {}
+  for (const source of sources) {
+    if (!source) continue
+    for (const [key, value] of Object.entries(source) as [CopperElementKey, number][]) {
+      if (!Number.isFinite(value) || value <= 0) continue
+      out[key] = (out[key] ?? 0) + value
+    }
+  }
+  return out
+}
+
 export function buildProductsFromPhases(
   outputPhases: Record<OxySideBlowProductKey, Record<string, number>>,
   config: OxySideBlowConstraintConfig,
-  productMasses?: Partial<Record<OxySideBlowProductKey, number>>
+  productMasses?: Partial<Record<OxySideBlowProductKey, number>>,
+  outputElementMasses?: Record<OxySideBlowProductKey, Partial<Record<CopperElementKey, number>>>
 ): Record<
   OxySideBlowProductKey,
   {
@@ -799,11 +988,13 @@ export function buildProductsFromPhases(
     }
     const phaseMass = productPhaseMass(phases)
     const mass = Math.max(0, productMasses?.[pk] ?? phaseMass)
+    const phaseElementMass = deriveElementMassFromPhases(phases)
+    const elementMass = mergeElementMasses(phaseElementMass, outputElementMasses?.[pk])
     products[pk] = {
       mass,
       phases,
-      elementMass: deriveElementMassFromPhases(phases, { display: true }),
-      balanceElementMass: deriveElementMassFromPhases(phases, { display: false }),
+      elementMass,
+      balanceElementMass: elementMass,
     }
   }
   return products
@@ -814,7 +1005,12 @@ export function buildSymbolTableFromUnknowns(
   baseInput: OxyConstraintBaseInput,
   config: OxySideBlowConstraintConfig
 ): ConstraintSymbolTable {
-  const products = buildProductsFromPhases(unpacked.outputPhases, config, unpacked.productMasses)
+  const products = buildProductsFromPhases(
+    unpacked.outputPhases,
+    config,
+    unpacked.productMasses,
+    unpacked.outputElementMasses
+  )
   const fuelElementMass = columnBalanceElementMass(unpacked.fuelColumn)
   const solventMass = Object.fromEntries(
     unpacked.solventColumns.map((col) => [col.name, Math.max(0, col.weight)])
@@ -827,6 +1023,9 @@ export function buildSymbolTableFromUnknowns(
   )
   const gasElementMass = Object.fromEntries(
     unpacked.airColumns.map((col) => [col.name, columnBalanceElementMass(col)])
+  )
+  const gasPhaseMass = Object.fromEntries(
+    unpacked.airColumns.map((col) => [col.name, gasPhaseMasses(col)])
   )
 
   const outputMass: Record<string, number> = {}
@@ -874,6 +1073,7 @@ export function buildSymbolTableFromUnknowns(
         ...(baseInput.inputPhaseMass?.燃料煤 ?? {}),
         H2O: solverWaterWeight(unpacked.fuelColumn),
       },
+      ...gasPhaseMass,
     },
     outputMass,
     outputPhaseMass,
@@ -907,6 +1107,12 @@ export function createInitialUnpacked(baseInput: OxyConstraintBaseInput, config:
       return [pk, phases]
     })
   ) as Record<OxySideBlowProductKey, Record<string, number>>
+  const outputElementMasses = Object.fromEntries(
+    OXY_SIDE_BLOW_PRODUCT_KEYS.map((pk) => [pk, {} as Partial<Record<CopperElementKey, number>>])
+  ) as Record<OxySideBlowProductKey, Partial<Record<CopperElementKey, number>>>
+  for (const spec of constrainedOutputElementSpecs(config, baseInput)) {
+    outputElementMasses[spec.productKey][spec.elementKey] = spec.initialMass
+  }
   const productMasses = productMassesFromPhaseSums(outputPhases)
 
   const gasMass = Object.fromEntries(
@@ -924,6 +1130,7 @@ export function createInitialUnpacked(baseInput: OxyConstraintBaseInput, config:
   const initial: UnpackedUnknowns = {
     productMasses,
     outputPhases,
+    outputElementMasses,
     fuelMass: derivedFuelDryMass(baseInput, config),
     solventMasses: solventColumns.map((col) => Math.max(0, col.weight)),
     gasMass,
@@ -938,7 +1145,7 @@ export function createInitialUnpacked(baseInput: OxyConstraintBaseInput, config:
     airColumns: baseInput.airColumns,
   }
   const projected = unpackProjectedUnknowns(packUnknowns(initial, specs), specs, baseInput, config)
-  applyInitialInputMassGuess(projected, baseInput, config)
+  applyInitialInputMassGuess(projected, baseInput)
   const seeded = unpackUnknowns(packUnknowns(projected, specs), specs, baseInput, config)
   applyDirectlySolvablePhaseConstraints(seeded, config)
   applyInitialOutputPhaseGuess(seeded, config)

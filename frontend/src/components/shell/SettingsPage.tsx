@@ -12,6 +12,7 @@ import {
 } from '../../constants/appCopy'
 import { API_BASE_URL } from '../../config/api'
 import { formatUpdateError } from '../../utils/formatUpdateError'
+import BackIconButton from '../BackIconButton'
 import {
   readStoredUiScale,
   resetUiScale,
@@ -26,6 +27,7 @@ export interface SettingsPageProps {
   darkModeValue: boolean
   onDarkModeChange?: (dark: boolean) => void
   onLanguageChange?: (lang: 'zh' | 'en') => void
+  onBackToHome?: () => void
 }
 
 export default function SettingsPage({
@@ -34,6 +36,7 @@ export default function SettingsPage({
   darkModeValue,
   onDarkModeChange,
   onLanguageChange,
+  onBackToHome,
 }: SettingsPageProps) {
   const appTitle = appTitleForLang(language)
   const [currentVersion, setCurrentVersion] = useState<string>('')
@@ -205,7 +208,7 @@ export default function SettingsPage({
     await (window as any).electronAPI.update.installUpdate()
   }
 
-  const cardCls = `rounded-xl border p-5 ${darkMode ? 'bg-gray-700/50 border-gray-600' : 'bg-white border-gray-200'}`
+  const cardCls = `rounded-xl border p-5 2xl:p-6 ${darkMode ? 'bg-gray-700/50 border-gray-600' : 'bg-white border-gray-200'}`
   const sectionTitleCls = `text-sm font-semibold mb-4 flex items-center gap-2 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`
   const accentBorder = darkMode ? 'border-l-blue-500' : 'border-l-blue-600'
 
@@ -271,9 +274,10 @@ export default function SettingsPage({
     (assistantStatus as { localDeploymentEnabled?: boolean }).localDeploymentEnabled !== false
 
   return (
-    <div className={`flex-[4] overflow-y-auto ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
-      <div className="max-w-[calc(100vw*4/5)] mx-auto p-6" style={{ maxWidth: 'min(calc(100vw*4/5), 1440px)' }}>
+    <div className={`flex-1 min-w-0 overflow-y-auto ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
+      <div className="w-full max-w-none px-3 py-4 sm:px-5 lg:px-6 2xl:px-8 2xl:py-6">
         <div className="mb-8">
+          <BackIconButton label={language === 'en' ? 'Back to Home' : '返回主页面'} darkMode={darkMode} onClick={onBackToHome} className="mb-3" />
           <h1 className={`text-2xl sm:text-3xl font-bold mb-1 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{t.pageTitle}</h1>
           <p className={`text-sm mb-5 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{t.pageSubtitle}</p>
           <div className={`rounded-xl border-l-4 ${accentBorder} ${darkMode ? 'bg-gray-700/60 border-gray-600' : 'bg-white border-gray-200'} px-5 py-4`}>
@@ -284,7 +288,7 @@ export default function SettingsPage({
 
         <section className="mb-8">
           <h2 className={`${sectionTitleCls} border-l-4 ${accentBorder} pl-3`}>{t.packageBuild}</h2>
-          <div className={`grid grid-cols-1 lg:grid-cols-2 gap-4`}>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 2xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] 2xl:gap-5">
             <div className={cardCls}>
               <h3 className={`text-base font-semibold mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{pkgInfo.title}</h3>
               <p className={`text-sm leading-relaxed mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{pkgInfo.variantIntro}</p>
@@ -476,7 +480,7 @@ export default function SettingsPage({
         )}
         <section className="mb-8">
           <h2 className={`${sectionTitleCls} border-l-4 ${accentBorder} pl-3`}>{t.appearance}</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3 2xl:gap-5">
             <div className={cardCls}>
               <h3 className={`text-base font-semibold mb-3 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{t.displayMode}</h3>
               <div className="flex gap-2">
@@ -552,7 +556,7 @@ export default function SettingsPage({
         </section>
         <section className="mb-8">
           <h2 className={`${sectionTitleCls} border-l-4 ${accentBorder} pl-3`}>{t.feedbackSection}</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] 2xl:gap-5">
             <div className={cardCls}>
               <h3 className={`text-base font-semibold mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{t.feedbackTitle}</h3>
               <p className={`text-sm mb-4 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{t.feedbackDesc}</p>
@@ -637,7 +641,7 @@ export default function SettingsPage({
         </section>
         <section>
           <h2 className={`${sectionTitleCls} border-l-4 ${accentBorder} pl-3`}>{t.legal}</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:gap-5">
             <div className={cardCls}>
               <h3 className={`text-base font-semibold mb-3 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{leg.disclaimerTitle}</h3>
               <div className={`text-sm leading-relaxed space-y-2 ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
