@@ -1,6 +1,6 @@
 import { atomicMass, COMPOUND_MOLAR_MASS, compoundMolarMass, elementMassFraction } from './atomicMass.ts'
 import type { CopperElementKey, CopperRatios } from './copperWorkflowCalc.ts'
-import { normalizeCopperRatios } from './copperWorkflowCalc.ts'
+import { closeCopperRatios } from './copperWorkflowCalc.ts'
 
 const MM = COMPOUND_MOLAR_MASS
 
@@ -116,8 +116,12 @@ function feMassFromFeO(feoPct: number) {
   return feoPct * elementMassFraction({ Fe: 1, O: 1 }, 'Fe')
 }
 
+export function normalizeConcentrateAssayRatios(ratios: CopperRatios): Record<CopperElementKey, number> {
+  return closeCopperRatios(ratios, { fillOther: false, scaleWhenOver100: false, splitFeO: true })
+}
+
 function displayRatiosToPool(ratios: CopperRatios): Pool {
-  const r = normalizeCopperRatios(ratios)
+  const r = normalizeConcentrateAssayRatios(ratios)
   return {
     Cu: r['Cu(铜)'] ?? 0,
     Fe: (r['Fe(铁)'] ?? 0) + feMassFromFeO(r['FeO(氧化亚铁)'] ?? 0),
@@ -243,28 +247,29 @@ function solve3x3(matrix: number[][], vector: number[]): [number, number, number
   return [detCol(0) / det, detCol(1) / det, detCol(2) / det]
 }
 
-function solveCuFeS(
-  pool: Pool,
-  usePyrite: boolean
-): { CuFeS2: number; Cu2S: number; CuS: number; FeS2: number; FeS: number } {
+type CuFeSSolution = { CuFeS2: number; Cu2S: number; CuS: number; FeS2: number; FeS: number }
+
+function solveCuFeSWithoutPyrite(pool: Pool): CuFeSSolution | null {
   const fCuFeS2 = phaseElementFractions(PHASE_FORMULAS.CuFeS2)
   const fCu2S = phaseElementFractions(PHASE_FORMULAS.Cu2S)
   const fFeS = phaseElementFractions(PHASE_FORMULAS.FeS)
-  const fFeS2 = phaseElementFractions(PHASE_FORMULAS.FeS2)
 
-  if (!usePyrite) {
-    const matrix = [
-      [fCuFeS2.Cu ?? 0, fCu2S.Cu ?? 0, 0],
-      [fCuFeS2.Fe ?? 0, 0, fFeS.Fe ?? 0],
-      [fCuFeS2.S ?? 0, fCu2S.S ?? 0, fFeS.S ?? 0],
-    ]
-    const sol = solve3x3(matrix, [pool.Cu, pool.Fe, pool.S])
-    if (!sol) return { CuFeS2: 0, Cu2S: 0, CuS: 0, FeS2: 0, FeS: 0 }
-    const [x, y, z] = sol
-    if (x >= -1e-9 && y >= -1e-9 && z >= -1e-9) {
-      return { CuFeS2: Math.max(0, x), Cu2S: Math.max(0, y), CuS: 0, FeS2: 0, FeS: Math.max(0, z) }
-    }
-  }
+  const matrix = [
+    [fCuFeS2.Cu ?? 0, fCu2S.Cu ?? 0, 0],
+    [fCuFeS2.Fe ?? 0, 0, fFeS.Fe ?? 0],
+    [fCuFeS2.S ?? 0, fCu2S.S ?? 0, fFeS.S ?? 0],
+  ]
+  const sol = solve3x3(matrix, [pool.Cu, pool.Fe, pool.S])
+  if (!sol) return null
+  const [x, y, z] = sol
+  if (x < -1e-9 || y < -1e-9 || z < -1e-9) return null
+  return { CuFeS2: Math.max(0, x), Cu2S: Math.max(0, y), CuS: 0, FeS2: 0, FeS: Math.max(0, z) }
+}
+
+function solveCuFeSWithPyrite(pool: Pool): CuFeSSolution {
+  const fCuFeS2 = phaseElementFractions(PHASE_FORMULAS.CuFeS2)
+  const fFeS = phaseElementFractions(PHASE_FORMULAS.FeS)
+  const fFeS2 = phaseElementFractions(PHASE_FORMULAS.FeS2)
 
   const matrix = [
     [fCuFeS2.Cu ?? 0, 0, 0],
@@ -283,16 +288,36 @@ function solveCuFeS(
   }
 }
 
-/** 是否应采用精矿规范化物相分配（含 FeO 列或西南铜内置精矿） */
-export function shouldUseConcentrateNormativeAllocator(ratios: CopperRatios): boolean {
-  const r = normalizeCopperRatios(ratios)
-  return (r['FeO(氧化亚铁)'] ?? 0) !== 0 || (r['MgO(氧化镁)'] ?? 0) > 0
+function solveCuFeS(pool: Pool): CuFeSSolution {
+  return solveCuFeSWithoutPyrite(pool) ?? solveCuFeSWithPyrite(pool)
+}
+
+export function hasConcentrateNormativePhaseRows(rows: Array<{ kind?: string; id?: string; formula?: string; builtinKey?: string }>): boolean {
+  const normativeKeys = new Set<string>(['CuFeS2', 'CuS', 'Cu2S', 'FeS2', 'FeS'])
+  return rows.some((row) => {
+    if (row.kind === 'draft') return false
+    return normativeKeys.has((row.builtinKey ?? row.formula ?? row.id ?? '').trim())
+  })
+}
+
+/** 是否应采用精矿规范化物相分配（精矿专用物相行优先，其次兼容旧 FeO/MgO 触发） */
+export function shouldUseConcentrateNormativeAllocator(
+  ratios: CopperRatios,
+  rows: Array<{ kind?: string; id?: string; formula?: string; builtinKey?: string }> = []
+): boolean {
+  if (hasConcentrateNormativePhaseRows(rows)) return true
+  const rawFe = Number(ratios['Fe(铁)'] ?? 0)
+  if (Number.isFinite(rawFe) && rawFe > 0) return true
+  const rawFeO = Number(ratios['FeO(氧化亚铁)'] ?? 0)
+  if (Number.isFinite(rawFeO) && rawFeO > 0) return true
+  const r = normalizeConcentrateAssayRatios(ratios)
+  return (r['MgO(氧化镁)'] ?? 0) > 0
 }
 
 export function allocateConcentratePhases(ratios: CopperRatios): Record<ConcentratePhaseKey, number> {
   const out = Object.fromEntries(CONCENTRATE_NORM_PHASE_ORDER.map((k) => [k, 0])) as Record<ConcentratePhaseKey, number>
   const pool = displayRatiosToPool(ratios)
-  const originalOther = normalizeCopperRatios(ratios)['Other(其他)'] ?? 0
+  const originalOther = normalizeConcentrateAssayRatios(ratios)['Other(其他)'] ?? 0
 
   const alloc = (key: ConcentratePhaseKey, elementMass: number, elementSymbol: string, phaseKey: keyof typeof MM, count = 1) => {
     const mass = phaseMassFromElement(elementMass, phaseKey, elementSymbol, count)
@@ -343,8 +368,8 @@ export function allocateConcentratePhases(ratios: CopperRatios): Record<Concentr
   const cMol = pool.C / atomicMass('C')
   const denom = caMol + mgMol
   const caShare = denom > 1e-12 ? caMol / denom : 1
-  const caco3Mol = cMol * caShare
-  const mgco3Mol = cMol * (1 - caShare)
+  const caco3Mol = Math.min(cMol * caShare, caMol)
+  const mgco3Mol = Math.min(cMol * (1 - caShare), mgMol)
   if (caco3Mol > 0) {
     const mass = caco3Mol * MM.CaCO3
     out.CaCO3 = mass
@@ -376,10 +401,7 @@ export function allocateConcentratePhases(ratios: CopperRatios): Record<Concentr
     pool.Al2O3 = 0
   }
 
-  let cuFeS = solveCuFeS(pool, false)
-  if (cuFeS.Cu2S < -1e-6) {
-    cuFeS = solveCuFeS(pool, true)
-  }
+  const cuFeS = solveCuFeS(pool)
   out.CuFeS2 = cuFeS.CuFeS2
   out.Cu2S = cuFeS.Cu2S
   out.CuS = cuFeS.CuS

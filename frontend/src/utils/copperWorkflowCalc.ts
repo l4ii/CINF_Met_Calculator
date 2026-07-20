@@ -192,7 +192,7 @@ export const DEFAULT_COPPER_SOLVENTS: CopperSolvent[] = [
     id: 'silica',
     name: '石英石',
     unitPrice: 260,
-    composition: { 'Fe(铁)': 0, 'FeO(氧化亚铁)': 0.64, 'SiO₂(二氧化硅)': 85, 'CaO(氧化钙)': 0.5, 'MgO(氧化镁)': 1 },
+    composition: { 'Fe(铁)': 0.4975, 'SiO₂(二氧化硅)': 85, 'CaO(氧化钙)': 0.5, 'MgO(氧化镁)': 1 },
   },
   {
     id: 'iron-ore',
@@ -213,8 +213,8 @@ function parsePhaseNumeric(value: string | number | undefined, fallback = 0) {
   return Number.isFinite(n) ? Math.max(0, n) : fallback
 }
 
-/** 西南铜案例：国内外购矿与边贸矿元素组成相同 */
-const SW_DOMESTIC_BORDER_RATIOS: CopperRatios = {
+/** 西南铜案例：国内外购矿与边贸矿化验基准（FeO 化合物口径，入库经 preprocessConcentrateAssayRatios 拆为 Fe+O） */
+const SW_DOMESTIC_BORDER_ASSAY: CopperRatios = {
   'Cu(铜)': 19.78,
   'FeO(氧化亚铁)': 36.1759945565563,
   'S (硫)': 26.69,
@@ -239,98 +239,55 @@ const SW_DOMESTIC_BORDER_RATIOS: CopperRatios = {
   'Cd(镉)': 0.04,
 }
 
-export const COPPER_MATERIAL_LIBRARY: CopperLibraryMaterial[] = [
-  {
-    id: 'cu-conc-internal',
-    name: '系统内精矿',
-    category: 'concentrate',
-    unitPrice: 62000,
-    ratios: normalizeCopperRatios({
-      'Cu(铜)': 19.38,
-      'FeO(氧化亚铁)': 35.8543729833294,
-      'S (硫)': 23.93,
-      'Pb(铅)': 0.19,
-      'Zn(锌)': 0.18,
-      'Ni(镍)': 0.04,
-      'Se(硒)': 0.015,
-      'Bi(铋)': 0.011,
-      'As(砷)': 0.15,
-      'Au(金)': 0.0003064,
-      'Ag(银)': 0.003374,
-      'SiO₂(二氧化硅)': 11.58,
-      'CaO(氧化钙)': 2.708,
-      'MgO(氧化镁)': 1.13400000000002,
-      'Hg(汞)': 3e-5,
-      'C (碳)': 0.550761250819715,
-      'Other(其他)': 8.26923177830951,
-      'Al₂O₃(三氧化二铝)': 2.44,
-      'Sn(锡)': 0.003,
-      'Te(碲)': 0.01,
-      'Sb(锑)': 0.028,
-      'Cd(镉)': 0.04,
-    }),
-  },
-  {
-    id: 'cu-conc-domestic',
-    name: '国内外购矿',
-    category: 'concentrate',
-    unitPrice: 60000,
-    ratios: normalizeCopperRatios(SW_DOMESTIC_BORDER_RATIOS),
-  },
-  {
-    id: 'cu-conc-import',
-    name: '进口铜精矿',
-    category: 'concentrate',
-    unitPrice: 65000,
-    ratios: normalizeCopperRatios({
-      'Cu(铜)': 24.92,
-      'FeO(氧化亚铁)': 35.1725352480885,
-      'S (硫)': 30.16,
-      'Pb(铅)': 0.659999999999999,
-      'Zn(锌)': 2.54,
-      'Ni(镍)': 0.00700000000000002,
-      'Se(硒)': 0.015,
-      'Bi(铋)': 0.047,
-      'As(砷)': 0.3,
-      'Au(金)': 0.0002769,
-      'Ag(银)': 0.02259,
-      'SiO₂(二氧化硅)': 7.05,
-      'CaO(氧化钙)': 0.954000000000004,
-      'MgO(氧化镁)': 0.644000000000005,
-      'Hg(汞)': 3e-5,
-      'C (碳)': 0.237745724041993,
-      'Other(其他)': 2.58397315528736,
-      'Al₂O₃(三氧化二铝)': 1.795,
-      'Sn(锡)': 0.003,
-      'Te(碲)': 0.01,
-      'Sb(锑)': 0.037,
-      'Cd(镉)': 0.04,
-    }),
-  },
-  {
-    id: 'cu-conc-a',
-    name: '铜精矿 A',
-    category: 'concentrate',
-    unitPrice: 62000,
-    ratios: normalizeCopperRatios({
-      'Al₂O₃(三氧化二铝)': 1.53,
-      'CaO(氧化钙)': 0.75,
-      'Cu(铜)': 32.22,
-      'Fe(铁)': 25.95,
-      'Other(其他)': 0.014,
-      'Pb(铅)': 0.866,
-      'S (硫)': 31.95,
-      'SiO₂(二氧化硅)': 6.72,
-    }),
-  },
-  {
-    id: 'cu-conc-border',
-    name: '边贸矿',
-    category: 'concentrate',
-    unitPrice: 58000,
-    ratios: normalizeCopperRatios(SW_DOMESTIC_BORDER_RATIOS),
-  },
-]
+const SW_INTERNAL_ASSAY: CopperRatios = {
+  'Cu(铜)': 19.38,
+  'FeO(氧化亚铁)': 35.8543729833294,
+  'S (硫)': 23.93,
+  'Pb(铅)': 0.19,
+  'Zn(锌)': 0.18,
+  'Ni(镍)': 0.04,
+  'Se(硒)': 0.015,
+  'Bi(铋)': 0.011,
+  'As(砷)': 0.15,
+  'Au(金)': 0.0003064,
+  'Ag(银)': 0.003374,
+  'SiO₂(二氧化硅)': 11.58,
+  'CaO(氧化钙)': 2.708,
+  'MgO(氧化镁)': 1.13400000000002,
+  'Hg(汞)': 3e-5,
+  'C (碳)': 0.550761250819715,
+  'Other(其他)': 8.26923177830951,
+  'Al₂O₃(三氧化二铝)': 2.44,
+  'Sn(锡)': 0.003,
+  'Te(碲)': 0.01,
+  'Sb(锑)': 0.028,
+  'Cd(镉)': 0.04,
+}
+
+const SW_IMPORT_ASSAY: CopperRatios = {
+  'Cu(铜)': 24.92,
+  'FeO(氧化亚铁)': 35.1725352480885,
+  'S (硫)': 30.16,
+  'Pb(铅)': 0.659999999999999,
+  'Zn(锌)': 2.54,
+  'Ni(镍)': 0.00700000000000002,
+  'Se(硒)': 0.015,
+  'Bi(铋)': 0.047,
+  'As(砷)': 0.3,
+  'Au(金)': 0.0002769,
+  'Ag(银)': 0.02259,
+  'SiO₂(二氧化硅)': 7.05,
+  'CaO(氧化钙)': 0.954000000000004,
+  'MgO(氧化镁)': 0.644000000000005,
+  'Hg(汞)': 3e-5,
+  'C (碳)': 0.237745724041993,
+  'Other(其他)': 2.58397315528736,
+  'Al₂O₃(三氧化二铝)': 1.795,
+  'Sn(锡)': 0.003,
+  'Te(碲)': 0.01,
+  'Sb(锑)': 0.037,
+  'Cd(镉)': 0.04,
+}
 
 export const COPPER_SW_CONCENTRATE_LIBRARY_IDS = [
   'cu-conc-internal',
@@ -372,6 +329,10 @@ export type CloseCopperRatiosOptions = {
   fillOther?: boolean
   /** 已知元素合计超 100% 时是否按比例缩放回 100%；配料总表输入应为 false */
   scaleWhenOver100?: boolean
+  /** 计算态是否将 FeO 拆成 Fe + O；化验录入/显示态应保持 false */
+  splitFeO?: boolean
+  /** 是否保留 O(氧) 的有符号闭合差额；化验库显示需要保留负 O，计算态必须关闭 */
+  preserveSignedOxygen?: boolean
 }
 
 /** 迁移/非负化化验数据；可选将差额补入 Other 以闭合 100% */
@@ -381,16 +342,19 @@ export function closeCopperRatios(
 ): Record<CopperElementKey, number> {
   const fillOther = options.fillOther ?? false
   const scaleWhenOver100 = options.scaleWhenOver100 ?? true
+  const splitFeO = options.splitFeO ?? false
+  const preserveSignedOxygen = options.preserveSignedOxygen ?? false
   const migrated = migrateLegacyCopperRatios(ratios)
   const feo = Number(migrated['FeO(氧化亚铁)'] ?? 0)
-  if (Number.isFinite(feo) && feo > 0) {
+  if (splitFeO && Number.isFinite(feo) && feo > 0) {
     migrated['Fe(铁)'] = (migrated['Fe(铁)'] ?? 0) + feo * (atomicMass('Fe') / COMPOUND_MOLAR_MASS.FeO)
+    migrated['O(氧)'] = (migrated['O(氧)'] ?? 0) + feo * (atomicMass('O') / COMPOUND_MOLAR_MASS.FeO)
     migrated['FeO(氧化亚铁)'] = 0
   }
   const out = emptyCopperRatios()
   for (const element of COPPER_ELEMENT_KEYS) {
     const value = Number.isFinite(migrated[element]) ? Number(migrated[element]) : 0
-    out[element] = Math.max(0, value)
+    out[element] = preserveSignedOxygen && element === 'O(氧)' ? value : Math.max(0, value)
   }
   const knownTotal = calculateKnownTotal(out)
   if (knownTotal > 100 + 1e-3 && scaleWhenOver100) {
@@ -407,7 +371,129 @@ export function closeCopperRatios(
 }
 
 export function normalizeCopperRatios(ratios: CopperRatios): Record<CopperElementKey, number> {
-  return closeCopperRatios(ratios, { fillOther: true })
+  return closeCopperRatios(ratios, { fillOther: true, splitFeO: true })
+}
+
+export function normalizeCopperAssayRatios(ratios: CopperRatios): Record<CopperElementKey, number> {
+  return closeCopperRatios(ratios, {
+    fillOther: false,
+    scaleWhenOver100: false,
+    preserveSignedOxygen: true,
+  })
+}
+
+/** 精矿化验前处理：拆 FeO→Fe+O，闭合负 O；库与元素表只存 Fe。 */
+export function preprocessConcentrateAssayRatios(ratios: CopperRatios): Record<CopperElementKey, number> {
+  const migrated = migrateLegacyCopperRatios(ratios) as Record<string, number>
+  const feo = Math.max(0, Number(migrated['FeO(氧化亚铁)'] ?? 0))
+  const feFrac = atomicMass('Fe') / COMPOUND_MOLAR_MASS.FeO
+  const oFrac = atomicMass('O') / COMPOUND_MOLAR_MASS.FeO
+  const nonOxygenTotal = Object.entries(migrated).reduce((sum, [key, value]) => {
+    if (key === 'O(氧)') return sum
+    return sum + Math.max(0, Number.isFinite(value) ? Number(value) : 0)
+  }, 0)
+  const closureO = 100 - nonOxygenTotal
+  const out = { ...migrated }
+  if (feo > 0) {
+    out['Fe(铁)'] = (out['Fe(铁)'] ?? 0) + feo * feFrac
+    out['O(氧)'] = closureO + feo * oFrac
+    out['FeO(氧化亚铁)'] = 0
+  } else if ((out['O(氧)'] ?? 0) < 0) {
+    out['O(氧)'] = Math.max(0, closureO)
+  }
+  return normalizeCopperAssayRatios(out)
+}
+
+export const COPPER_MATERIAL_LIBRARY: CopperLibraryMaterial[] = [
+  {
+    id: 'cu-conc-internal',
+    name: '系统内精矿',
+    category: 'concentrate',
+    unitPrice: 62000,
+    ratios: preprocessConcentrateAssayRatios(SW_INTERNAL_ASSAY),
+  },
+  {
+    id: 'cu-conc-domestic',
+    name: '国内外购矿',
+    category: 'concentrate',
+    unitPrice: 60000,
+    ratios: preprocessConcentrateAssayRatios(SW_DOMESTIC_BORDER_ASSAY),
+  },
+  {
+    id: 'cu-conc-import',
+    name: '进口铜精矿',
+    category: 'concentrate',
+    unitPrice: 65000,
+    ratios: preprocessConcentrateAssayRatios(SW_IMPORT_ASSAY),
+  },
+  {
+    id: 'cu-conc-a',
+    name: '铜精矿 A',
+    category: 'concentrate',
+    unitPrice: 62000,
+    ratios: preprocessConcentrateAssayRatios({
+      'Al₂O₃(三氧化二铝)': 1.53,
+      'CaO(氧化钙)': 0.75,
+      'Cu(铜)': 32.22,
+      'Fe(铁)': 25.95,
+      'Other(其他)': 0.014,
+      'Pb(铅)': 0.866,
+      'S (硫)': 31.95,
+      'SiO₂(二氧化硅)': 6.72,
+    }),
+  },
+  {
+    id: 'cu-conc-border',
+    name: '边贸矿',
+    category: 'concentrate',
+    unitPrice: 58000,
+    ratios: preprocessConcentrateAssayRatios(SW_DOMESTIC_BORDER_ASSAY),
+  },
+]
+
+function nearlyEqualRatio(a: number | undefined, b: number, tolerance = 1e-3) {
+  return Math.abs((a ?? 0) - b) <= tolerance
+}
+
+function looksLikeLegacySplitFeOConcentrate(
+  ratios: CopperRatios,
+  referenceRatios: CopperRatios
+): boolean {
+  const normalized = normalizeCopperAssayRatios(ratios)
+  const reference = normalizeCopperAssayRatios(referenceRatios)
+  const expectedFe = reference['Fe(铁)'] ?? 0
+  return (
+    nearlyEqualRatio(normalized['FeO(氧化亚铁)'], 0, 0.02) &&
+    expectedFe > 0 &&
+    nearlyEqualRatio(normalized['Fe(铁)'], expectedFe, 0.2) &&
+    nearlyEqualRatio(normalized['Cu(铜)'], reference['Cu(铜)'] ?? 0, 0.2) &&
+    nearlyEqualRatio(normalized['S (硫)'], reference['S (硫)'] ?? 0, 0.2)
+  )
+}
+
+/** 加载/选料时：旧 FeO 或负 O 化验前处理为 Fe+非负 O；已拆 Fe 的西南矿与库对齐 */
+export function normalizeKnownCopperRawMaterialAssay(material: CopperMaterialColumn): CopperMaterialColumn {
+  if (material.kind !== 'raw') {
+    return { ...material, ratios: preprocessConcentrateAssayRatios(material.ratios) }
+  }
+  const assay = normalizeCopperAssayRatios(material.ratios)
+  const needsPreprocess = (assay['FeO(氧化亚铁)'] ?? 0) > 0 || (assay['O(氧)'] ?? 0) < 0
+  if (needsPreprocess) {
+    return { ...material, ratios: preprocessConcentrateAssayRatios(material.ratios) }
+  }
+  const reference = COPPER_MATERIAL_LIBRARY.find(
+    (item) =>
+      (COPPER_SW_CONCENTRATE_LIBRARY_IDS as readonly string[]).includes(item.id) &&
+      item.name === material.name.trim()
+  )
+  if (reference && looksLikeLegacySplitFeOConcentrate(assay, reference.ratios)) {
+    return {
+      ...material,
+      ratios: { ...reference.ratios },
+      unitPrice: material.unitPrice ?? reference.unitPrice,
+    }
+  }
+  return { ...material, ratios: assay }
 }
 
 function parseDelimitedLine(line: string, delimiter: ',' | '\t'): string[] {
@@ -471,7 +557,9 @@ export function resolveCopperElementKey(name: string): CopperElementKey | null {
   return IMPORT_HEADER_TO_ELEMENT[normalizeElementInputName(trimmed)] ?? null
 }
 
-const IMPORT_HEADER_TO_ELEMENT: Record<string, CopperElementKey> = {
+const LEGACY_FEO_ASSAY_KEY = 'FeO(氧化亚铁)'
+
+const IMPORT_HEADER_TO_ELEMENT: Record<string, CopperElementKey | typeof LEGACY_FEO_ASSAY_KEY> = {
   ag: 'Ag(银)',
   银: 'Ag(银)',
   al2o3: 'Al₂O₃(三氧化二铝)',
@@ -496,8 +584,8 @@ const IMPORT_HEADER_TO_ELEMENT: Record<string, CopperElementKey> = {
   铜: 'Cu(铜)',
   fe: 'Fe(铁)',
   铁: 'Fe(铁)',
-  feo: 'FeO(氧化亚铁)',
-  氧化亚铁: 'FeO(氧化亚铁)',
+  feo: LEGACY_FEO_ASSAY_KEY,
+  氧化亚铁: LEGACY_FEO_ASSAY_KEY,
   h: 'H(氢)',
   氢: 'H(氢)',
   hg: 'Hg(汞)',
@@ -559,7 +647,9 @@ export function parseCopperLibraryCsv(text: string): CopperLibraryMaterial[] {
   )
   const elementIndexes = normalizedHeaders
     .map((header, index) => ({ element: IMPORT_HEADER_TO_ELEMENT[header], index }))
-    .filter((item): item is { element: CopperElementKey; index: number } => Boolean(item.element))
+    .filter((item): item is { element: CopperElementKey | typeof LEGACY_FEO_ASSAY_KEY; index: number } =>
+      Boolean(item.element)
+    )
 
   if (nameIndex < 0 || elementIndexes.length === 0) return []
 
@@ -567,10 +657,15 @@ export function parseCopperLibraryCsv(text: string): CopperLibraryMaterial[] {
     const cells = parseDelimitedLine(line, delimiter)
     const name = (cells[nameIndex] ?? '').trim()
     if (!name) return []
-    const ratios: CopperRatios = {}
+    const ratios: Record<string, number> = {}
     for (const { element, index } of elementIndexes) {
       const parsed = parseFloat(String(cells[index] ?? '').replace(',', '.'))
-      ratios[element] = Number.isFinite(parsed) ? parsed : 0
+      if (!Number.isFinite(parsed)) continue
+      if (element === LEGACY_FEO_ASSAY_KEY) {
+        ratios[LEGACY_FEO_ASSAY_KEY] = (ratios[LEGACY_FEO_ASSAY_KEY] ?? 0) + parsed
+      } else {
+        ratios[element] = parsed
+      }
     }
     const price = priceIndex >= 0 ? parseFloat(String(cells[priceIndex] ?? '').replace(',', '.')) : 0
     return [
@@ -579,7 +674,7 @@ export function parseCopperLibraryCsv(text: string): CopperLibraryMaterial[] {
         name,
         category: 'concentrate' as const,
         unitPrice: Number.isFinite(price) ? price : 0,
-        ratios: normalizeCopperRatios(ratios),
+        ratios: preprocessConcentrateAssayRatios(ratios),
       },
     ]
   })
@@ -588,7 +683,7 @@ export function parseCopperLibraryCsv(text: string): CopperLibraryMaterial[] {
 export function calculateKnownTotal(ratios: CopperRatios): number {
   return COPPER_ELEMENT_KEYS
     .filter((element) => element !== 'Other(其他)')
-    .reduce((sum, element) => sum + Math.max(0, Number.isFinite(ratios[element]) ? Number(ratios[element]) : 0), 0)
+    .reduce((sum, element) => sum + (Number.isFinite(ratios[element]) ? Number(ratios[element]) : 0), 0)
 }
 
 /** 化验行合计（非负闭合后含 Other），用于原料库校验 */
@@ -626,8 +721,12 @@ export function calculateWeightedComposition(materials: CopperMaterialColumn[]):
 export function solventOxidesToElements(composition: CopperSolvent['composition']): Record<CopperElementKey, number> {
   const out = emptyCopperRatios()
   const feO = composition['FeO(氧化亚铁)'] ?? 0
-  out['Fe(铁)'] = composition['Fe(铁)'] ?? 0
-  out['FeO(氧化亚铁)'] = feO
+  const feFromFeO =
+    feO > 0 ? feO * (atomicMass('Fe') / COMPOUND_MOLAR_MASS.FeO) : 0
+  const oFromFeO =
+    feO > 0 ? feO * (atomicMass('O') / COMPOUND_MOLAR_MASS.FeO) : 0
+  out['Fe(铁)'] = (composition['Fe(铁)'] ?? 0) + feFromFeO
+  out['O(氧)'] = oFromFeO
   out['SiO₂(二氧化硅)'] = composition['SiO₂(二氧化硅)'] ?? 0
   out['CaO(氧化钙)'] = composition['CaO(氧化钙)'] ?? 0
   out['MgO(氧化镁)'] = composition['MgO(氧化镁)'] ?? 0
@@ -638,7 +737,6 @@ export function solventOxidesToElements(composition: CopperSolvent['composition'
 export function elementRatiosToSolventComposition(ratios: CopperRatios): CopperSolvent['composition'] {
   return {
     'Fe(铁)': ratios['Fe(铁)'] ?? 0,
-    'FeO(氧化亚铁)': ratios['FeO(氧化亚铁)'] ?? 0,
     'SiO₂(二氧化硅)': ratios['SiO₂(二氧化硅)'] ?? 0,
     'CaO(氧化钙)': ratios['CaO(氧化钙)'] ?? 0,
     'MgO(氧化镁)': ratios['MgO(氧化镁)'] ?? 0,

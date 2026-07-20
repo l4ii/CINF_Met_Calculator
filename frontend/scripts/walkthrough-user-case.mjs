@@ -10,9 +10,14 @@ import { fileURLToPath } from 'node:url'
 import { atomicMass } from '../src/utils/atomicMass.ts'
 import { allocateConcentratePhases } from '../src/utils/copperConcentratePhaseNorm.ts'
 import { loadOxySideBlowConstraints, OXY_SIDE_BLOW_PRODUCT_KEYS } from '../src/utils/copperConstraintConfig.ts'
+import { autoFillOxyProductConstraintConfig } from '../src/utils/copperConstraintValidation.ts'
 import { solveOxySideBlowProducts } from '../src/utils/copperConstraintSolver.ts'
 import { createInitialUnpacked, resolveFuelConcentrateRatioTarget } from '../src/utils/copperConstraintUnknowns.ts'
 import { DEFAULT_COPPER_FUEL } from '../src/utils/copperProcessCalc.ts'
+import {
+  DEFAULT_COPPER_PROCESS_PARAMETERS,
+  applyProcessParameters,
+} from '../src/utils/copperProcessParameters.ts'
 import { createConcentrateMaterialPhaseRows } from '../src/utils/copperPhaseAssist.ts'
 import {
   buildBlendPhaseMassFromMaterialResults,
@@ -60,6 +65,14 @@ function pickRatios(ratios, keys) {
     out[key] = round(ratios[key] ?? 0, 4)
   }
   return out
+}
+
+function createDefaultProductConstraintConfig() {
+  return autoFillOxyProductConstraintConfig(
+    applyProcessParameters(loadOxySideBlowConstraints(), DEFAULT_COPPER_PROCESS_PARAMETERS, {
+      addMissingConstraints: false,
+    })
+  ).config
 }
 
 const KEY_ASSAY_ELEMENTS = [
@@ -190,7 +203,7 @@ const furnaceFeed = calculateWeightedComposition([
   ...airColumns,
 ])
 
-const config = loadOxySideBlowConstraints()
+const config = createDefaultProductConstraintConfig()
 const initialUnpacked = createInitialUnpacked(
   {
     blendFeed: furnaceFeed,
@@ -230,7 +243,7 @@ let activeFuel = fuelColumn
 let activeSolvents = solventColumns
 let activeAir = airColumns
 let activeFurnaceFeed = furnaceFeed
-let solverResult = solveOxySideBlowProducts({
+let solverResult = await solveOxySideBlowProducts({
   blendFeed: activeFurnaceFeed,
   rawFeed: rawBlend,
   rawMaterialColumns: rawMaterials,
@@ -258,7 +271,7 @@ for (let pass = 0; pass < 2 && !solverResult.converged; pass += 1) {
     activeFuel,
     ...activeAir,
   ])
-  solverResult = solveOxySideBlowProducts({
+  solverResult = await solveOxySideBlowProducts({
     blendFeed: activeFurnaceFeed,
     rawFeed: rawBlend,
     rawMaterialColumns: rawMaterials,
@@ -389,7 +402,7 @@ const output = {
     },
     secondaryAir: {
       formula:
-        'O₂_mol = (CuFeS2.S/4 + FeS2.S/2×0.7)/S + 煤.C/C×0.7；二次风 = O₂_mol×1.02×M_O / w_O(二次风)',
+        'O₂_mol = (CuFeS2.S/4 + FeS2.S/2×0.7)/S + 煤.C/C×0.7；二次风 = O₂_mol×1.02×M_O2 / w_O(二次风)',
       cuFeS2MassTh: round(cuFeS2Mass, 4),
       feS2MassTh: round(feS2Mass, 4),
       fuelCarbonMassTh: round(fuelCarbonMass, 4),
@@ -480,3 +493,19 @@ console.log(
     2
   )
 )
+
+export {
+  activeAir as solvedAirColumns,
+  activeFuel as solvedFuelColumn,
+  activeSolvents as solvedSolventColumns,
+  airColumns,
+  blendPhaseMass,
+  config,
+  concentrateMass,
+  fuelColumn,
+  phaseResults,
+  rawBlend,
+  rawMaterials,
+  solverResult,
+  solventColumns,
+}

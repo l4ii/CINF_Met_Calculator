@@ -1,37 +1,37 @@
 /**
- * Met（冶金智能配料）统一品牌文案。
+ * Met（冶金智能工艺设计）统一品牌文案。
  * 与根目录 electron-builder*.yml 的 productName 及 electron/main.js 中 APP_DISPLAY_NAME 保持语义一致（修改时请同步）。
  */
 
 /** 正式产品名：与安装器 productName、窗口对外展示一致 */
-export const APP_NAME_ZH = '长沙院冶金智能配料软件'
-export const APP_NAME_EN = 'CINF Metallurgical Intelligent Batching Software'
+export const APP_NAME_ZH = '长沙有色冶金设计研究院冶金工艺计算与三维设计一体化平台'
+export const APP_NAME_EN = 'CINF Metallurgical Intelligent Process Design Platform'
 
 export const APP_TITLE_MAIN_ZH = APP_NAME_ZH
 export const APP_TITLE_MAIN_EN = APP_NAME_EN
 
 /** 侧栏主标题（可略短于正式名） */
-export const APP_TITLE_SIDEBAR_ZH = 'CINF冶金智能配料'
-export const APP_TITLE_SIDEBAR_EN = 'CINF Metallurgical Batching'
+export const APP_TITLE_SIDEBAR_ZH = 'CINF工艺设计平台'
+export const APP_TITLE_SIDEBAR_EN = 'CINF Metallurgical Process Design'
 
 export const APP_ORG_NAME_ZH = '长沙有色冶金设计研究院有限公司'
 export const APP_ORG_NAME_EN = 'Changsha Nonferrous Metallurgical Design & Research Institute Co., Ltd.'
 
-export const APP_EXPORT_FILENAME_PREFIX = 'CINF-MetBatch'
+export const APP_EXPORT_FILENAME_PREFIX = 'CINF-MetDesign'
 
 /** 离线授权码行首（与 electron/license.js、scripts/issue-offline-license.js 一致；与 Flow 的 CINF-LIC1. 区分） */
 export const LICENSE_TOKEN_PREFIX = 'CINF-MET-LIC1.'
 
-export const APP_TAGLINE_ZH = '面向冶金工程的配料、设备选型与三维设计一体化智能平台。'
+export const APP_TAGLINE_ZH = '面向冶金工程的配料计算、三维设备选型与案例报告一体化智能平台。'
 export const APP_TAGLINE_MAIN_EN =
-  'Integrated intelligent platform for batching, equipment selection, and 3D design.'
+  'Integrated intelligent platform for batching, 3D equipment selection, and case reporting.'
 
-export const APP_TAGLINE_SIDEBAR_ZH = '配料-选型-三维设计一体化智能平台'
-export const APP_TAGLINE_SIDEBAR_EN = 'Batching · Sizing · 3D Design Platform'
+export const APP_TAGLINE_SIDEBAR_ZH = '配料-三维选型-案例报告一体化平台'
+export const APP_TAGLINE_SIDEBAR_EN = 'Batching · 3D Sizing · Case Reports'
 
 /** 侧栏中文副标题两行（与 Flow 侧栏版式一致；由单行语义拆分） */
-export const APP_TAGLINE_SIDEBAR_ZH_LINE1 = '配料-选型-三维设计'
-export const APP_TAGLINE_SIDEBAR_ZH_LINE2 = '一体化智能平台'
+export const APP_TAGLINE_SIDEBAR_ZH_LINE1 = '配料-三维选型'
+export const APP_TAGLINE_SIDEBAR_ZH_LINE2 = '案例报告一体化平台'
 
 /** 设置页：免责声明 / 隐私 / 智能助手说明 */
 export const SETTINGS_LEGAL = {
@@ -144,8 +144,8 @@ export const SETTINGS_OFFLINE_LICENSE_UI = {
 } as const
 
 /** 邮件主题等使用的短称 */
-export const APP_SHORT_NAME_ZH = '冶金智能配料软件'
-export const APP_SHORT_NAME_EN = 'Metallurgical Batching Software'
+export const APP_SHORT_NAME_ZH = '冶金工艺计算与三维设计平台'
+export const APP_SHORT_NAME_EN = 'Metallurgical Process Design Platform'
 
 /** 侧栏「了解我们」与页脚等导航文案 */
 export const ABOUT_NAV = {

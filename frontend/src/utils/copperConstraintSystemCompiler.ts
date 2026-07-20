@@ -9,7 +9,11 @@ import {
   type OxySideBlowConstraintConfig,
   type OxySideBlowProductKey,
 } from './copperConstraintConfig.ts'
-import { evaluateConstraintExprString, type ConstraintSymbolTable } from './copperConstraintExpression.ts'
+import { evaluateConstraintExprString, evaluateOxygenEnrichmentRatio, type ConstraintSymbolTable } from './copperConstraintExpression.ts'
+import {
+  DEFAULT_CONSTRAINT_RELATIVE_TOLERANCE,
+  isOxygenEnrichmentExpr,
+} from './copperProcessParameters.ts'
 import {
   autoFillOxyProductConstraintConfig,
   isBlankConstraintRuleValue,
@@ -29,6 +33,7 @@ export interface CompiledEquation {
   label: string
   expr?: string
   soft?: boolean
+  relativeTolerance?: number
   constraintElement?: ConstraintElementKey
   productKey?: OxySideBlowProductKey
   feedKey?: CopperElementKey
@@ -142,6 +147,7 @@ export function compileOxyConstraintSystem(
       label: constraint.expr,
       expr: constraint.expr,
       soft: Boolean(constraint.soft),
+      relativeTolerance: constraint.relativeTolerance,
     })
   }
 
@@ -168,6 +174,28 @@ export function compileOxyConstraintSystem(
   return equations
 }
 
+function resolveConstraintRelativeTolerance(
+  equation: CompiledEquation,
+  config: OxySideBlowConstraintConfig
+): number {
+  if (typeof equation.relativeTolerance === 'number' && Number.isFinite(equation.relativeTolerance)) {
+    return Math.max(0, equation.relativeTolerance)
+  }
+  const fromParams = config.solverParams?.constraintRelativeTolerance
+  if (typeof fromParams === 'number' && Number.isFinite(fromParams)) {
+    return Math.max(0, fromParams)
+  }
+  return DEFAULT_CONSTRAINT_RELATIVE_TOLERANCE
+}
+
+/** 残差落在相对容差带内则视为满足（千分之五等） */
+function applyRelativeToleranceBand(residual: number, reference: number, relativeTol: number): number {
+  if (relativeTol <= 0) return residual
+  const band =
+    Math.abs(reference) > 1e-12 ? Math.abs(reference) * relativeTol : Math.max(relativeTol * 1e-3, 1e-9)
+  return Math.abs(residual) <= band ? 0 : residual
+}
+
 export function evaluateEquationResidual(
   equation: CompiledEquation,
   table: ConstraintSymbolTable,
@@ -175,6 +203,7 @@ export function evaluateEquationResidual(
   distributionFeedElementWeights: Partial<Record<CopperElementKey, number>>,
   balanceFeedElementWeights: Partial<Record<CopperElementKey, number>> = distributionFeedElementWeights
 ): number {
+  const relativeTol = resolveConstraintRelativeTolerance(equation, config)
   switch (equation.kind) {
     case 'D%': {
       if (!equation.constraintElement || !equation.productKey) return 0
@@ -205,7 +234,11 @@ export function evaluateEquationResidual(
     }
     case 'custom': {
       if (!equation.expr) return 0
-      return evaluateConstraintExprString(equation.expr, table) - equation.target
+      const value =
+        isOxygenEnrichmentExpr(equation.expr)
+          ? evaluateOxygenEnrichmentRatio(table)
+          : evaluateConstraintExprString(equation.expr, table)
+      return applyRelativeToleranceBand(value - equation.target, equation.target, relativeTol)
     }
     case 'balance': {
       if (!equation.feedKey) return 0

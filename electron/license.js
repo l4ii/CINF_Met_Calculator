@@ -7,10 +7,17 @@ const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
 const os = require('os')
-const { execSync } = require('child_process')
+const { promisify } = require('util')
+const { exec } = require('child_process')
+
+const execAsync = promisify(exec)
 
 const LICENSE_BASENAME = 'offline-license.dat'
+const MACHINE_ID_CACHE_BASENAME = 'machine-id.cache'
 const TOKEN_PREFIX = 'CINF-MET-LIC1.'
+
+let licenseStatusCache = null
+let licenseStatusPromise = null
 
 /**
  * 整行授权码在从微信/邮件复制时，可能在「CINF-MET-」与「LIC1.」之间被自动换行，导致验签失败；去掉空白并拼回前缀。
@@ -38,6 +45,10 @@ function getLicenseFilePath() {
   return path.join(getUserDataPath(), LICENSE_BASENAME)
 }
 
+function getMachineIdCachePath() {
+  return path.join(getUserDataPath(), MACHINE_ID_CACHE_BASENAME)
+}
+
 function getPublicKeyPem() {
   const pubPath = path.join(__dirname, 'license-public.pem')
   if (!fs.existsSync(pubPath)) {
@@ -46,21 +57,54 @@ function getPublicKeyPem() {
   return fs.readFileSync(pubPath, 'utf8')
 }
 
+function readMachineIdFromCache() {
+  try {
+    const p = getMachineIdCachePath()
+    if (!fs.existsSync(p)) return null
+    const data = JSON.parse(fs.readFileSync(p, 'utf8'))
+    if (data && typeof data.machineId === 'string' && /^[0-9a-f]{64}$/i.test(data.machineId)) {
+      return data.machineId
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  return null
+}
+
+function writeMachineIdCache(machineId) {
+  try {
+    fs.writeFileSync(
+      getMachineIdCachePath(),
+      JSON.stringify({ machineId, cachedAt: Date.now() }),
+      'utf8'
+    )
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+async function runWmic(cmd) {
+  try {
+    const { stdout } = await execAsync(cmd, { encoding: 'utf-8', timeout: 15000, windowsHide: true })
+    return stdout || ''
+  } catch (_) {
+    return ''
+  }
+}
+
 /** 收集 Windows 下相对稳定的信息并哈希为 64 位十六进制设备码 */
-function collectMachineIdRaw() {
+async function collectMachineIdRawAsync() {
+  const cached = readMachineIdFromCache()
+  if (cached) return cached
+
   const parts = []
   if (process.platform === 'win32') {
     try {
-      const run = (cmd) => {
-        try {
-          return execSync(cmd, { encoding: 'utf-8', timeout: 15000, windowsHide: true })
-        } catch (e) {
-          return ''
-        }
-      }
-      const a = run('wmic csproduct get uuid /value')
-      const b = run('wmic baseboard get serialnumber /value')
-      const c = run('wmic bios get serialnumber /value')
+      const [a, b, c] = await Promise.all([
+        runWmic('wmic csproduct get uuid /value'),
+        runWmic('wmic baseboard get serialnumber /value'),
+        runWmic('wmic bios get serialnumber /value'),
+      ])
       const t = [a, b, c]
         .join('\n')
         .split(/\r?\n/)
@@ -76,6 +120,26 @@ function collectMachineIdRaw() {
     }
   }
   if (parts.length === 0) {
+    parts.push(process.platform, os.hostname(), (os.userInfo() && os.userInfo().username) || '')
+  }
+  const raw = parts.join('\n|')
+  const machineId = crypto.createHash('sha256').update(raw, 'utf8').digest('hex')
+  writeMachineIdCache(machineId)
+  return machineId
+}
+
+/** @deprecated 同步接口保留给脚本；主进程请用 collectMachineIdRawAsync */
+function collectMachineIdRaw() {
+  const cached = readMachineIdFromCache()
+  if (cached) return cached
+  return collectMachineIdRawSyncFallback()
+}
+
+function collectMachineIdRawSyncFallback() {
+  const parts = []
+  if (process.platform === 'win32') {
+    parts.push('win-fallback', os.hostname())
+  } else {
     parts.push(process.platform, os.hostname(), (os.userInfo() && os.userInfo().username) || '')
   }
   const raw = parts.join('\n|')
@@ -153,14 +217,16 @@ function clearLicense() {
   } catch (e) {
     /* ignore */
   }
+  licenseStatusCache = null
+  licenseStatusPromise = null
 }
 
 /**
  * isDev: 开发不校验
  * 无公钥文件：生产环境阻断激活，避免发布包缺少验签材料仍继续使用。
  */
-function getLicenseStatus(isDev) {
-  const machineId = collectMachineIdRaw()
+async function getLicenseStatusAsync(isDev) {
+  const machineId = await collectMachineIdRawAsync()
   if (isDev) {
     return { ok: true, machineId, reason: 'dev', expiresAtMs: null }
   }
@@ -184,8 +250,36 @@ function getLicenseStatus(isDev) {
   return { ok: false, machineId, reason: v.reason || 'invalid' }
 }
 
-function activateWithToken(isDev, token) {
-  const machineId = collectMachineIdRaw()
+function prewarmLicenseStatus(isDev) {
+  if (licenseStatusCache) {
+    return Promise.resolve(licenseStatusCache)
+  }
+  if (!licenseStatusPromise) {
+    licenseStatusPromise = getLicenseStatusAsync(isDev)
+      .then((status) => {
+        licenseStatusCache = status
+        return status
+      })
+      .catch((err) => {
+        licenseStatusPromise = null
+        throw err
+      })
+  }
+  return licenseStatusPromise
+}
+
+function getCachedLicenseStatus() {
+  return licenseStatusCache
+}
+
+/** 同步包装：优先返回缓存，否则走异步并阻塞（仅供遗留调用） */
+function getLicenseStatus(isDev) {
+  if (licenseStatusCache) return licenseStatusCache
+  return prewarmLicenseStatus(isDev)
+}
+
+async function activateWithToken(isDev, token) {
+  const machineId = await collectMachineIdRawAsync()
   if (isDev) {
     return { ok: true, machineId }
   }
@@ -219,15 +313,24 @@ function activateWithToken(isDev, token) {
     return { ok: false, error: map[v.reason] || '授权码无效。' }
   }
   saveLicenseToken(trimmed)
+  licenseStatusCache = { ok: true, machineId, reason: 'licensed', expiresAtMs: null }
+  if (v.payload && v.payload.exp != null) {
+    const sec = Number(v.payload.exp)
+    if (Number.isFinite(sec)) licenseStatusCache.expiresAtMs = Math.floor(sec * 1000)
+  }
   return { ok: true, machineId }
 }
 
 module.exports = {
   setElectronApp,
   getLicenseStatus,
+  getLicenseStatusAsync,
+  prewarmLicenseStatus,
+  getCachedLicenseStatus,
   activateWithToken,
   clearLicense,
   collectMachineIdRaw,
+  collectMachineIdRawAsync,
   LICENSE_BASENAME,
   TOKEN_PREFIX,
 }

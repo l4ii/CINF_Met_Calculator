@@ -1,4 +1,4 @@
-"""冶金智能配料软件本地后端：智能助手 API（嵌入式 GGUF），端口 5000。"""
+"""长沙有色冶金设计研究院冶金工艺计算与三维设计一体化平台本地后端：智能助手 API（嵌入式 GGUF），端口 5000。"""
 from __future__ import annotations
 
 import os

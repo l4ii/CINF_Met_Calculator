@@ -1,6 +1,6 @@
 # 必须在项目根目录执行 electron-builder（npm run dist:win），这样 extraResources 的 from: frontend/dist 才会解析为根目录下的 frontend/dist
 appId: com.changsha.met.batching
-productName: 长沙院冶金智能配料软件
+productName: 长沙有色冶金设计研究院冶金工艺计算与三维设计一体化平台
 copyright: Copyright © 2024 长沙有色冶金设计研究院有限公司
 
 directories:

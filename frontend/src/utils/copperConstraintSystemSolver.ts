@@ -19,10 +19,47 @@ export interface StrictSolverOptions {
   tolerance?: number
   maxIterations?: number
   lmLambda?: number
+  shouldCancel?: () => boolean
+  stagnationIterations?: number
+  minRelativeImprovement?: number
+}
+
+export class OxyConstraintCalculationCancelledError extends Error {
+  constructor(message = '计算已中断') {
+    super(message)
+    this.name = 'OxyConstraintCalculationCancelledError'
+  }
+}
+
+export function isOxyConstraintCalculationCancelled(error: unknown): boolean {
+  return error instanceof OxyConstraintCalculationCancelledError
+}
+
+function throwIfCancelled(options?: Pick<StrictSolverOptions, 'shouldCancel'>) {
+  if (options?.shouldCancel?.()) throw new OxyConstraintCalculationCancelledError()
+}
+
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => window.setTimeout(resolve, 0))
+    } else {
+      setTimeout(resolve, 0)
+    }
+  })
+}
+
+const SOLVER_YIELD_INTERVAL_MS = 16
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
 }
 
 export interface StrictSolverResult {
   converged: boolean
+  stoppedByStagnation?: boolean
   x: number[]
   iterations: number
   maxRelativeResidual: number
@@ -98,20 +135,28 @@ function maxRelativeResidualFromSolution(
   return max
 }
 
-function numericalJacobian(
+async function numericalJacobian(
   x: number[],
   residuals: number[],
   equations: CompiledEquation[],
   specs: ReturnType<typeof buildUnknownSpecs>,
   baseInput: OxyConstraintBaseInput,
-  config: OxySideBlowConstraintConfig
-): number[][] {
+  config: OxySideBlowConstraintConfig,
+  options: Pick<StrictSolverOptions, 'shouldCancel'> = {}
+): Promise<number[][]> {
   const n = x.length
   const m = residuals.length
   const jacobian = Array.from({ length: m }, () => new Array<number>(n).fill(0))
   const eps = 1e-6
+  let lastYieldAt = nowMs()
 
   for (let col = 0; col < n; col += 1) {
+    throwIfCancelled(options)
+    const currentTime = nowMs()
+    if (currentTime - lastYieldAt >= SOLVER_YIELD_INTERVAL_MS) {
+      await yieldToMain()
+      lastYieldAt = nowMs()
+    }
     const step = Math.max(eps, Math.abs(x[col]!) * eps)
     const forward = [...x]
     forward[col] = Math.max(0, forward[col]! + step)
@@ -164,13 +209,15 @@ function solveLinearSystem(matrix: number[][], vector: number[], tolerance = 1e-
   return x
 }
 
-export function solveOxyConstraintSystemStrict(
+export async function solveOxyConstraintSystemStrict(
   baseInput: OxyConstraintBaseInput,
   config: OxySideBlowConstraintConfig,
   options: StrictSolverOptions = {}
-): StrictSolverResult {
+): Promise<StrictSolverResult> {
   const tolerance = options.tolerance ?? config.solverParams?.tolerance ?? 1e-4
   const maxIterations = options.maxIterations ?? config.solverParams?.newtonMaxIterations ?? 120
+  const stagnationIterations = Math.max(3, options.stagnationIterations ?? 8)
+  const minRelativeImprovement = Math.max(0, options.minRelativeImprovement ?? 0.005)
   const specs = buildUnknownSpecs(config, baseInput)
   const hardEquations = compileOxyConstraintSystem(config)
   const objectiveEquations = compileOxyConstraintSystem(config, { includeSoftCustom: true })
@@ -178,20 +225,40 @@ export function solveOxyConstraintSystemStrict(
   let x = projectVector(packUnknowns(createInitialUnpacked(baseInput, config), specs), specs, baseInput, config)
   let lambda = options.lmLambda ?? 1e-2
   let converged = false
+  let stoppedByStagnation = false
   let iterations = 0
   let maxRel = Number.POSITIVE_INFINITY
+  let bestObjective = Number.POSITIVE_INFINITY
+  let bestMaxRel = Number.POSITIVE_INFINITY
+  let stagnantPasses = 0
 
   for (let iter = 0; iter < maxIterations; iter += 1) {
+    throwIfCancelled(options)
+    await yieldToMain()
     iterations = iter + 1
     const residuals = residualVector(x, objectiveEquations, specs, baseInput, config)
     const objective = residuals.reduce((sum, value) => sum + value * value, 0)
     maxRel = maxRelativeResidualFromSolution(x, hardEquations, specs, baseInput, config)
+    const improved =
+      objective < bestObjective * (1 - minRelativeImprovement) ||
+      maxRel < bestMaxRel * (1 - minRelativeImprovement)
+    if (improved) {
+      bestObjective = Math.min(bestObjective, objective)
+      bestMaxRel = Math.min(bestMaxRel, maxRel)
+      stagnantPasses = 0
+    } else {
+      stagnantPasses += 1
+    }
     if (maxRel < tolerance) {
       converged = true
       break
     }
+    if (iter + 1 >= stagnationIterations && stagnantPasses >= stagnationIterations && maxRel > tolerance) {
+      stoppedByStagnation = true
+      break
+    }
 
-    const jacobian = numericalJacobian(x, residuals, objectiveEquations, specs, baseInput, config)
+    const jacobian = await numericalJacobian(x, residuals, objectiveEquations, specs, baseInput, config, options)
     const m = residuals.length
     const n = x.length
     const jtj = Array.from({ length: n }, () => new Array<number>(n).fill(0))
@@ -213,6 +280,7 @@ export function solveOxyConstraintSystemStrict(
 
     let accepted = false
     for (let attempt = 0; attempt < 8; attempt += 1) {
+      throwIfCancelled(options)
       const candidate = projectVector(x.map((value, index) => value + (dx[index] ?? 0)), specs, baseInput, config)
       const candidateObjective = residualObjective(candidate, objectiveEquations, specs, baseInput, config)
       const candidateMax = maxRelativeResidualFromSolution(candidate, hardEquations, specs, baseInput, config)
@@ -235,6 +303,7 @@ export function solveOxyConstraintSystemStrict(
 
   return {
     converged,
+    stoppedByStagnation,
     x,
     iterations,
     maxRelativeResidual: maxRel,
@@ -260,7 +329,16 @@ export function buildResidualRowsFromSolution(
       unpacked.distributionFeed.elementWeights,
       unpacked.balanceFeed.elementWeights
     )
-    return { ...row, soft: equation.soft }
+    return {
+      ...row,
+      soft: equation.soft,
+      kind: equation.kind,
+      productKey: equation.productKey,
+      constraintElement: equation.constraintElement,
+      feedKey: equation.feedKey,
+      ruleValue: equation.ruleValue,
+      label: equation.label,
+    }
   })
 }
 

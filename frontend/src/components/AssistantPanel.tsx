@@ -33,8 +33,12 @@ function flattenCatalog(language: 'zh' | 'en'): { id: string; name: string; grou
     heat_balance: 'Heat balance',
     furnace: 'Furnace design',
     cu_smelting: 'Smelting',
+    cu_smelting_equipment: 'Smelting Equipment',
     cu_converting: 'Converting',
+    cu_converting_equipment: 'Converting Equipment',
     cu_refining: 'Refining',
+    cu_refining_equipment: 'Refining Equipment',
+    cu_summary: 'Case Summary',
     cu_equipment: 'Equipment Selection',
   }
   const group = language === 'en' ? 'Sheets' : '页签'

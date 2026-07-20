@@ -15,6 +15,8 @@ import {
 import {
   buildResidualRowsFromSolution,
   formatCompiledEquation,
+  OxyConstraintCalculationCancelledError,
+  isOxyConstraintCalculationCancelled,
   solveOxyConstraintSystemStrict,
 } from './copperConstraintSystemSolver.ts'
 import type { CopperElementKey } from './copperWorkflowCalc.ts'
@@ -38,12 +40,14 @@ export interface OxyProductResult {
 
 export interface OxyConstraintSolverInput extends OxyConstraintBaseInput {
   config?: OxySideBlowConstraintConfig
+  shouldCancel?: () => boolean
 }
 
 export type OxyConstraintAcceptanceLevel = 'strict' | 'relaxed' | 'failed'
 
 export const OXY_STRICT_RELATIVE_RESIDUAL = 0.001
-export const OXY_RELAXED_RELATIVE_RESIDUAL = 0.005
+/** 可回填主表的相对残差上限；氧化物物相体系下氧/硫守恒常见 1–3% 级数值残差 */
+export const OXY_RELAXED_RELATIVE_RESIDUAL = 0.03
 
 export interface OxyConstraintSolverResult {
   valid: boolean
@@ -65,12 +69,18 @@ export interface OxyConstraintSolverResult {
   }
   constraintResiduals: Array<{
     expr: string
+    label?: string
     value: number
     target: number
     residual: number
     relativeResidual: number
     applicable?: boolean
     soft?: boolean
+    kind?: string
+    productKey?: OxySideBlowProductKey
+    constraintElement?: string
+    feedKey?: CopperElementKey
+    ruleValue?: number | string
   }>
   equations: Array<{
     id: string
@@ -147,9 +157,9 @@ function computeGlobalElementBalanceResiduals(
   return residuals
 }
 
-export function solveOxySideBlowProducts(input: OxyConstraintSolverInput): OxyConstraintSolverResult {
+export async function solveOxySideBlowProducts(input: OxyConstraintSolverInput): Promise<OxyConstraintSolverResult> {
   const config = input.config ?? loadOxySideBlowConstraints()
-  const solved = solveOxyConstraintSystemStrict(input, config)
+  const solved = await solveOxyConstraintSystemStrict(input, config, { shouldCancel: input.shouldCancel })
   const specs = buildUnknownSpecs(config, input)
   const unpacked = unpackProjectedUnknowns(solved.x, specs, input, config)
   const products = buildOxyProductResults(
@@ -244,3 +254,4 @@ export function verifyProductElementTotals(product: OxyProductResult, tolerance 
 }
 
 export { parseConstraintExpression, evaluateConstraintExprString }
+export { OxyConstraintCalculationCancelledError, isOxyConstraintCalculationCancelled }

@@ -34,6 +34,7 @@ import { CopperBatchTableColGroup } from './CopperBatchTableColGroup'
 import { CopperMaterialSelect } from './CopperMaterialSelect'
 import {
   buildElementTableDisplayKeys,
+  calculateElementTableDisplayTotal,
   decomposeElementTableRatios,
   elementTableDisplayEditTarget,
   elementTableDisplayValueToStorageValue,
@@ -64,7 +65,7 @@ function elementTableToneClass(dark: boolean, tone: ElementTableTone) {
 function stickyCellClass(dark: boolean, tone: ElementTableTone, side: 'category' | 'name') {
   const left = side === 'category' ? STICKY_CATEGORY : STICKY_NAME_LEFT
   const align = side === 'category' ? 'text-center font-semibold' : 'text-center'
-  return `sticky ${left} z-20 border-t px-2 py-1.5 align-middle text-sm ${align} ${elementTableToneClass(dark, tone)}`
+  return `sticky ${left} z-20 h-9 border-t px-2 py-0 align-middle text-sm ${align} ${elementTableToneClass(dark, tone)}`
 }
 
 function categoryRowSpanCellClass(dark: boolean, tone: ElementTableTone) {
@@ -76,7 +77,7 @@ function elementDataCellClass(dark: boolean, tone: ElementTableTone) {
 }
 
 function dataCellClass(dark: boolean, tone: ElementTableTone) {
-  return `border-t px-1 py-1.5 align-middle text-center text-sm ${elementTableToneClass(dark, tone)}`
+  return `h-9 border-t px-1 py-0 align-middle text-center text-sm ${elementTableToneClass(dark, tone)}`
 }
 
 function gasMassInputClass(dark: boolean, status: SolveInputStatus) {
@@ -524,7 +525,9 @@ export function CopperBatchElementTable({
         const helpTitle = phaseUnknownElements.has(storageElement)
           ? phaseCompleted
             ? '步骤2：物相成分。已回填有效物相成分结果；也可直接手动输入。'
-            : '步骤2：物相成分。可直接手动输入；O/C 可双击打开辅助计算。'
+            : storageElement === 'O(氧)' || storageElement === 'C (碳)'
+              ? '双击进入物相计算（须先填写投料量）'
+              : '步骤2：物相成分。可直接手动输入；O/C 可双击打开辅助计算。'
           : sulfurStatus === 'missing'
             ? '含 Cu/Fe 的原料须填写 S(硫) 元素含量。'
             : undefined
@@ -532,29 +535,35 @@ export function CopperBatchElementTable({
         if (sulfurStatus === 'missing' && material.name.trim()) {
           status = 'attention'
         }
+        const phaseEntryCell =
+          phaseUnknownElements.has(storageElement) &&
+          (storageElement === 'O(氧)' || storageElement === 'C (碳)') &&
+          status === 'pending'
         return (
           <td key={element} className={cellCls}>
-            <BatchTableNumericCell
-              darkMode={darkMode}
-              editable
-              className={solveInputClass(darkMode, status)}
-              helpTitle={helpTitle}
-              onClick={(event) => event.stopPropagation()}
-              onDoubleClick={() => {
-                if (storageElement === 'O(氧)' || storageElement === 'C (碳)') onOpenElementAssist(options.id!)
-              }}
-              value={
-                material.name.trim()
-                  ? elementDisplayMode === 'compound'
-                    ? ratioInputValue('raw', options.id, storageElement, material.ratios[storageElement] ?? 0)
-                    : displayedValue
-                  : ''
-              }
-              onChange={(next) =>
-                onRawRatioChange(options.id!, storageElement, displayDraftToStorageDraft(element, material.ratios, next))
-              }
-              onBlur={() => onRawRatioBlur(options.id!, storageElement, material.ratios[storageElement])}
-            />
+            <div>
+              <BatchTableNumericCell
+                darkMode={darkMode}
+                editable
+                className={`${solveInputClass(darkMode, status)}${phaseEntryCell ? ' cursor-pointer' : ''}`}
+                helpTitle={helpTitle}
+                onClick={(event) => event.stopPropagation()}
+                onDoubleClick={() => {
+                  if (storageElement === 'O(氧)' || storageElement === 'C (碳)') onOpenElementAssist(options.id!)
+                }}
+                value={
+                  material.name.trim()
+                    ? elementDisplayMode === 'compound'
+                      ? ratioInputValue('raw', options.id, storageElement, material.ratios[storageElement] ?? 0)
+                      : displayedValue
+                    : ''
+                }
+                onChange={(next) =>
+                  onRawRatioChange(options.id!, storageElement, displayDraftToStorageDraft(element, material.ratios, next))
+                }
+                onBlur={() => onRawRatioBlur(options.id!, storageElement, material.ratios[storageElement])}
+              />
+            </div>
           </td>
         )
       }
@@ -608,7 +617,7 @@ export function CopperBatchElementTable({
   ) => {
     const total =
       elementDisplayMode === 'element'
-        ? displayElementKeys.reduce((sum, element) => sum + Math.max(0, displayRatioValue(ratios, element)), 0)
+        ? calculateElementTableDisplayTotal(ratios as Partial<Record<CopperElementKey, number>>, elementDisplayMode)
         : calculateKnownTotal(ratios) + (ratios['Other(其他)'] ?? 0)
     const overLimit = options?.materialId ? rawTotalOverLimit?.(options.materialId) === true : false
     return (
@@ -757,36 +766,40 @@ export function CopperBatchElementTable({
                     darkMode
                   )}
                 </td>
-                <td className={`${stickyCellClass(darkMode, 'raw', 'name')} p-1`} style={nameColStyle(nameColWidth)}>
-                  <CopperMaterialSelect
-                    darkMode={darkMode}
-                    triggerClassName={materialSelectClass(
-                      darkMode,
-                      material.name.trim() ? 'resolved' : 'pending'
-                    )}
-                    title={
-                      material.name.trim()
-                        ? material.name
-                        : '步骤1：请在名称下拉框中选择原料。'
-                    }
-                    value={
-                      materialLibrary.some((item) => item.name === material.name)
-                        ? materialLibrary.find((item) => item.name === material.name)?.id ?? ''
-                        : ''
-                    }
-                    options={materialLibrary.map((item) => ({ id: item.id, label: item.name }))}
-                    onChange={(libraryId) => onApplyLibraryMaterial(material.id, libraryId)}
-                  />
+                <td className={`${stickyCellClass(darkMode, 'raw', 'name')}`} style={nameColStyle(nameColWidth)}>
+                  <div>
+                    <CopperMaterialSelect
+                      darkMode={darkMode}
+                      triggerClassName={materialSelectClass(
+                        darkMode,
+                        material.name.trim() ? 'resolved' : 'pending'
+                      )}
+                      title={
+                        material.name.trim()
+                          ? material.name
+                          : '步骤1：请在名称下拉框中选择原料。'
+                      }
+                      value={
+                        materialLibrary.some((item) => item.name === material.name)
+                          ? materialLibrary.find((item) => item.name === material.name)?.id ?? ''
+                          : ''
+                      }
+                      options={materialLibrary.map((item) => ({ id: item.id, label: item.name }))}
+                      onChange={(libraryId) => onApplyLibraryMaterial(material.id, libraryId)}
+                    />
+                  </div>
                 </td>
                 <td className={dataCellClass(darkMode, 'raw')}>
-                  <BatchTableNumericMassCell
-                    darkMode={darkMode}
-                    editable
-                    className={solveInputClass(darkMode, rawWeightStatus(material.id))}
-                    helpTitle="步骤1：输入投料量。可直接手动输入原料投料量，输入有效数字后标记为绿色。"
-                    value={rawWeightDrafts[material.id] ?? ''}
-                    onChange={(next) => onRawWeightChange(material.id, next)}
-                  />
+                  <div>
+                    <BatchTableNumericMassCell
+                      darkMode={darkMode}
+                      editable
+                      className={solveInputClass(darkMode, rawWeightStatus(material.id))}
+                      helpTitle="步骤1：输入投料量。可直接手动输入原料投料量，输入有效数字后标记为绿色。"
+                      value={rawWeightDrafts[material.id] ?? ''}
+                      onChange={(next) => onRawWeightChange(material.id, next)}
+                    />
+                  </div>
                 </td>
                 {renderElementCells('raw', material.ratios, { kind: 'raw', id: material.id, material })}
                 {renderTotalCell(material.ratios, 'raw', { materialId: material.id })}
@@ -842,7 +855,7 @@ export function CopperBatchElementTable({
                 <td rowSpan={2} className={`${categoryRowSpanCellClass(darkMode, 'solvent')} relative p-0`}>
                   {categoryCellWithDelete(`熔剂${index + 1}`, () => onRemoveSolvent(material.id), darkMode)}
                 </td>
-                <td className={`${stickyCellClass(darkMode, 'solvent', 'name')} p-1`} style={nameColStyle(nameColWidth)}>
+                <td className={`${stickyCellClass(darkMode, 'solvent', 'name')}`} style={nameColStyle(nameColWidth)}>
                   <input
                     className={`h-8 w-full rounded border px-2 text-center text-sm outline-none transition ${
                       darkMode

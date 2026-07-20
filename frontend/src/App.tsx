@@ -59,7 +59,15 @@ function LicenseCheckingSplash({ language }: { language: 'zh' | 'en' }) {
 
 function initialLicenseGate(): 'unknown' | 'ok' | 'blocked' {
   if (typeof window === 'undefined') return 'ok'
-  return (window as { electronAPI?: { license?: unknown } }).electronAPI?.license ? 'unknown' : 'ok'
+  const api = (window as {
+    electronAPI?: {
+      license?: {
+        getCachedStatus?: () => Promise<{ ok: boolean } | null>
+      }
+    }
+  }).electronAPI
+  if (!api?.license) return 'ok'
+  return 'unknown'
 }
 
 function App() {
@@ -80,11 +88,27 @@ function App() {
   const appReadySent = useRef(false)
 
   useEffect(() => {
-    const lic = (window as { electronAPI?: { license?: { getStatus: () => Promise<{ ok: boolean }> } } }).electronAPI?.license
+    const lic = (window as {
+      electronAPI?: {
+        license?: {
+          getStatus: () => Promise<{ ok: boolean }>
+          getCachedStatus?: () => Promise<{ ok: boolean } | null>
+        }
+      }
+    }).electronAPI?.license
     if (!lic) return
-    void lic.getStatus().then((s) => {
-      setLicenseGate(s.ok ? 'ok' : 'blocked')
-    })
+    const apply = (s: { ok: boolean }) => setLicenseGate(s.ok ? 'ok' : 'blocked')
+    const load = async () => {
+      if (lic.getCachedStatus) {
+        const cached = await lic.getCachedStatus()
+        if (cached) {
+          apply(cached)
+          return
+        }
+      }
+      apply(await lic.getStatus())
+    }
+    void load()
   }, [])
 
   useEffect(() => {

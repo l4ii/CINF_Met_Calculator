@@ -1,6 +1,11 @@
 import rawConstraints from '../config/copperOxySideBlowConstraints.json' with { type: 'json' }
 import { phaseFractionsFromFormula } from './chemicalFormula.ts'
 import { COPPER_BUILTIN_PHASE_FRACTIONS } from './copperPhaseStoichiometry.ts'
+import {
+  migrateOxygenEnrichmentConstraints,
+  migrateSecondaryAirOxygenSupplyConstraints,
+  isOxygenEnrichmentExpr,
+} from './copperProcessParameters.ts'
 
 export type OxySideBlowProductKey =
   | 'smeltingSlag'
@@ -32,8 +37,15 @@ export interface CustomConstraintEntry {
   target: number
   /** true 表示仅作为初值/复核参考，不进入严格方程组 */
   soft?: boolean
+  /** 相对容差（如 0.005=千分之五）；缺省用 solverParams.constraintRelativeTolerance */
+  relativeTolerance?: number
   /** 约束逻辑说明：解读、业务含义、求解器执行方式 */
   note?: string
+  /**
+   * UI 分类：气体类约束在表达式中可能混用 Nm³ 与 t/h，界面展示专用标签。
+   * 缺省时由 inferCustomConstraintUiKind(expr) 推断。
+   */
+  uiKind?: 'gas' | 'input' | 'output' | 'process'
 }
 
 export interface OxySideBlowProductDef {
@@ -95,6 +107,8 @@ export interface OxySideBlowConstraintConfig {
     wPercentIterations?: number
     newtonMaxIterations?: number
     tolerance?: number
+    /** 产出约束相对容差，默认 0.005（千分之五） */
+    constraintRelativeTolerance?: number
   }
 }
 
@@ -114,6 +128,59 @@ export const OXY_PRODUCT_CN_TO_KEY: Record<string, OxySideBlowProductKey> = Obje
 
 export const OXY_SIDE_BLOW_PRODUCT_KEYS = Object.keys(OXY_PRODUCT_KEY_TO_CN) as OxySideBlowProductKey[]
 
+export type CustomConstraintUiKind = NonNullable<CustomConstraintEntry['uiKind']>
+
+/** 推断自定义约束在界面上的分类（气体/投入/产出/工艺） */
+export function inferCustomConstraintUiKind(expr: string): CustomConstraintUiKind {
+  const normalized = expr.replace(/\s+/g, '')
+  if (
+    isOxygenEnrichmentExpr(expr) ||
+    normalized.includes('Input.空气') ||
+    normalized.includes('Input.氧气') ||
+    normalized.includes('Input.二次风') ||
+    normalized.includes('加料口漏风')
+  ) {
+    return 'gas'
+  }
+  if (normalized.startsWith('Input.')) return 'input'
+  if (normalized.startsWith('Output.') || normalized.startsWith('OutputE.')) return 'output'
+  return 'process'
+}
+
+export function customConstraintUiKindLabel(kind: CustomConstraintUiKind): string {
+  switch (kind) {
+    case 'gas':
+      return '气体'
+    case 'input':
+      return '投入'
+    case 'output':
+      return '产出'
+    case 'process':
+      return '工艺'
+    default:
+      return '约束'
+  }
+}
+
+export function customConstraintUiKindHint(expr: string, kind: CustomConstraintUiKind): string | undefined {
+  if (kind !== 'gas') return undefined
+  if (isOxygenEnrichmentExpr(expr)) {
+    return '气体约束：O₂ 质量按 kg（t/h×1000），空气/氧气总量按 Nm³；目标为湿基 O₂ 体积分数。'
+  }
+  if (expr.replace(/\s+/g, '').includes('加料口漏风/4500')) {
+    return '气体约束：加料口漏风按 Nm³/h 表达，质量由 4500 Nm³/h≈5.73 t/h 折算。'
+  }
+  if (expr.includes('二次风')) {
+    return '气体约束：二次风质量 t/h，表达式中 O₂ 相质量参与供氧系数核算。'
+  }
+  if (expr.includes('出炉烟气') && expr.includes('O2')) {
+    return '气体约束：烟气残氧率为 O₂ 质量比，分母为入炉各股气体 O₂ 质量之和。'
+  }
+  return '气体约束：注意表达式中质量(t/h)与体积(Nm³)口径。'
+}
+
 export function loadOxySideBlowConstraints(): OxySideBlowConstraintConfig {
-  return rawConstraints as OxySideBlowConstraintConfig
+  return migrateOxygenEnrichmentConstraints(
+    migrateSecondaryAirOxygenSupplyConstraints(rawConstraints as OxySideBlowConstraintConfig)
+  )
 }

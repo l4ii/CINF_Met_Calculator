@@ -1,7 +1,10 @@
 const { app, BrowserWindow, dialog, ipcMain, nativeImage } = require('electron')
 const path = require('path')
 const http = require('http')
-const { spawn, execSync } = require('child_process')
+const { spawn, execSync, exec } = require('child_process')
+const { promisify } = require('util')
+
+const execAsync = promisify(exec)
 const fs = require('fs')
 const os = require('os')
 const { autoUpdater } = require('electron-updater')
@@ -54,8 +57,10 @@ function prepareStableUserDataPath() {
 prepareStableUserDataPath()
 
 /** 与 frontend/src/constants/appCopy.ts 中 APP_NAME_ZH / APP_TAGLINE_ZH 保持同步 */
-const APP_DISPLAY_NAME = '长沙院冶金智能配料软件'
-const APP_SPLASH_TAGLINE = '面向有色冶炼配料计算、渣型控制和物料平衡的专业工程工具。支持原料、熔剂、物相和阶段流程的本地化计算与复核。'
+const APP_DISPLAY_NAME = '长沙有色冶金设计研究院冶金工艺计算与三维设计一体化平台'
+/** 闪屏标题略短，去掉「一体化」以便单行显示；正式产品名仍以 APP_DISPLAY_NAME 为准 */
+const APP_SPLASH_DISPLAY_NAME = '长沙有色冶金设计研究院冶金工艺计算与三维设计平台'
+const APP_SPLASH_TAGLINE = '面向有色冶炼配料计算、三维设备选型和案例报告的专业工程工具。支持原料、熔剂、物相和阶段流程的本地化计算与复核。'
 
 // 仅根据是否打包判断：打包后的 exe 始终为生产模式
 const isDev = !app.isPackaged
@@ -127,10 +132,32 @@ let splashWindow
 /** 主窗显示与闪屏关闭仅处理一次（app:ready 或 90s 兜底） */
 let appReadyHandled = false
 let appReadyFallbackTimer = null
+let mainWindowReadyToShow = false
+let licensePrewarmDone = false
+
+function tryEarlySplashClose() {
+  if (mainWindowReadyToShow && licensePrewarmDone) {
+    showMainAndCloseSplash()
+  }
+}
+
+function setupEarlySplashClose(licensePrewarmPromise) {
+  void licensePrewarmPromise
+    .then(() => {
+      licensePrewarmDone = true
+      tryEarlySplashClose()
+    })
+    .catch((e) => {
+      console.warn('[许可] 预热失败:', e)
+      licensePrewarmDone = true
+      tryEarlySplashClose()
+    })
+}
 
 function showMainAndCloseSplash() {
   if (appReadyHandled) return
   appReadyHandled = true
+  console.log('[启动] splash.close: main window shown')
   if (appReadyFallbackTimer) {
     try {
       clearTimeout(appReadyFallbackTimer)
@@ -194,7 +221,7 @@ function createSplashWindow() {
       splashWindow.loadFile(splashPath, {
         query: {
           iconPng: splashIconPngDataUrl,
-          name: APP_DISPLAY_NAME,
+          name: APP_SPLASH_DISPLAY_NAME,
           tagline: APP_SPLASH_TAGLINE,
         },
       })
@@ -298,15 +325,14 @@ function findBackendExecutable() {
   return null
 }
 
-function isManagedBackendPid(pid) {
+async function isManagedBackendPid(pid) {
   if (process.platform !== 'win32') return false
   try {
-    const out = execSync(`wmic process where processid=${pid} get CommandLine,ExecutablePath /format:list`, {
-      encoding: 'utf-8',
-      windowsHide: true,
-      timeout: 5000,
-    })
-    const text = String(out || '').toLowerCase().replace(/\//g, '\\')
+    const { stdout } = await execAsync(
+      `wmic process where processid=${pid} get CommandLine,ExecutablePath /format:list`,
+      { encoding: 'utf-8', windowsHide: true, timeout: 5000 }
+    )
+    const text = String(stdout || '').toLowerCase().replace(/\//g, '\\')
     const resourceRoot = (!isDev ? process.resourcesPath : path.join(__dirname, '..')).toLowerCase().replace(/\//g, '\\')
     const backendRoot = getResourcePath('backend').toLowerCase().replace(/\//g, '\\')
     const isBackendCmd =
@@ -319,12 +345,13 @@ function isManagedBackendPid(pid) {
 }
 
 /** Windows：仅结束本应用旧后端占用的 5000 端口 */
-function killProcessOnPort5000() {
-  if (process.platform !== 'win32') return []
+async function killProcessOnPort5000() {
+  if (process.platform !== 'win32') return { unmanagedPids: [], killedCount: 0 }
   const unmanagedPids = []
+  let killedCount = 0
   try {
-    const out = execSync('netstat -ano', { encoding: 'utf-8', windowsHide: true })
-    const lines = out.split(/\r?\n/)
+    const { stdout } = await execAsync('netstat -ano', { encoding: 'utf-8', windowsHide: true })
+    const lines = String(stdout || '').split(/\r?\n/)
     const pids = new Set()
     for (const line of lines) {
       if (!line.includes(':5000') || !line.includes('LISTENING')) continue
@@ -332,14 +359,18 @@ function killProcessOnPort5000() {
       const pid = parts[parts.length - 1]
       if (pid && /^\d+$/.test(pid) && pid !== '0') pids.add(pid)
     }
-    for (const pid of pids) {
-      if (!isManagedBackendPid(pid)) {
+    const managedFlags = await Promise.all(
+      [...pids].map(async (pid) => ({ pid, managed: await isManagedBackendPid(pid) }))
+    )
+    for (const { pid, managed } of managedFlags) {
+      if (!managed) {
         unmanagedPids.push(pid)
         console.warn('[后端] 5000 端口被非本应用进程占用，未结束 PID:', pid)
         continue
       }
       try {
-        execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore', windowsHide: true })
+        await execAsync(`taskkill /PID ${pid} /T /F`, { windowsHide: true })
+        killedCount += 1
         console.log('[后端] 已结束占用 5000 端口的进程 PID:', pid)
       } catch (_) {
         /* 可能已退出 */
@@ -348,7 +379,7 @@ function killProcessOnPort5000() {
   } catch (e) {
     console.warn('[后端] 检查/结束 5000 端口进程时出错:', e.message)
   }
-  return unmanagedPids
+  return { unmanagedPids, killedCount }
 }
 
 function looksLikeBackendListenLog(chunk) {
@@ -385,17 +416,26 @@ function waitForBackendHttpReady(maxMs, intervalMs) {
   })
 }
 
-function startBackend() {
-  return new Promise((resolve, reject) => {
-    const unmanagedPids = killProcessOnPort5000()
-    if (unmanagedPids.length > 0) {
-      reject(new Error(`5000 端口已被占用（PID: ${unmanagedPids.join(', ')}）。请关闭占用进程后重试。`))
-      return
-    }
-    const delayBeforeSpawn = process.platform === 'win32' ? 800 : 400
-    const pollMaxMs = isDev ? 20000 : isWindows7KernelOrOlder() ? 120000 : 60000
-    const pollIntervalMs = isWindows7KernelOrOlder() ? 600 : 400
+async function startBackend() {
+  try {
+    await waitForBackendHttpReady(1500, 200)
+    console.log('[后端] 已有实例就绪，跳过启动')
+    return
+  } catch (_) {
+    /* 需要启动新实例 */
+  }
 
+  const { unmanagedPids, killedCount } = await killProcessOnPort5000()
+  if (unmanagedPids.length > 0) {
+    throw new Error(`5000 端口已被占用（PID: ${unmanagedPids.join(', ')}）。请关闭占用进程后重试。`)
+  }
+
+  const delayBeforeSpawn =
+    killedCount > 0 ? (process.platform === 'win32' ? 300 : 200) : 0
+  const pollMaxMs = isDev ? 20000 : isWindows7KernelOrOlder() ? 120000 : 60000
+  const pollIntervalMs = isWindows7KernelOrOlder() ? 600 : 400
+
+  return new Promise((resolve, reject) => {
     function doSpawn() {
       const backendCmd = findBackendExecutable()
       if (!backendCmd) {
@@ -500,7 +540,11 @@ function startBackend() {
         })
     }
 
-    setTimeout(doSpawn, delayBeforeSpawn)
+    if (delayBeforeSpawn > 0) {
+      setTimeout(doSpawn, delayBeforeSpawn)
+    } else {
+      doSpawn()
+    }
   })
 }
 
@@ -513,6 +557,7 @@ function createWindow() {
     appReadyFallbackTimer = null
   }
   appReadyHandled = false
+  mainWindowReadyToShow = false
 
   const windowOptions = {
     width: 1920,
@@ -558,23 +603,24 @@ function createWindow() {
       app.quit()
       return
     }
-    // 清空会话缓存，避免 userData 里旧缓存导致一直看到旧页面
-    mainWindow.webContents.session.clearCache().then(() => {
-      const buildIdPath = path.join(process.resourcesPath, 'frontend-dist', 'build.json')
-      let buildId = ''
-      try {
-        if (fs.existsSync(buildIdPath)) {
-          buildId = JSON.parse(fs.readFileSync(buildIdPath, 'utf8')).buildId || ''
-        }
-      } catch (_) {}
-      const loadOpts = buildId ? { query: { v: buildId } } : {}
-      mainWindow.loadFile(indexPath, loadOpts)
-    })
+    const buildIdPath = path.join(process.resourcesPath, 'frontend-dist', 'build.json')
+    let buildId = ''
+    try {
+      if (fs.existsSync(buildIdPath)) {
+        buildId = JSON.parse(fs.readFileSync(buildIdPath, 'utf8')).buildId || ''
+      }
+    } catch (_) {}
+    const loadOpts = buildId ? { query: { v: buildId } } : {}
+    mainWindow.loadFile(indexPath, loadOpts)
   }
 
-  // 不立即显示主窗：等待渲染进程 app:ready；90s 兜底避免卡死
+  // 主窗就绪且许可预热完成后关闪屏；渲染进程 app:ready 或 90s 兜底
   mainWindow.once('ready-to-show', () => {
-    appReadyFallbackTimer = setTimeout(showMainAndCloseSplash, 90000)
+    mainWindowReadyToShow = true
+    tryEarlySplashClose()
+    if (!appReadyHandled) {
+      appReadyFallbackTimer = setTimeout(showMainAndCloseSplash, 90000)
+    }
   })
 
   mainWindow.on('closed', () => {
@@ -715,8 +761,14 @@ ipcMain.on('app:ready', () => {
   showMainAndCloseSplash()
 })
 
-ipcMain.handle('license:get-status', () => {
-  return license.getLicenseStatus(isDev)
+ipcMain.handle('license:get-cached-status', () => {
+  return license.getCachedLicenseStatus()
+})
+
+ipcMain.handle('license:get-status', async () => {
+  const cached = license.getCachedLicenseStatus()
+  if (cached) return cached
+  return license.prewarmLicenseStatus(isDev)
 })
 
 ipcMain.handle('license:activate', async (_e, token) => {
@@ -794,16 +846,28 @@ ipcMain.handle('copper-case:save-desktop', async (event, payload) => {
 
 // 应用准备就绪
 app.whenReady().then(async () => {
+  const startupT0 = Date.now()
+  const mark = (label) => console.log(`[启动] ${label}: +${Date.now() - startupT0}ms`)
   try {
     license.setElectronApp(app)
+    mark('license.init')
     createSplashWindow()
-    // 启动后端服务器
-    await startBackend()
+    mark('splash.created')
 
-    // 创建窗口（主窗 show 由 app:ready 或 90s 超时触发）
+    const licensePrewarmPromise = license.prewarmLicenseStatus(isDev)
+    setupEarlySplashClose(licensePrewarmPromise)
+
     createWindow()
-    
-    // 应用启动后延迟检查更新（避免影响启动速度）；静默检查，具体结果由设置页展示
+    mark('window.created')
+
+    startBackend()
+      .then(() => mark('backend.ready'))
+      .catch((err) => {
+        console.error('[后端] 后台启动失败:', err && err.message ? err.message : err)
+      })
+
+    void licensePrewarmPromise.then(() => mark('license.prewarm'))
+
     if (!isDev) {
       setTimeout(() => {
         autoUpdater.checkForUpdates().catch((err) => {
@@ -814,11 +878,7 @@ app.whenReady().then(async () => {
   } catch (error) {
     console.error('启动失败:', error)
     const msg = error && error.message
-    const suggestPython = msg && !msg.includes('5000') && !msg.includes('端口')
-    dialog.showErrorBox(
-      '启动失败',
-      `应用启动失败：${msg || error}\n\n${suggestPython ? '请检查 Python 环境是否正确配置；若使用 start.bat 能正常打开，可优先用 start.bat 启动。' : '可尝试用 start.bat 启动（先关闭本窗口），或检查 5000 端口是否被占用。'}`
-    )
+    dialog.showErrorBox('启动失败', `应用启动失败：${msg || error}`)
     app.quit()
   }
 

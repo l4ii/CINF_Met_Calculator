@@ -56,6 +56,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 离线一机一证：设备码 + 授权码（前缀 CINF-MET-LIC1.）
   license: {
     getStatus: () => ipcRenderer.invoke('license:get-status'),
+    getCachedStatus: () => ipcRenderer.invoke('license:get-cached-status'),
     activate: (token) => ipcRenderer.invoke('license:activate', token),
   },
   getDeployInfo: () => ipcRenderer.invoke('get-deploy-info'),

@@ -175,7 +175,7 @@ export function BatchTableNumericCell({
 
   return (
     <input
-      className={mergeClass(inputSm(darkMode), 'h-7 w-full min-w-0 !px-0.5 !py-0 text-center font-mono text-sm tabular-nums', className)}
+      className={mergeClass(inputSm(darkMode), 'h-8 w-full min-w-0 !px-0.5 !py-0 text-center font-mono text-sm tabular-nums', className)}
       step={step}
       title={title}
       value={shown}

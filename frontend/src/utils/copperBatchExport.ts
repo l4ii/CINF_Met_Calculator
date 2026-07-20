@@ -40,15 +40,19 @@ export function sanitizeExcelFilePart(value: string) {
 export function buildCopperBatchExportFilename({
   appName,
   stageName,
+  caseName,
   date = new Date(),
 }: {
   appName: string
   stageName: string
+  caseName?: string
   date?: Date
 }) {
   const safeAppName = sanitizeExcelFilePart(appName)
   const safeStageName = sanitizeExcelFilePart(getCopperStageExportName(stageName))
-  return `${safeAppName}_${safeStageName}_${formatExportDate(date)}.xls`
+  const safeCaseName = caseName ? sanitizeExcelFilePart(caseName) : ''
+  const parts = [safeCaseName || safeAppName, safeStageName, formatExportDate(date)].filter(Boolean)
+  return `${parts.join('_')}.xls`
 }
 
 export function escapeExcelHtml(value: string | number | null | undefined) {

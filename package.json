@@ -1,7 +1,7 @@
 {
   "name": "met_calculator",
   "version": "1.0.0",
-  "description": "长沙院冶金智能配料软件",
+  "description": "长沙有色冶金设计研究院冶金工艺计算与三维设计一体化平台",
   "main": "electron/main.js",
   "scripts": {
     "postinstall": "node scripts/apply-electron-builder-nsis-patches.js",

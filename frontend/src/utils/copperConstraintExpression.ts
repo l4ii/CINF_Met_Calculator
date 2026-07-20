@@ -318,8 +318,37 @@ export function evaluateConstraintExpression(ast: ExprNode, table: ConstraintSym
   }
 }
 
+const expressionAstCache = new Map<string, ExprNode>()
+
+function cachedConstraintExpression(expr: string): ExprNode {
+  const cached = expressionAstCache.get(expr)
+  if (cached) return cached
+  const parsed = parseConstraintExpression(expr)
+  expressionAstCache.set(expr, parsed)
+  return parsed
+}
+
 export function evaluateConstraintExprString(expr: string, table: ConstraintSymbolTable): number {
-  return evaluateConstraintExpression(parseConstraintExpression(expr), table)
+  return evaluateConstraintExpression(cachedConstraintExpression(expr), table)
+}
+
+/**
+ * MetCal 富氧式 ((空气.O2+氧气.O2)/32×22.4)/(空气+氧气) 的物理含义是湿基 O₂ 体积分数。
+ * 求解器内空气/氧气顶层为 t/h，故按物相 O₂/N₂/H₂O 摩尔分数求值，与硬投影一致。
+ */
+export function evaluateOxygenEnrichmentRatio(table: ConstraintSymbolTable): number {
+  const h2oMolarMass = 2 * atomicMass('H') + atomicMass('O')
+  const moleRates = (phases: Record<string, number> | undefined) => {
+    const o2 = Math.max(0, phases?.O2 ?? 0) / COMPOUND_MOLAR_MASS.O2
+    const n2 = Math.max(0, phases?.N2 ?? 0) / COMPOUND_MOLAR_MASS.N2
+    const h2o = Math.max(0, phases?.H2O ?? 0) / h2oMolarMass
+    return { o2, total: o2 + n2 + h2o }
+  }
+  const air = moleRates(table.inputPhaseMass?.['空气'])
+  const oxygen = moleRates(table.inputPhaseMass?.['氧气'])
+  const total = air.total + oxygen.total
+  if (total <= 1e-12) return 0
+  return (air.o2 + oxygen.o2) / total
 }
 
 export function buildConstraintSymbolTable(params: {

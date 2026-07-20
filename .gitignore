@@ -65,6 +65,20 @@ Thumbs.db
 ~$*
 *.tmp
 *.temp
+tmp/
+tmp-*.json
+tmp-*.txt
+tmp-*.md
+
+# Local scratch / generated review artifacts (not app source)
+outputs/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Accidental tsc emit next to Vite config
+frontend/vite.config.js
+frontend/vite.config.d.ts
 
 # Exports (generated files)
 exports/
@@ -78,6 +92,10 @@ backend/build/
 backend/*.spec
 __pycache__/
 *.pyc
+
+# Local LLM weights (packaged separately for dist:win:ai)
+backend/models/*.gguf
+backend/models/*.bin
 
 # Python virtual environment (build environment)
 build_env/

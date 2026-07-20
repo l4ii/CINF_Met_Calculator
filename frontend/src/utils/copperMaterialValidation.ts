@@ -2,11 +2,7 @@ import type { CopperElementKey, CopperMaterialColumn, CopperRatios } from './cop
 import { calculateKnownTotal, closeCopperRatios } from './copperWorkflowCalc.ts'
 
 export function requiresSulfurInput(ratios: CopperRatios): boolean {
-  return (
-    (ratios['Cu(铜)'] ?? 0) > 0 ||
-    (ratios['Fe(铁)'] ?? 0) > 0 ||
-    (ratios['FeO(氧化亚铁)'] ?? 0) > 0
-  )
+  return (ratios['Cu(铜)'] ?? 0) > 0 || (ratios['Fe(铁)'] ?? 0) > 0
 }
 
 export function hasValidSulfurInput(ratios: CopperRatios): boolean {
@@ -59,13 +55,14 @@ export function sulfurInputStatus(ratios: CopperRatios): 'ok' | 'missing' | 'not
 
 const TOTAL_TOLERANCE = 1e-6
 
-/** 配料总表化验存储：不自动补 Other */
+/** 配料总表化验存储：不自动补 Other；保留有符号闭合 O */
 function normalizeAssayRatios(ratios: CopperRatios): Record<CopperElementKey, number> {
-  return closeCopperRatios(ratios, { fillOther: false, scaleWhenOver100: false })
+  return closeCopperRatios(ratios, { fillOther: false, scaleWhenOver100: false, preserveSignedOxygen: true })
 }
 
 export function isRawMaterialKnownTotalOverLimit(ratios: CopperRatios): boolean {
-  return calculateKnownTotal(normalizeAssayRatios(ratios)) > 100 + TOTAL_TOLERANCE
+  const normalized = normalizeAssayRatios(ratios)
+  return calculateKnownTotal({ ...normalized, 'O(氧)': 0 }) > 100 + TOTAL_TOLERANCE
 }
 
 export type RawMaterialRatioValidationStatus = 'ok' | 'over_limit' | 'other_trimmed'
@@ -80,26 +77,54 @@ export type RawMaterialRatioValidationResult = {
   newTotal: number
 }
 
+export type RawMaterialPhaseClosureGap = {
+  total: number
+  gap: number
+}
+
 function formatPct(value: number) {
   return Number(value.toFixed(4)).toString()
+}
+
+export function calculateRawMaterialEnteredTotal(ratios: CopperRatios): number {
+  const normalized = normalizeAssayRatios(ratios)
+  return calculateKnownTotal(normalized) + Math.max(0, normalized['Other(其他)'] ?? 0)
+}
+
+export function rawMaterialPhaseClosureGap(ratios: CopperRatios): RawMaterialPhaseClosureGap | null {
+  const total = calculateRawMaterialEnteredTotal(ratios)
+  if (total <= TOTAL_TOLERANCE || total >= 100 - TOTAL_TOLERANCE) return null
+  return { total, gap: 100 - total }
+}
+
+export function formatRawMaterialPhaseClosureMessage(
+  materialName: string,
+  closure: RawMaterialPhaseClosureGap
+): { text: string; tone: 'warning' } {
+  const name = materialName.trim() || '该原料'
+  return {
+    text: `${name} 元素合计 ${formatPct(closure.total)}%，未闭合 ${formatPct(closure.gap)}%；物相计算将通过 O / C / Other 反算闭合到 100%。`,
+    tone: 'warning',
+  }
 }
 
 /** 原料元素合计校验：已知元素超 100 则标红；否则将 Other 削减至合计 100% */
 export function applyRawMaterialRatioTotalValidation(ratios: CopperRatios): RawMaterialRatioValidationResult {
   const base = normalizeAssayRatios(ratios)
   const known = calculateKnownTotal(base)
+  const knownExcludingClosureO = calculateKnownTotal({ ...base, 'O(氧)': 0 })
   const previousOther = base['Other(其他)'] ?? 0
   const previousTotal = known + previousOther
 
-  if (known > 100 + TOTAL_TOLERANCE) {
+  if (knownExcludingClosureO > 100 + TOTAL_TOLERANCE && (base['O(氧)'] ?? 0) >= 0) {
     return {
       ratios: { ...base, 'Other(其他)': 0 },
       status: 'over_limit',
-      knownTotal: known,
+      knownTotal: knownExcludingClosureO,
       previousOther,
       newOther: 0,
       previousTotal,
-      newTotal: known,
+      newTotal: knownExcludingClosureO,
     }
   }
 

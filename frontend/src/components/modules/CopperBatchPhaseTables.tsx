@@ -79,15 +79,15 @@ function spanFrameClass() {
 function stickyCellClass(dark: boolean, kind: ColumnKind, side: 'category' | 'name') {
   const left = side === 'category' ? STICKY_CATEGORY : STICKY_NAME_LEFT
   const align = side === 'category' ? 'text-center font-semibold' : 'text-center'
-  return `sticky ${left} z-20 ${spanFrameClass()} px-2 py-1.5 align-middle text-sm ${align} ${rowToneClass(dark, kind)}`
+  return `sticky ${left} z-20 h-9 ${spanFrameClass()} px-2 py-0 align-middle text-sm ${align} ${rowToneClass(dark, kind)}`
 }
 
 function categoryRowSpanCellClass(dark: boolean, kind: ColumnKind) {
-  return `sticky ${STICKY_CATEGORY} z-20 ${spanFrameClass()} px-2 py-1.5 align-middle text-center text-sm font-semibold ${rowToneClass(dark, kind)}`
+  return `sticky ${STICKY_CATEGORY} z-20 h-9 ${spanFrameClass()} px-2 py-0 align-middle text-center text-sm font-semibold ${rowToneClass(dark, kind)}`
 }
 
 function dataCellClass(dark: boolean, kind: ColumnKind) {
-  return `${rowFrameClass()} px-0.5 py-1.5 align-middle text-center text-sm ${rowToneClass(dark, kind)}`
+  return `h-9 ${rowFrameClass()} px-0.5 py-0 align-middle text-center text-sm ${rowToneClass(dark, kind)}`
 }
 
 function phaseTableColumnCount(phaseDataColumnCount: number) {
@@ -289,6 +289,7 @@ export function CopperBatchPhaseTables({
   outputDrafts,
   invalidInputColumns,
   invalidOutputColumns,
+  expandRawGroupToken = 0,
   onInputDraftChange,
   onInputDraftCommit,
   onOutputDraftChange,
@@ -308,6 +309,7 @@ export function CopperBatchPhaseTables({
   outputDrafts: Record<string, Record<string, string>>
   invalidInputColumns: Record<string, boolean>
   invalidOutputColumns: Record<string, boolean>
+  expandRawGroupToken?: number
   onInputDraftChange: (columnId: string, key: string, value: string) => void
   onInputDraftCommit: (columnId: string) => void
   onOutputDraftChange: (columnId: string, key: string, value: string) => void
@@ -381,6 +383,10 @@ export function CopperBatchPhaseTables({
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
+
+  useEffect(() => {
+    if (expandRawGroupToken > 0) setRawExpanded(true)
+  }, [expandRawGroupToken])
 
   const getDraft = (column: PhaseTableColumn, rowKey: string, fallback: number) => {
     const map = column.kind === 'product' ? outputDrafts : inputDrafts

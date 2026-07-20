@@ -1,17 +1,27 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { getSelectedSmeltAlgorithm, SHEETS, type SelectedMethod, type SheetId } from '../types'
-import RawMaterialPhaseOxygen from './modules/RawMaterialPhaseOxygen'
-import ProductDisplay from './modules/ProductDisplay'
-import CopperWorkflow from './modules/CopperWorkflow'
 import ElementDistributionFab from './ElementDistributionFab'
 import ErrorBoundary from './ErrorBoundary'
 import BackIconButton from './BackIconButton'
 import { cardBase, descText } from '../theme/uiTheme'
-import AboutPage from './shell/AboutPage'
-import SettingsPage from './shell/SettingsPage'
 import { appSubtitleForLang, appTitleForLang } from '../constants/appCopy'
 import { useAssistantSnapshotOptional } from '../context/AssistantContext'
 import { useCalcOptional } from '../context/CalcContext'
+
+const CopperWorkflow = lazy(() => import('./modules/CopperWorkflow'))
+const RawMaterialPhaseOxygen = lazy(() => import('./modules/RawMaterialPhaseOxygen'))
+const ProductDisplay = lazy(() => import('./modules/ProductDisplay'))
+const AboutPage = lazy(() => import('./shell/AboutPage'))
+const SettingsPage = lazy(() => import('./shell/SettingsPage'))
+
+function ModuleLoadingFallback({ darkMode = false }: { darkMode?: boolean }) {
+  return (
+    <div className={`flex items-center justify-center p-12 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" aria-hidden />
+      <span className="ml-3 text-sm">加载中…</span>
+    </div>
+  )
+}
 
 interface MainContentProps {
   selectedMethod: SelectedMethod | null
@@ -109,25 +119,29 @@ export default function MainContent({
 
   if (currentView === 'about' && aboutDepartment) {
     return (
-      <AboutPage
-        darkMode={darkMode}
-        language={language}
-        aboutDepartment={aboutDepartment}
-        onBackToHome={onBackToHome}
-      />
+      <Suspense fallback={<ModuleLoadingFallback darkMode={darkMode} />}>
+        <AboutPage
+          darkMode={darkMode}
+          language={language}
+          aboutDepartment={aboutDepartment}
+          onBackToHome={onBackToHome}
+        />
+      </Suspense>
     )
   }
 
   if (currentView === 'settings') {
     return (
-      <SettingsPage
-        darkMode={darkMode}
-        language={language}
-        darkModeValue={darkModeValue}
-        onDarkModeChange={onDarkModeChange}
-        onLanguageChange={onLanguageChange}
-        onBackToHome={onBackToHome}
-      />
+      <Suspense fallback={<ModuleLoadingFallback darkMode={darkMode} />}>
+        <SettingsPage
+          darkMode={darkMode}
+          language={language}
+          darkModeValue={darkModeValue}
+          onDarkModeChange={onDarkModeChange}
+          onLanguageChange={onLanguageChange}
+          onBackToHome={onBackToHome}
+        />
+      </Suspense>
     )
   }
 
@@ -147,8 +161,12 @@ export default function MainContent({
     heat_balance: isEn ? 'Heat balance (Coming soon)' : '热平衡计算（待实现）',
     furnace: isEn ? 'Furnace design (Coming soon)' : '炉型计算（待实现）',
     cu_smelting: isEn ? 'Copper smelting' : '铜熔炼',
+    cu_smelting_equipment: isEn ? 'Smelting equipment selection' : '熔炼设备选型',
     cu_converting: isEn ? 'Copper converting' : '铜吹炼',
+    cu_converting_equipment: isEn ? 'Converting equipment selection' : '吹炼设备选型',
     cu_refining: isEn ? 'Copper refining' : '铜精炼',
+    cu_refining_equipment: isEn ? 'Refining equipment selection' : '精炼设备选型',
+    cu_summary: isEn ? 'Copper case summary' : '案例汇总',
     cu_equipment: isEn ? 'Copper equipment selection' : '铜设备选型',
   }
 
@@ -169,8 +187,12 @@ export default function MainContent({
     heat_balance: 'Heat Balance',
     furnace: 'Furnace Design',
     cu_smelting: 'Smelting',
+    cu_smelting_equipment: 'Smelting Equipment',
     cu_converting: 'Converting',
+    cu_converting_equipment: 'Converting Equipment',
     cu_refining: 'Refining',
+    cu_refining_equipment: 'Refining Equipment',
+    cu_summary: 'Case Summary',
     cu_equipment: 'Equipment Selection',
   }
   const requestCopperWorkspaceBack = () => {
@@ -276,28 +298,34 @@ export default function MainContent({
           )}
           {isCopperSideBlown && (
             <ErrorBoundary>
-              <CopperWorkflow
-                darkMode={darkMode}
-                language={language}
-                activeSheet={activeSheet}
-                onStageSelect={onSheetSelect ?? (() => undefined)}
-                smeltMethodId={copperWorkflowMethodId}
-                smeltMethodName={selectedMethod.smeltMethodName}
-                caseTitleDraft={copperCaseTitleDraft}
-                onActiveCaseNameChange={handleActiveCopperCaseNameChange}
-              />
+              <Suspense fallback={<ModuleLoadingFallback darkMode={darkMode} />}>
+                <CopperWorkflow
+                  darkMode={darkMode}
+                  language={language}
+                  activeSheet={activeSheet}
+                  onStageSelect={onSheetSelect ?? (() => undefined)}
+                  smeltMethodId={copperWorkflowMethodId}
+                  smeltMethodName={selectedMethod.smeltMethodName}
+                  caseTitleDraft={copperCaseTitleDraft}
+                  onActiveCaseNameChange={handleActiveCopperCaseNameChange}
+                />
+              </Suspense>
             </ErrorBoundary>
           )}
           {isAntimonySideBlown && activeSheet === 'raw_material' && (
             <ErrorBoundary>
-              <div className="flex flex-col gap-6">
-                <RawMaterialPhaseOxygen darkMode={darkMode} language={language} />
-              </div>
+              <Suspense fallback={<ModuleLoadingFallback darkMode={darkMode} />}>
+                <div className="flex flex-col gap-6">
+                  <RawMaterialPhaseOxygen darkMode={darkMode} language={language} />
+                </div>
+              </Suspense>
             </ErrorBoundary>
           )}
           {isAntimonySideBlown && activeSheet === 'product' && (
             <ErrorBoundary>
-              <ProductDisplay darkMode={darkMode} language={language} />
+              <Suspense fallback={<ModuleLoadingFallback darkMode={darkMode} />}>
+                <ProductDisplay darkMode={darkMode} language={language} />
+              </Suspense>
             </ErrorBoundary>
           )}
           {isAntimonySideBlown && activeSheet === 'heat_balance' && (

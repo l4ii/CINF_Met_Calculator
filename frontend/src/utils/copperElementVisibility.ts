@@ -1,7 +1,7 @@
 import { COPPER_PLACEHOLDER_ELEMENT_KEYS, sortCopperElementKeys } from './copperDisplayOrder.ts'
 import {
   COPPER_ELEMENT_KEYS,
-  normalizeCopperRatios,
+  normalizeCopperAssayRatios,
   type CopperElementKey,
   type CopperRatios,
 } from './copperWorkflowCalc.ts'
@@ -14,7 +14,7 @@ export function elementKeyHasValue(
   element: CopperElementKey,
   epsilon = 1e-12
 ): boolean {
-  const normalized = normalizeCopperRatios(ratios)
+  const normalized = normalizeCopperAssayRatios(ratios)
   const value = normalized[element]
   return value != null && Number.isFinite(value) && Math.abs(value) >= epsilon
 }

@@ -1,10 +1,11 @@
-import type { CopperElementKey, CopperRatios, PhaseAssistRowSpec } from './copperWorkflowCalc.ts'
+import type { CopperElementKey, CopperRatios, CopperMaterialColumn, PhaseAssistRowSpec } from './copperWorkflowCalc.ts'
 import {
   calculateOrderedPhaseElementCompletion,
   normalizeCopperRatios,
 } from './copperWorkflowCalc.ts'
 import {
   allocateConcentratePhases,
+  normalizeConcentrateAssayRatios,
   shouldUseConcentrateNormativeAllocator,
   type ConcentratePhaseKey,
 } from './copperConcentratePhaseNorm.ts'
@@ -15,6 +16,7 @@ import {
 } from './copperPhaseTableCalc.ts'
 import type { MaterialPhaseAssistRow } from './copperPhaseAssist.ts'
 import { materialPhaseRowDisplayLabel } from './copperPhaseAssist.ts'
+import { validateMaterialForPhaseCalc } from './copperMaterialValidation.ts'
 import { getBuiltinPhaseFractions } from './copperPhaseTableCalc.ts'
 import {
   COPPER_PHASE_TABLE_COMPOUND_KEYS,
@@ -31,6 +33,82 @@ export type PhaseMaterialCalcResult = {
   valid: boolean
   status?: string
   message?: string
+}
+
+export type PhaseBatchResults = Record<string, PhaseMaterialCalcResult>
+
+export type PhaseMaterialCalcFailure = {
+  id: string
+  name: string
+  message: string
+}
+
+export function materialPhaseRowsReadyForCalc(rows: MaterialPhaseAssistRow[]): string | null {
+  if (rows.some((row) => row.kind === 'draft')) {
+    return '存在待填写的物相行'
+  }
+  return null
+}
+
+export function computeAllMaterialPhaseResults(
+  materials: CopperMaterialColumn[],
+  materialPhaseRows: Record<string, MaterialPhaseAssistRow[]>,
+  options?: { materialIds?: string[] }
+): {
+  results: PhaseBatchResults
+  succeeded: string[]
+  failed: PhaseMaterialCalcFailure[]
+  skipped: PhaseMaterialCalcFailure[]
+} {
+  const idFilter = options?.materialIds ? new Set(options.materialIds) : null
+  const results: PhaseBatchResults = {}
+  const succeeded: string[] = []
+  const failed: PhaseMaterialCalcFailure[] = []
+  const skipped: PhaseMaterialCalcFailure[] = []
+
+  for (const material of materials) {
+    if (idFilter && !idFilter.has(material.id)) continue
+    const name = material.name.trim()
+    if (!name) continue
+    if (!Number.isFinite(material.weight) || material.weight <= 0) {
+      skipped.push({ id: material.id, name, message: '未填写投料量' })
+      continue
+    }
+
+    const phaseError = validateMaterialForPhaseCalc(material)
+    if (phaseError) {
+      skipped.push({ id: material.id, name, message: phaseError })
+      continue
+    }
+
+    const rows = materialPhaseRows[material.id] ?? []
+    const rowsError = materialPhaseRowsReadyForCalc(rows)
+    if (rowsError) {
+      skipped.push({ id: material.id, name, message: rowsError })
+      continue
+    }
+
+    const result = computeMaterialPhaseResult(
+      material.id,
+      name,
+      material.weight,
+      material.ratios,
+      rows
+    )
+    if (!result.valid) {
+      failed.push({
+        id: material.id,
+        name,
+        message: result.message ?? '物相方程无法求解，请调整物相行或化验值。',
+      })
+      continue
+    }
+
+    results[material.id] = result
+    succeeded.push(material.id)
+  }
+
+  return { results, succeeded, failed, skipped }
 }
 
 export type ConstraintPhasePercentMap = Record<string, number>
@@ -75,8 +153,8 @@ export function computeMaterialPhaseResult(
   ratios: CopperRatios,
   rows: MaterialPhaseAssistRow[]
 ): PhaseMaterialCalcResult {
-  if (shouldUseConcentrateNormativeAllocator(ratios)) {
-    const normalized = normalizeCopperRatios(ratios)
+  if (shouldUseConcentrateNormativeAllocator(ratios, rows)) {
+    const normalized = normalizeConcentrateAssayRatios(ratios)
     const phases = allocateConcentratePhases(ratios)
     return {
       materialId,
@@ -336,4 +414,27 @@ export function formatPhasePercentDraft(phases: PhasePercentMap): Record<string,
   return Object.fromEntries(
     Object.entries(phases).map(([key, value]) => [key, Number(value ?? 0).toFixed(2)])
   )
+}
+
+export function validateRawMaterialPhaseInputs(params: {
+  rawMaterials: CopperMaterialColumn[]
+  phaseBatchResults: Record<string, PhaseMaterialCalcResult | undefined> | null | undefined
+  blendPhaseMass: Record<string, number> | null | undefined
+}): { ok: boolean; message?: string } {
+  const weighedMaterials = params.rawMaterials.filter((m) => m.name.trim() && m.weight > 0)
+  if (weighedMaterials.length === 0) {
+    return { ok: false, message: '请先在配料总表填写原料投料量。' }
+  }
+  const missingPhase = weighedMaterials.filter((m) => !params.phaseBatchResults?.[m.id]?.valid)
+  if (missingPhase.length > 0) {
+    const names = missingPhase.map((m) => m.name).join('、')
+    return {
+      ok: false,
+      message: `请先在「投入物相」完成以下原料的物相回填：${names}。`,
+    }
+  }
+  if (!params.blendPhaseMass || Object.keys(params.blendPhaseMass).length === 0) {
+    return { ok: false, message: '混合铜精矿物相质量未生成，请完成全部原料物相回填后重试。' }
+  }
+  return { ok: true }
 }

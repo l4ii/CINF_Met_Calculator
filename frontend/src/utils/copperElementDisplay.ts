@@ -55,6 +55,7 @@ export type CopperPhaseTableDisplayKey = CopperPhaseTableCompoundKey | (typeof C
 const OXIDE_DECOMPOSE: Array<{
   compoundKey: CopperElementKey
   metalLabel: string
+  metalElement?: string
   composition: FormulaComposition
   metalCount?: number
 }> = [
@@ -64,38 +65,6 @@ const OXIDE_DECOMPOSE: Array<{
 ]
 
 const MG_OXIDE_KEY = 'MgO(氧化镁)' as CopperElementKey
-
-const ELEMENT_TABLE_ELEMENT_VIEW_KEYS = [
-  'Cu(铜)',
-  'S (硫)',
-  'Fe(铁)',
-  'Si',
-  'Ca',
-  'Mg',
-  'Ag(银)',
-  'Au(金)',
-  'Pb(铅)',
-  'As(砷)',
-  'Zn(锌)',
-  'Al',
-  'Sb(锑)',
-  'Ni(镍)',
-  'Se(硒)',
-  'Bi(铋)',
-  'Hg(汞)',
-  'Sn(锡)',
-  'Te(碲)',
-  'Cd(镉)',
-  'H(氢)',
-  'O(氧)',
-  'N(氮)',
-  'C (碳)',
-  'Other(其他)',
-] as const
-
-const ELEMENT_TABLE_ELEMENT_VIEW_ORDER = new Map<string, number>(
-  ELEMENT_TABLE_ELEMENT_VIEW_KEYS.map((key, index) => [key, index])
-)
 
 const OXIDE_TO_ELEMENT_VIEW_KEY: Partial<Record<CopperElementKey, string>> = {
   'SiO₂(二氧化硅)': 'Si',
@@ -116,6 +85,10 @@ const ELEMENT_VIEW_CANONICAL_KEY = new Map<string, CopperElementKey>(
     [key, key],
     [key.replace(/\(.+\)/, '').trim(), key],
   ])
+)
+
+const COMPOUND_DISPLAY_ORDER = new Map<string, number>(
+  COPPER_ELEMENT_DISPLAY_ORDER.map((key, index) => [key, index])
 )
 
 function addMass(target: Record<string, number>, key: string, mass: number) {
@@ -141,7 +114,66 @@ function toElementViewMassKey(key: string): string {
   return key.replace(/\(.+\)/, '').trim() || key
 }
 
+function normalizeCompoundSourceKey(sourceKey: CopperElementKey): CopperElementKey {
+  return sourceKey
+}
+
+function mapSourceKeyToElementDisplayKey(sourceKey: CopperElementKey): string {
+  const converted = OXIDE_TO_ELEMENT_VIEW_KEY[sourceKey]
+  if (converted) return converted
+  return toElementViewMassKey(sourceKey)
+}
+
+function sourceKeysHaveDecomposableOxide(sourceKeys: readonly CopperElementKey[]): boolean {
+  return sourceKeys.some((key) => Boolean(OXIDE_TO_ELEMENT_VIEW_KEY[key]))
+}
+
+function displayInsertIndexForSourceKey(
+  sourceKeys: readonly CopperElementKey[],
+  targetSourceKey: CopperElementKey
+): number {
+  let insertAt = 0
+  const seen = new Set<string>()
+  for (const rawKey of sourceKeys) {
+    const sourceKey = normalizeCompoundSourceKey(rawKey)
+    if (sourceKey === targetSourceKey) return insertAt
+    const displayKey = mapSourceKeyToElementDisplayKey(sourceKey)
+    if (!seen.has(displayKey)) {
+      seen.add(displayKey)
+      insertAt++
+    }
+  }
+  return insertAt
+}
+
+function ensureOxygenColumnInOrder(
+  displayKeys: string[],
+  sourceKeys: readonly CopperElementKey[]
+): string[] {
+  if (displayKeys.includes('O(氧)')) return displayKeys
+  if (!sourceKeysHaveDecomposableOxide(sourceKeys)) return displayKeys
+
+  const oxygenKey = 'O(氧)' as CopperElementKey
+  const oInSource = sourceKeys.some((key) => normalizeCompoundSourceKey(key) === oxygenKey)
+  let insertAt: number
+  if (oInSource) {
+    insertAt = displayInsertIndexForSourceKey(sourceKeys, oxygenKey)
+  } else {
+    const nIdx = displayKeys.indexOf('N(氮)')
+    insertAt = nIdx >= 0 ? nIdx : displayKeys.length
+  }
+
+  const next = [...displayKeys]
+  next.splice(insertAt, 0, 'O(氧)')
+  return next
+}
+
 function phaseAssistRowKeySortIndex(key: string): number {
+  const oxide = ELEMENT_VIEW_TO_OXIDE_KEY[key]
+  if (oxide) {
+    const compoundIdx = COMPOUND_DISPLAY_ORDER.get(oxide.key)
+    if (compoundIdx != null) return compoundIdx
+  }
   const idx = COPPER_ELEMENT_DISPLAY_ORDER.findIndex(
     (canonical) => canonical === key || canonical.replace(/\(.+\)/, '').trim() === key
   )
@@ -213,11 +245,11 @@ export function decomposePhaseElementMasses(
   const out: Record<string, number> = {}
   const consumed = new Set<string>()
 
-  for (const { compoundKey, metalLabel, composition, metalCount = 1 } of OXIDE_DECOMPOSE) {
+  for (const { compoundKey, metalLabel, metalElement = metalLabel, composition, metalCount = 1 } of OXIDE_DECOMPOSE) {
     const compoundMass = elements[compoundKey] ?? 0
     if (compoundMass <= 0) continue
     consumed.add(compoundKey)
-    const metalFrac = elementMassFraction(composition, metalLabel)
+    const metalFrac = elementMassFraction(composition, metalElement)
     const oFrac = elementMassFraction(composition, 'O')
     addMass(out, metalLabel, compoundMass * metalFrac)
     addMass(out, 'O(氧)', compoundMass * oFrac)
@@ -231,8 +263,10 @@ export function decomposePhaseElementMasses(
   }
 
   for (const [key, mass] of Object.entries(elements) as [CopperElementKey, number][]) {
-    if (!mass || mass <= 0 || consumed.has(key)) continue
-    addMass(out, toElementViewMassKey(key), mass)
+    if (!mass || consumed.has(key)) continue
+    const displayKey = toElementViewMassKey(key)
+    if (mass > 0) addMass(out, displayKey, mass)
+    else out[displayKey] = (out[displayKey] ?? 0) + mass
   }
 
   return out
@@ -252,7 +286,8 @@ export function phaseTableHeaderLabel(key: string, mode: 'compound' | 'element')
 }
 
 export function getPhaseTableColumnKeys(mode: 'compound' | 'element') {
-  return mode === 'compound' ? [...COPPER_PHASE_TABLE_COMPOUND_KEYS] : [...COPPER_PHASE_TABLE_ELEMENT_VIEW_KEYS]
+  if (mode === 'compound') return [...COPPER_PHASE_TABLE_COMPOUND_KEYS]
+  return buildElementTableDisplayKeys(COPPER_PHASE_TABLE_COMPOUND_KEYS, 'element')
 }
 
 export function elementTableHeaderLabel(key: string, mode: CopperElementDisplayMode): string {
@@ -263,35 +298,59 @@ export function decomposeElementTableRatios(
   ratios: Partial<Record<CopperElementKey, number>>,
   mode: CopperElementDisplayMode
 ): Record<string, number> {
-  if (mode === 'compound') return { ...ratios } as Record<string, number>
+  if (mode === 'compound') {
+    return { ...ratios } as Record<string, number>
+  }
   return decomposePhaseElementMasses(ratios, mode)
 }
 
-function elementViewSortIndex(key: string): number {
-  return ELEMENT_TABLE_ELEMENT_VIEW_ORDER.get(key) ?? ELEMENT_TABLE_ELEMENT_VIEW_KEYS.length + 1
+/** 元素切换后的显示合计：氧化物已拆出 O，合计按显示值求和；不需要也不允许用负 O 闭合。 */
+export function calculateElementTableDisplayTotal(
+  ratios: Partial<Record<CopperElementKey, number>>,
+  mode: CopperElementDisplayMode
+): number {
+  const displayed = decomposeElementTableRatios(ratios, mode)
+  return Object.values(displayed).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0)
+}
+
+/** 旧版表格中 O 行常用作闭合差额：100 - 非 O 项合计，可为负值，仅用于解释/兼容展示。 */
+export function calculateLegacyClosureOxygen(
+  ratios: Partial<Record<CopperElementKey, number>>
+): number {
+  const nonOxygenTotal = Object.entries(ratios).reduce((sum, [key, value]) => {
+    if (key === 'O(氧)') return sum
+    return sum + Math.max(0, Number.isFinite(value) ? Number(value) : 0)
+  }, 0)
+  return 100 - nonOxygenTotal
 }
 
 export function buildElementTableDisplayKeys(
   sourceKeys: readonly CopperElementKey[],
   mode: CopperElementDisplayMode
 ): string[] {
-  if (mode === 'compound') return [...sourceKeys]
-
-  const keys = new Set<string>()
-  for (const sourceKey of sourceKeys) {
-    const convertedKey = OXIDE_TO_ELEMENT_VIEW_KEY[sourceKey]
-    if (convertedKey) {
-      keys.add(convertedKey)
-      keys.add('O(氧)')
-      continue
-    }
-    keys.add(toElementViewMassKey(sourceKey))
+  const pushUnique = (target: string[], seen: Set<string>, key: string) => {
+    if (seen.has(key)) return
+    seen.add(key)
+    target.push(key)
   }
 
-  return [...keys].sort((a, b) => {
-    const order = elementViewSortIndex(a) - elementViewSortIndex(b)
-    return order !== 0 ? order : a.localeCompare(b, 'zh-CN')
-  })
+  if (mode === 'compound') {
+    const result: string[] = []
+    const seen = new Set<string>()
+    for (const sourceKey of sourceKeys) {
+      pushUnique(result, seen, normalizeCompoundSourceKey(sourceKey))
+    }
+    return result
+  }
+
+  const result: string[] = []
+  const seen = new Set<string>()
+  for (const rawKey of sourceKeys) {
+    const sourceKey = normalizeCompoundSourceKey(rawKey)
+    const displayKey = mapSourceKeyToElementDisplayKey(sourceKey)
+    pushUnique(result, seen, displayKey)
+  }
+  return ensureOxygenColumnInOrder(result, sourceKeys)
 }
 
 export function elementTableDisplaySourceKeys(

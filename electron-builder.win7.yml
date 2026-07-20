@@ -1,7 +1,7 @@
 # Win7/8 兼容版打包配置：输出到 release-win7，安装包名带 -Win7兼容
 # 需配合 Electron 22 使用（npm run dist:win:legacy）
 appId: com.changsha.met.batching
-productName: 长沙院冶金智能配料软件
+productName: 长沙有色冶金设计研究院冶金工艺计算与三维设计一体化平台
 copyright: Copyright © 2024 长沙有色冶金设计研究院有限公司
 
 directories:
