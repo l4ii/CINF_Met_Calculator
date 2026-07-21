@@ -27,7 +27,15 @@ export function WorkflowContextFloatingHint({
       : darkMode
         ? 'text-gray-400'
         : 'text-gray-500'
-  const title = hint.title ?? (tone === 'warning' ? '闭合提示' : '下一步')
+  const title = hint.title ?? (() => {
+    const colonIndex = hint.message.indexOf('：')
+    if (colonIndex > 0 && colonIndex < 24) return hint.message.slice(0, colonIndex)
+    return tone === 'warning' ? '闭合提示' : '下一步'
+  })()
+  const body =
+    hint.title == null && hint.message.includes('：') && hint.message.indexOf('：') < 24
+      ? hint.message.slice(hint.message.indexOf('：') + 1)
+      : hint.message
 
   return (
     <div
@@ -40,7 +48,7 @@ export function WorkflowContextFloatingHint({
         role="status"
       >
         <div className={`mb-1 text-xs font-medium ${titleClass}`}>{title}</div>
-        <div className="leading-relaxed">{hint.message}</div>
+        <div className="leading-relaxed">{body}</div>
       </div>
     </div>
   )

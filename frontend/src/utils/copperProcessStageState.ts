@@ -92,6 +92,7 @@ export type CopperProcessStageState = {
   coolingWaterOutletTemperature: string
   coolingWaterMassTh: string
   otherHeatMJh: string
+  heatBalanceTolerancePct?: string
   batchTableView: BatchTableView
   phaseRatioOverrides: Record<string, Record<string, string>>
   manualPhaseRatioColumns: Record<string, boolean>
@@ -189,6 +190,7 @@ export function createBlankProcessStageState(): CopperProcessStageState {
     coolingWaterOutletTemperature: '34',
     coolingWaterMassTh: '3000',
     otherHeatMJh: DEFAULT_OTHER_HEAT_MJH_TEXT,
+    heatBalanceTolerancePct: '2',
     batchTableView: 'element',
     phaseRatioOverrides: {},
     manualPhaseRatioColumns: {},

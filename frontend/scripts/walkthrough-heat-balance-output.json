@@ -1,0 +1,69 @@
+{
+  "generatedAt": "2026-07-20T11:15:05.091Z",
+  "incomeTotalMJh": 534038.49,
+  "expenditureTotalMJh": 534038.49,
+  "balanceAfterFuelMJh": 0,
+  "outputPhysicalHeatMJh": 457410.05,
+  "chemicalHeatMJh": 534038.49,
+  "chemicalHeatPathMJh": 537309.07,
+  "hessChemicalHeatMJh": 534038.49,
+  "metcalReferenceChemicalHeatMJh": 558984.771407112,
+  "metcalGapPct": 4.4628,
+  "coolingWaterOutletTemperatureC": 36.07,
+  "otherHeatMJh": 500,
+  "balanceErrorMJh": 0,
+  "heatBalanceTolerancePct": 2,
+  "balanceErrorWithinTolerance": true,
+  "closureStatus": "balanced",
+  "reactions": [
+    {
+      "formula": "2 CuFeS2 + 4 O2 = Cu2S + 2 FeO + 3 SO2",
+      "extentKmolh": 330.707,
+      "inputExtentKmolh": 330.707,
+      "heatMJh": 371633.98,
+      "extentSource": "coupled"
+    },
+    {
+      "formula": "2 Cu2S + 3 O2 = 2 Cu2O + 2 SO2",
+      "extentKmolh": 3.8497,
+      "inputExtentKmolh": 14.4755,
+      "heatMJh": 2986.8,
+      "extentSource": "coupled"
+    },
+    {
+      "formula": "2 FeS2 + 5 O2 = 2 FeO + 4 SO2",
+      "extentKmolh": 6.4893,
+      "inputExtentKmolh": 6.4893,
+      "heatMJh": 8963.21,
+      "extentSource": "coupled"
+    },
+    {
+      "formula": "3 FeS + 5 O2 = Fe3O4 + 3 SO2",
+      "extentKmolh": 69.9478,
+      "inputExtentKmolh": 102.9982,
+      "heatMJh": 119180.46,
+      "extentSource": "coupled"
+    },
+    {
+      "formula": "CaCO3 = CaO + CO2",
+      "extentKmolh": 30.6165,
+      "inputExtentKmolh": 30.6165,
+      "heatMJh": -5455.22,
+      "extentSource": "coupled"
+    },
+    {
+      "formula": "MgCO3 = MgO + CO2",
+      "extentKmolh": 23.7152,
+      "inputExtentKmolh": 23.7152,
+      "heatMJh": -2392.8,
+      "extentSource": "coupled"
+    },
+    {
+      "formula": "C + O2 = CO2",
+      "extentKmolh": 107.7281,
+      "inputExtentKmolh": 133.6276,
+      "heatMJh": 42392.63,
+      "extentSource": "coupled"
+    }
+  ]
+}

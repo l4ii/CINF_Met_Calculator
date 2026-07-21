@@ -73,7 +73,7 @@ export function resolveBatchWorkflowHint(params: {
         !phaseCompletedMaterials[material.id]
     )
     if (needsPhase) {
-      return { anchor: 'phaseCalculate', message: '确认物相行后点击「计算」，结果将自动回填配料总表' }
+      return { anchor: 'phaseCalculate', message: '投入物相：确认物相行后点击「计算」，结果将自动回填配料总表' }
     }
     return null
   }
@@ -85,19 +85,19 @@ export function resolveBatchWorkflowHint(params: {
         (material.weight > 0 && phaseCompletedMaterials[material.id])
     )
     if (batchTableView === 'phase' && allPhaseReady) {
-      return { anchor: 'parametersTab', message: '物相已就绪，可切换到「关键参数输入」或直接进入产出计算' }
+      return { anchor: 'parametersTab', message: '关键参数输入：物相已就绪，可填写关键参数后进入产出计算' }
     }
     return null
   }
 
   const unnamed = rawMaterials.find((material) => !material.name.trim())
   if (unnamed) {
-    return { anchor: 'rawName', materialId: unnamed.id, message: '请在此选择原料' }
+    return { anchor: 'rawName', materialId: unnamed.id, message: '原料：请在此选择原料' }
   }
 
   const unweighed = rawMaterials.find((material) => material.name.trim() && !(material.weight > 0))
   if (unweighed) {
-    return { anchor: 'rawWeight', materialId: unweighed.id, message: '请填写投料量 (t/h)' }
+    return { anchor: 'rawWeight', materialId: unweighed.id, message: '原料投料量：请填写投料量 (t/h)' }
   }
 
   const needsPhase = rawMaterials.find(
@@ -112,10 +112,10 @@ export function resolveBatchWorkflowHint(params: {
       anchor: 'rawPhaseOC',
       materialId: needsPhase.id,
       element: 'O(氧)',
-      message: '双击 O 或 C 列进入物相计算',
+      message: '投入物相：双击 O 或 C 列进入物相计算',
     }
   }
 
-  return { anchor: 'parametersTab', message: '可进入「关键参数输入」，点击下一步进入产出计算' }
+  return { anchor: 'parametersTab', message: '关键参数输入：确认参数后点击下一步进入产出计算' }
 
 }

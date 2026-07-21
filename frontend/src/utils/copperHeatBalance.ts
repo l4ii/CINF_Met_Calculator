@@ -115,6 +115,10 @@ export interface HeatFlowRow {
   percent: number
   /** 参考汇总行，不参与总表合计加总 */
   isSubtotal?: boolean
+  /** 热收支误差行 */
+  isBalanceError?: boolean
+  /** 误差超出允许带（仍计入合计，UI 用红底标识） */
+  isBalanceErrorOutOfBand?: boolean
 }
 
 export interface HeatComponentRow {
@@ -138,8 +142,12 @@ export interface CopperHeatBalanceResult {
   inputPhysicalHeatMJh: number
   outputPhysicalHeatMJh: number
   chemicalHeatMJh: number
+  /** 反应路径放热合计（解释用，总表化学热采用 Hess） */
   chemicalHeatReleaseMJh: number
+  /** 反应路径吸热合计（解释用） */
   chemicalHeatAbsorptionMJh: number
+  /** 反应路径净化学热 = 放热 − 吸热 */
+  chemicalHeatPathMJh: number
   coolingWaterHeatMJh: number
   coolingWaterRows: HeatComponentRow[]
   coolingWaterInletTemperatureC: number
@@ -155,8 +163,14 @@ export interface CopperHeatBalanceResult {
   fuelEffectiveHeatMJh: number
   balanceAfterFuelMJh: number
   fuelHeatMJt: number
-  balanceClosureMode: 'coolingWater' | 'fuel' | 'none'
+  balanceClosureMode: 'coolingWater' | 'fuel' | 'error' | 'none'
   balanceClosureHeatMJh: number
+  /** 热平衡允许误差（占较大侧合计的 %） */
+  heatBalanceTolerancePct?: number
+  /** 热收支残差计入热支出的误差项（MJ/h）；正值=收入>支出，负值=收入<支出（配平） */
+  balanceErrorMJh?: number
+  /** 残差是否在允许误差带内 */
+  balanceErrorWithinTolerance?: boolean
   supplementalFuelWeightTh?: number
   /** 热平衡闭合得出的总煤量（t/h） */
   derivedFuelWeightTh?: number
@@ -212,6 +226,10 @@ type ReactionDefinition = {
   products: Record<string, number>
   limitingPhase: string
   note?: string
+  /** 由产物物相量反推反应进度（kmol/h） */
+  productAnchoredExtent?: (outputPool: Record<string, number>) => number | null
+  /** 固定反应热（kJ/mol），覆盖生成焓差计算 */
+  fixedReactionHeatKJmol?: number
 }
 
 const PRODUCT_KEY_TO_TEMPERATURE: Record<OxySideBlowProductKey, HeatBalanceProductTemperatureKey> = {
@@ -233,6 +251,7 @@ const REACTION_DEFINITIONS: ReactionDefinition[] = [
     reactants: { Cu2S: 2, O2: 3 },
     products: { Cu2O: 2, SO2: 2 },
     limitingPhase: 'Cu2S',
+    productAnchoredExtent: (pool) => phasePoolKmolh(pool, 'Cu2O') / 2,
   },
   {
     reactants: { FeS2: 2, O2: 5 },
@@ -240,34 +259,47 @@ const REACTION_DEFINITIONS: ReactionDefinition[] = [
     limitingPhase: 'FeS2',
   },
   {
+    reactants: { FeS: 3, O2: 5 },
+    products: { Fe3O4: 1, SO2: 3 },
+    limitingPhase: 'FeS',
+    note: 'Fe3O4 生成（由产物 Fe3O4 锚定；先于 FeS→FeO 扣减 FeS）。',
+    productAnchoredExtent: (pool) => phasePoolKmolh(pool, 'Fe3O4'),
+  },
+  {
     reactants: { FeS: 2, O2: 3 },
     products: { FeO: 2, SO2: 2 },
     limitingPhase: 'FeS',
+    note: '剩余 FeS 氧化为 FeO（顺序扣池后）。',
   },
   {
     reactants: { CaCO3: 1 },
     products: { CaO: 1, CO2: 1 },
     limitingPhase: 'CaCO3',
+    productAnchoredExtent: (pool) => phasePoolKmolh(pool, 'CaSiO3') + phasePoolKmolh(pool, 'CaO'),
   },
   {
     reactants: { MgCO3: 1 },
     products: { MgO: 1, CO2: 1 },
     limitingPhase: 'MgCO3',
+    productAnchoredExtent: (pool) => phasePoolKmolh(pool, 'MgSiO3') + phasePoolKmolh(pool, 'MgO'),
   },
   {
     reactants: { PbS: 2, O2: 3 },
     products: { PbO: 2, SO2: 2 },
     limitingPhase: 'PbS',
+    productAnchoredExtent: (pool) => phasePoolKmolh(pool, 'PbO') / 2,
   },
   {
     reactants: { ZnS: 2, O2: 3 },
     products: { ZnO: 2, SO2: 2 },
     limitingPhase: 'ZnS',
+    productAnchoredExtent: (pool) => phasePoolKmolh(pool, 'ZnO') / 2,
   },
   {
     reactants: { NiS: 2, O2: 3 },
     products: { NiO: 2, SO2: 2 },
     limitingPhase: 'NiS',
+    productAnchoredExtent: (pool) => phasePoolKmolh(pool, 'NiO') / 2,
   },
   {
     reactants: { Se: 1, O2: 1 },
@@ -279,24 +311,48 @@ const REACTION_DEFINITIONS: ReactionDefinition[] = [
     products: { Bi2O3: 2, SO2: 6 },
     limitingPhase: 'Bi2S3',
     note: '按投入表 Bi2S3 修正用户草稿中的 Bi2O3。',
+    productAnchoredExtent: (pool) => phasePoolKmolh(pool, 'Bi2O3') / 2,
   },
   {
     reactants: { Sb2S3: 2, O2: 9 },
     products: { Sb2O3: 2, SO2: 6 },
     limitingPhase: 'Sb2S3',
     note: '投入表含 Sb2S3，产出烟尘/熔渣含 Sb2O3，因此补列锑的氧化反应。',
+    productAnchoredExtent: (pool) => phasePoolKmolh(pool, 'Sb2O3') / 2,
   },
   {
     reactants: { As2S3: 2, O2: 9 },
     products: { As2O3: 2, SO2: 6 },
     limitingPhase: 'As2S3',
     note: '按投入表 As2S3 修正用户草稿中的 As2O3。',
+    productAnchoredExtent: (pool) => phasePoolKmolh(pool, 'As2O3') / 2,
   },
   {
     reactants: { C: 1, O2: 1 },
     products: { CO2: 1 },
     limitingPhase: 'C',
     note: 'C 仅取燃料煤中的碳。',
+  },
+  {
+    reactants: { FeO: 2, SiO2: 1 },
+    products: { Fe2SiO4: 1 },
+    limitingPhase: 'SiO2',
+    note: '铁橄榄石造渣（由产物 Fe2SiO4 反推进度）。',
+    productAnchoredExtent: (pool) => phasePoolKmolh(pool, 'Fe2SiO4'),
+  },
+  {
+    reactants: { CaO: 1, SiO2: 1 },
+    products: { CaSiO3: 1 },
+    limitingPhase: 'SiO2',
+    note: '硅酸钙造渣（由产物 CaSiO3 反推进度）。',
+    productAnchoredExtent: (pool) => phasePoolKmolh(pool, 'CaSiO3'),
+  },
+  {
+    reactants: { MgO: 1, SiO2: 1 },
+    products: { MgSiO3: 1 },
+    limitingPhase: 'SiO2',
+    note: '硅酸镁造渣（由产物 MgSiO3 反推进度）。',
+    productAnchoredExtent: (pool) => phasePoolKmolh(pool, 'MgSiO3'),
   },
 ]
 
@@ -327,6 +383,7 @@ function phaseMolarMass(phase: string) {
   if (phase === 'CaSiO3') return compoundMolarMass({ Ca: 1, Si: 1, O: 3 })
   if (phase === 'MgSiO3') return compoundMolarMass({ Mg: 1, Si: 1, O: 3 })
   if (phase === 'H2O') return compoundMolarMass({ H: 2, O: 1 })
+  if (phase === 'H2O(l)') return compoundMolarMass({ H: 2, O: 1 })
   if (phase === '3Al2O3•2SiO2') return compoundMolarMass({ Al: 6, Si: 2, O: 13 })
   if (phase === 'SnO') return compoundMolarMass({ Sn: 1, O: 1 })
   if (phase === 'NiO') return compoundMolarMass({ Ni: 1, O: 1 })
@@ -430,6 +487,7 @@ function standardFormationHeat(phase: string) {
 }
 
 function reactionHeatKJmol(definition: ReactionDefinition) {
+  if (definition.fixedReactionHeatKJmol != null) return definition.fixedReactionHeatKJmol
   const productHeat = Object.entries(definition.products).reduce(
     (sum, [phase, coefficient]) => sum + coefficient * standardFormationHeat(phase),
     0
@@ -577,7 +635,7 @@ function residualKmolhForPhase(phase: string, residualPool: Record<string, numbe
   )
 }
 
-function reactionExtentFromPool(
+function poolLimitedExtentKmolh(
   definition: ReactionDefinition,
   phasePool: Record<string, number>,
   residualPool: Record<string, number>
@@ -591,6 +649,23 @@ function reactionExtentFromPool(
   return Number.isFinite(minExtent) ? minExtent : 0
 }
 
+function reactionExtentFromPool(
+  definition: ReactionDefinition,
+  phasePool: Record<string, number>,
+  residualPool: Record<string, number>,
+  outputPool: Record<string, number>,
+  coupleToOutput: boolean
+) {
+  const poolExtent = poolLimitedExtentKmolh(definition, phasePool, residualPool)
+  if (!coupleToOutput) return poolExtent
+  const anchored =
+    definition.productAnchoredExtent != null ? definition.productAnchoredExtent(outputPool) : null
+  if (anchored != null && Number.isFinite(anchored)) {
+    return Math.max(0, Math.min(anchored, poolExtent))
+  }
+  return poolExtent
+}
+
 function calculateReactionTerms(
   inputMaterials: CopperHeatBalanceSourceMaterial[],
   products: OxyConstraintSolverResult | null,
@@ -598,18 +673,24 @@ function calculateReactionTerms(
 ) {
   const phasePool = collectInputPhaseKmolhs(inputMaterials)
   const residualPool = coupleToOutput && products?.acceptable ? collectOutputPhaseKmolhs(products) : {}
+  const outputPool = coupleToOutput && products?.acceptable ? collectOutputPhaseKmolhs(products) : {}
   const extentSource: 'input' | 'coupled' = Object.keys(residualPool).length > 0 ? 'coupled' : 'input'
+  const initialPhasePool = { ...phasePool }
 
   return REACTION_DEFINITIONS.map((definition): HeatReactionTerm => {
     const molarMass = phaseMolarMass(definition.limitingPhase)
     const coefficient = definition.reactants[definition.limitingPhase] ?? 1
-    const inputExtentKmolh = coefficient > 0 ? phasePoolKmolh(phasePool, definition.limitingPhase) / coefficient : 0
+    const inputExtentKmolh =
+      coefficient > 0 ? phasePoolKmolh(initialPhasePool, definition.limitingPhase) / coefficient : 0
     const isFuelCarbonReaction =
       definition.limitingPhase === 'C' &&
       definition.reactants.C === 1 &&
       definition.products.CO2 === 1
     const reactionResidualPool = isFuelCarbonReaction ? {} : residualPool
-    const extentKmolh = Math.max(0, reactionExtentFromPool(definition, phasePool, reactionResidualPool))
+    const extentKmolh = Math.max(
+      0,
+      reactionExtentFromPool(definition, phasePool, reactionResidualPool, outputPool, coupleToOutput)
+    )
     for (const [phase, reactantCoefficient] of Object.entries(definition.reactants)) {
       addPhaseKmolh(phasePool, phase, -reactantCoefficient * extentKmolh)
     }
@@ -686,6 +767,7 @@ function sumHeat(rows: Array<{ heatMJh: number }>) {
   return rows.reduce((sum, row) => sum + (Number.isFinite(row.heatMJh) ? row.heatMJh : 0), 0)
 }
 
+/** Σ(n·ΔHf298)，与 MetCal 表14 同口径；行内 enthalpy25KJmol 已区分含水液态与烟气气态 H₂O */
 function streamFormationEnthalpyMJh(rows: HeatComponentRow[]) {
   return rows.reduce((sum, row) => {
     const molarMass = phaseMolarMass(row.component)
@@ -695,42 +777,23 @@ function streamFormationEnthalpyMJh(rows: HeatComponentRow[]) {
   }, 0)
 }
 
-function closeReactionTermsByHessLaw(
-  reactionTerms: HeatReactionTerm[],
+/** MetCal 表13 化学热：Σ入 ΔH298 − Σ出 ΔH298 */
+export function calculateHessChemicalHeatMJh(
   inputRows: HeatComponentRow[],
-  outputRows: HeatComponentRow[],
-  useOutputClosure: boolean
-) {
-  if (!useOutputClosure) return reactionTerms
-  const hessChemicalHeatMJh =
-    streamFormationEnthalpyMJh(inputRows) - streamFormationEnthalpyMJh(outputRows)
-  const correctionHeatMJh = hessChemicalHeatMJh - sumHeat(reactionTerms)
-  if (Math.abs(correctionHeatMJh) <= 1e-6) return reactionTerms
-  return [
-    ...reactionTerms,
-    {
-      formula: 'Σ进料物相 = Σ产物物相',
-      reactants: {},
-      products: {},
-      limitingPhase: 'Hess闭合',
-      sourceMassTh: 0,
-      molarMassKgKmol: 0,
-      limitingCoefficient: 1,
-      extentKmolh: 1,
-      extentSource: 'coupled',
-      inputExtentKmolh: 1,
-      reactionHeatKJmol: -correctionHeatMJh,
-      heatMJh: correctionHeatMJh,
-      note: '按进出物流 ΔH298 总差闭合；逐反应项仅用于解释。',
-    },
-  ]
+  outputRows: HeatComponentRow[]
+): number {
+  return streamFormationEnthalpyMJh(inputRows) - streamFormationEnthalpyMJh(outputRows)
 }
 
 function percentRows(rows: Omit<HeatFlowRow, 'percent'>[], denominator: number): HeatFlowRow[] {
-  return rows.map((row) => ({
-    ...row,
-    percent: denominator > 0 ? (Math.max(0, row.heatMJh) / denominator) * 100 : 0,
-  }))
+  return rows.map((row) => {
+    const signed =
+      row.isBalanceError || row.material === '误差' ? row.heatMJh : Math.max(0, row.heatMJh)
+    return {
+      ...row,
+      percent: denominator > 0 ? (signed / denominator) * 100 : 0,
+    }
+  })
 }
 
 function heatFlowSectionName(row: HeatComponentRow) {
@@ -797,6 +860,102 @@ export function estimateFuelWeightFromHeatDeficit(params: {
   return deficit / totalMJt
 }
 
+export function refreshHeatBalanceSummaryRows(
+  result: CopperHeatBalanceResult,
+  inputPhysicalRows: HeatComponentRow[]
+): CopperHeatBalanceResult {
+  const next = structuredClone(result)
+  const chemicalIncomeMJh = Math.max(0, next.chemicalHeatMJh)
+  const chemicalExpenditureMJh = Math.max(0, -next.chemicalHeatMJh)
+  const incomeBaseRows: Omit<HeatFlowRow, 'percent'>[] = [
+    ...aggregateBySection(inputPhysicalRows).map((row) => ({
+      type: 'physical' as const,
+      material: row.material,
+      temperature: row.temperature,
+      heatMJh: row.heatMJh,
+    })),
+    {
+      type: 'chemical',
+      material: '化学反应热',
+      temperature: 25,
+      heatMJh: chemicalIncomeMJh,
+    },
+  ]
+  const expenditureBaseRows: Omit<HeatFlowRow, 'percent'>[] = [
+    ...aggregateBySection(next.outputPhysicalRows).map((row) => ({
+      type: 'physical' as const,
+      material: row.material,
+      temperature: row.temperature,
+      heatMJh: row.heatMJh,
+    })),
+    {
+      type: 'physical',
+      material: '产物物理热合计',
+      temperature: null,
+      heatMJh: next.outputPhysicalHeatMJh,
+      isSubtotal: true,
+    },
+    ...(chemicalExpenditureMJh > 1e-9
+      ? [
+          {
+            type: 'chemical' as const,
+            material: '化学反应热（净吸热）',
+            temperature: 25,
+            heatMJh: chemicalExpenditureMJh,
+          },
+        ]
+      : []),
+    {
+      type: 'exchange',
+      material: '冷却水',
+      temperature: next.coolingWaterOutletTemperatureC,
+      heatMJh: next.coolingWaterHeatMJh,
+    },
+    {
+      type: 'loss',
+      material: '自然散热',
+      temperature: null,
+      heatMJh: next.otherHeatMJh,
+    },
+    ...(Math.abs(next.balanceErrorMJh ?? 0) > 1e-9
+      ? [
+          {
+            type: 'loss' as const,
+            material: '误差',
+            temperature: null,
+            heatMJh: next.balanceErrorMJh ?? 0,
+            isBalanceError: true,
+            isBalanceErrorOutOfBand: !next.balanceErrorWithinTolerance,
+          },
+        ]
+      : []),
+  ]
+  const incomeTotal = incomeBaseRows.reduce((sum, row) => sum + Math.max(0, row.heatMJh), 0)
+  const expenditureWithoutError = expenditureBaseRows
+    .filter((row) => !row.isSubtotal && !row.isBalanceError)
+    .reduce((sum, row) => sum + Math.max(0, row.heatMJh), 0)
+  // 误差 = 收入 − 无误差支出；负值表示收入不足，计入支出侧配平合计
+  const errorForTotal = incomeTotal - expenditureWithoutError
+  const errorRow = expenditureBaseRows.find((row) => row.isBalanceError)
+  if (errorRow) {
+    errorRow.heatMJh = errorForTotal
+  } else if (Math.abs(errorForTotal) > 1e-9) {
+    expenditureBaseRows.push({
+      type: 'loss',
+      material: '误差',
+      temperature: null,
+      heatMJh: errorForTotal,
+      isBalanceError: true,
+      isBalanceErrorOutOfBand: !next.balanceErrorWithinTolerance,
+    })
+  }
+  const expenditureTotal = expenditureWithoutError + errorForTotal
+  next.balanceErrorMJh = errorForTotal
+  next.heatIncomeRows = percentRows(incomeBaseRows, incomeTotal)
+  next.heatExpenditureRows = percentRows(expenditureBaseRows, expenditureTotal)
+  return next
+}
+
 export function calculateCopperHeatBalanceDetailed(input: CopperHeatBalanceInput): CopperHeatBalanceResult {
   const balanceMaterials = input.excludeFuelFromInput
     ? input.inputMaterials.filter((material) => material.kind !== 'fuel')
@@ -806,18 +965,11 @@ export function calculateCopperHeatBalanceDetailed(input: CopperHeatBalanceInput
   )
   const productOutputPhysicalRows = outputProductRows(input.products, input.temperatures)
   const coupleReactionsToOutput = Boolean(input.products?.acceptable)
-  const reactionPathTerms = calculateReactionTerms(balanceMaterials, input.products, coupleReactionsToOutput)
-  const equations = closeReactionTermsByHessLaw(
-    reactionPathTerms,
-    processInputPhysicalRows,
-    productOutputPhysicalRows,
-    coupleReactionsToOutput
-  )
+  const equations = calculateReactionTerms(balanceMaterials, input.products, coupleReactionsToOutput)
   const chemicalAbsorptionRows = calculateReactionAbsorptionRows(equations)
 
   const inputPhysicalHeatMJh = sumHeat(processInputPhysicalRows)
   const outputPhysicalHeatMJh = sumHeat(productOutputPhysicalRows)
-  // 放热/吸热按反应路径分项合计；净化学热 = 放热 − 吸热（含 Hess 闭合行）
   const chemicalHeatReleaseMJh = equations.reduce(
     (sum, row) => sum + (Number.isFinite(row.heatMJh) && row.heatMJh > 0 ? row.heatMJh : 0),
     0
@@ -826,7 +978,10 @@ export function calculateCopperHeatBalanceDetailed(input: CopperHeatBalanceInput
     (sum, row) => sum + (Number.isFinite(row.heatMJh) && row.heatMJh < 0 ? -row.heatMJh : 0),
     0
   )
-  const chemicalHeatMJh = chemicalHeatReleaseMJh - chemicalHeatAbsorptionMJh
+  const chemicalHeatPathMJh = chemicalHeatReleaseMJh - chemicalHeatAbsorptionMJh
+  const chemicalHeatMJh = coupleReactionsToOutput
+    ? calculateHessChemicalHeatMJh(processInputPhysicalRows, productOutputPhysicalRows)
+    : chemicalHeatPathMJh
   const heatLossMJh = Math.max(0, Number.isFinite(input.heatLossMJh) ? input.heatLossMJh : 0)
   const otherHeatMJh = Math.max(0, Number.isFinite(input.otherHeatMJh) ? input.otherHeatMJh : 500)
   const coolingWaterMassTh = Math.max(0, input.coolingWaterMassTh)
@@ -873,7 +1028,6 @@ export function calculateCopperHeatBalanceDetailed(input: CopperHeatBalanceInput
       type: 'chemical',
       material: '化学反应热',
       temperature: 25,
-      // 展示净热 = 放热合计 − 吸热合计；明细见「热收入-化学反应热」页
       heatMJh: chemicalIncomeMJh,
     },
   ]
@@ -944,6 +1098,7 @@ export function calculateCopperHeatBalanceDetailed(input: CopperHeatBalanceInput
     chemicalHeatMJh,
     chemicalHeatReleaseMJh,
     chemicalHeatAbsorptionMJh,
+    chemicalHeatPathMJh,
     coolingWaterHeatMJh,
     coolingWaterRows,
     coolingWaterInletTemperatureC: input.coolingWaterInletTemperatureC,

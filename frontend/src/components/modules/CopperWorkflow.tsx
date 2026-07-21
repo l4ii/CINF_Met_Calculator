@@ -232,6 +232,7 @@ import {
   calculateCoolingWaterHeatMJh,
   calculateCoolingWaterPhysicalRows,
   calculateCopperHeatBalanceDetailed,
+  calculateHessChemicalHeatMJh,
   estimateFuelEffectiveHeatMJt,
   estimateFuelWeightFromHeatDeficit,
   sourceMaterialFromColumn,
@@ -240,6 +241,7 @@ import {
   type HeatComponentRow,
   type HeatFlowRow,
 } from '../../utils/copperHeatBalance.ts'
+import { applyPostFuelClosureToHeatBalance } from '../../utils/copperHeatBalanceClosure.ts'
 import {
   fuelSearchResidualFromDeficitMJh,
   fuelSearchSensitivityAbnormal,
@@ -371,10 +373,20 @@ type ProductConstraintCellValues = Partial<Record<DistributionRuleType, number |
 type ProductConstraintRow = {
   element: ConstraintElementKey
 }
+type CustomConstraintUiKindDraft = '' | 'input' | 'output' | 'gas'
 type CustomConstraintDraft = {
   expr: string
   target: string
+  /** 仅界面分类，不参与求解；可空 */
+  uiKind: CustomConstraintUiKindDraft
 }
+const CUSTOM_CONSTRAINT_UI_KIND_OPTIONS: { value: CustomConstraintUiKindDraft; label: string }[] = [
+  { value: '', label: '—' },
+  { value: 'input', label: '投入' },
+  { value: 'output', label: '产出' },
+  { value: 'gas', label: '气体' },
+]
+const EMPTY_CUSTOM_CONSTRAINT_DRAFT: CustomConstraintDraft = { expr: '', target: '', uiKind: '' }
 type ProductConstraintValueDrafts = Record<string, string>
 
 const FIXED_MATTE_COPPER_GRADE = DEFAULT_COPPER_PROCESS_PARAMETERS.matteCopperGrade
@@ -387,6 +399,7 @@ const HEAT_BALANCE_CLOSURE_MAX_FUEL_RATIO = 0.35
 const HEAT_BALANCE_CLOSURE_MAX_FUEL_MULTIPLE = 4
 const HEAT_BALANCE_LINKED_PRODUCT_SOLVER_PASSES = 3
 const DEFAULT_OTHER_HEAT_MJH_TEXT = '500'
+const DEFAULT_HEAT_BALANCE_TOLERANCE_PCT_TEXT = '2'
 const OXY_DISTRIBUTION_RULE_TYPES: DistributionRuleType[] = ['W%', 'D%']
 const OXY_DISTRIBUTION_RULE_LABELS: Record<DistributionRuleType, string> = { 'W%': 'W', 'D%': 'D' }
 const OXY_DISTRIBUTION_RULE_OPTIONS: (DistributionRuleType | '')[] = ['', ...OXY_DISTRIBUTION_RULE_TYPES]
@@ -629,13 +642,18 @@ function removeCustomConstraintEntry(
 function addCustomConstraintEntry(
   config: OxySideBlowConstraintConfig,
   expr: string,
-  target: string
+  target: string,
+  uiKind?: CustomConstraintUiKindDraft
 ): OxySideBlowConstraintConfig {
   const trimmedExpr = expr.trim()
   const parsedTarget = normalizeConstraintRuleValue(target)
   if (!trimmedExpr || typeof parsedTarget !== 'number') return cloneOxyConstraintConfig(config)
   const next = cloneOxyConstraintConfig(config)
-  next.customConstraints.push({ expr: trimmedExpr, target: parsedTarget })
+  const entry: CustomConstraintEntry = { expr: trimmedExpr, target: parsedTarget }
+  if (uiKind === 'input' || uiKind === 'output' || uiKind === 'gas') {
+    entry.uiKind = uiKind
+  }
+  next.customConstraints.push(entry)
   return next
 }
 
@@ -691,6 +709,7 @@ interface CopperCaseRecord {
   furnaceWallTemperature?: string
   heatLossMJh: string
   otherHeatMJh: string
+  heatBalanceTolerancePct?: string
   heatBalanceFilledBack?: boolean
   annualHours: string
   equipmentIntensity: string
@@ -1489,6 +1508,7 @@ type HeatBalanceNormalizeOptions = {
   coolingWaterInletTemperatureC?: number
   coolingWaterOutletTemperatureC?: number
   coolingWaterMassTh?: number
+  heatBalanceTolerancePct?: number
 }
 
 function isCoolingWaterHeatFlowRow(row: HeatFlowRow) {
@@ -1511,19 +1531,30 @@ function isNaturalHeatFlowRow(row: HeatFlowRow) {
   return row.material === '自然散热' || row.material === '其他热支出'
 }
 
+function isBalanceErrorHeatFlowRow(row: HeatFlowRow) {
+  return row.isBalanceError === true || row.material === '误差' || row.material === '误差（超出允许带）'
+}
+
 function sumHeatFlow(rows: HeatFlowRow[]) {
   return rows.reduce((sum, row) => {
     if (row.isSubtotal) return sum
-    return sum + Math.max(0, Number.isFinite(row.heatMJh) ? row.heatMJh : 0)
+    const heat = Number.isFinite(row.heatMJh) ? row.heatMJh : 0
+    if (isBalanceErrorHeatFlowRow(row)) return sum + heat
+    return sum + Math.max(0, heat)
   }, 0)
 }
 
 function normalizeHeatFlowPercents(rows: HeatFlowRow[]): HeatFlowRow[] {
   const total = sumHeatFlow(rows)
-  return rows.map((row) => ({
-    ...row,
-    percent: total > 0 ? (Math.max(0, row.heatMJh) / total) * 100 : 0,
-  }))
+  const denom = Math.abs(total)
+  return rows.map((row) => {
+    const heat = Number.isFinite(row.heatMJh) ? row.heatMJh : 0
+    const signed = isBalanceErrorHeatFlowRow(row) ? heat : Math.max(0, heat)
+    return {
+      ...row,
+      percent: denom > 0 ? (signed / denom) * 100 : 0,
+    }
+  })
 }
 
 function buildNormalizedCoolingWaterRows(
@@ -1603,7 +1634,6 @@ function normalizeHeatBalanceResult(
         note: row.note,
       }))
   }
-  cloned.chemicalHeatMJh = cloned.equations.reduce((sum, row) => sum + row.heatMJh, 0)
   cloned.chemicalHeatReleaseMJh = cloned.equations.reduce(
     (sum, row) => sum + (row.heatMJh > 0 ? row.heatMJh : 0),
     0
@@ -1612,6 +1642,11 @@ function normalizeHeatBalanceResult(
     (sum, row) => sum + (row.heatMJh < 0 ? -row.heatMJh : 0),
     0
   )
+  cloned.chemicalHeatPathMJh = cloned.chemicalHeatReleaseMJh - cloned.chemicalHeatAbsorptionMJh
+  cloned.chemicalHeatMJh =
+    cloned.outputPhysicalRows.length > 0
+      ? calculateHessChemicalHeatMJh(cloned.inputPhysicalRows, cloned.outputPhysicalRows)
+      : cloned.chemicalHeatPathMJh
   if (!Array.isArray(cloned.coolingWaterRows)) cloned.coolingWaterRows = []
   if (typeof cloned.coolingWaterInletTemperatureC !== 'number') {
     cloned.coolingWaterInletTemperatureC = options.coolingWaterInletTemperatureC ?? 30
@@ -1635,6 +1670,9 @@ function normalizeHeatBalanceResult(
   cloned.heatLossMJh = 0
   cloned.furnaceWallTemperatureC = undefined
   cloned.otherHeatMJh = Math.max(0, cloned.otherHeatMJh ?? 500)
+  if (typeof cloned.heatBalanceTolerancePct !== 'number') {
+    cloned.heatBalanceTolerancePct = options.heatBalanceTolerancePct ?? 2
+  }
   if (typeof cloned.fuelCombustionHeatMJh !== 'number') cloned.fuelCombustionHeatMJh = 0
   cloned.fuelCombustionHeatMJh = 0
   const chemicalIncomeMJh = Math.max(0, cloned.chemicalHeatMJh)
@@ -1652,8 +1690,10 @@ function normalizeHeatBalanceResult(
   cloned.supplementalFuelHeatMJh = 0
   cloned.fuelEffectiveHeatMJh = 0
   cloned.balanceAfterFuelMJh = -normalizedHeatDeficitMJh
-  cloned.balanceClosureMode = 'none'
-  cloned.balanceClosureHeatMJh = 0
+  if (cloned.balanceClosureMode == null || cloned.balanceClosureMode === 'none') {
+    cloned.balanceClosureMode = 'none'
+    cloned.balanceClosureHeatMJh = 0
+  }
   cloned.supplementalFuelWeightTh = Math.max(0, cloned.supplementalFuelWeightTh ?? 0)
   cloned.closureIterations = Math.max(0, cloned.closureIterations ?? 0)
   const closureResidualMJh = cloned.closureResidualMJh
@@ -1685,6 +1725,7 @@ function normalizeHeatBalanceResult(
       !isCoolingWaterHeatFlowRow(row) &&
       !isFurnaceHeatFlowRow(row) &&
       !isNaturalHeatFlowRow(row) &&
+      !isBalanceErrorHeatFlowRow(row) &&
       !row.isSubtotal &&
       row.material !== '产物物理热合计' &&
       row.material !== '化学反应吸热' &&
@@ -1723,6 +1764,28 @@ function normalizeHeatBalanceResult(
     heatMJh: cloned.otherHeatMJh,
     percent: 0,
   })
+  const incomeTotalForError = cloned.heatIncomeRows.reduce(
+    (sum, row) => sum + Math.max(0, Number.isFinite(row.heatMJh) ? row.heatMJh : 0),
+    0
+  )
+  const expenditureWithoutError = cloned.heatExpenditureRows
+    .filter((row) => !row.isSubtotal && !row.isBalanceError && row.material !== '误差')
+    .reduce((sum, row) => sum + Math.max(0, Number.isFinite(row.heatMJh) ? row.heatMJh : 0), 0)
+  const errorForTotal = incomeTotalForError - expenditureWithoutError
+  if (Math.abs(errorForTotal) > 1e-9) {
+    cloned.balanceErrorMJh = errorForTotal
+    cloned.heatExpenditureRows.push({
+      type: 'loss',
+      material: '误差',
+      temperature: null,
+      heatMJh: errorForTotal,
+      isBalanceError: true,
+      isBalanceErrorOutOfBand: !(cloned.balanceErrorWithinTolerance ?? false),
+      percent: 0,
+    })
+  } else {
+    cloned.balanceErrorMJh = 0
+  }
   cloned.heatExpenditureRows = normalizeHeatFlowPercents(cloned.heatExpenditureRows)
   return cloned
 }
@@ -2179,6 +2242,7 @@ function normalizeImportedCopperCase(payload: unknown, methodName: string): Copp
     furnaceWallTemperature: undefined,
     heatLossMJh: '0',
     otherHeatMJh: candidate.otherHeatMJh ? normalizeOtherHeatMJhText(candidate.otherHeatMJh) : DEFAULT_OTHER_HEAT_MJH_TEXT,
+    heatBalanceTolerancePct: normalizeHeatBalanceTolerancePctText(candidate.heatBalanceTolerancePct),
     heatBalanceFilledBack: candidate.heatBalanceFilledBack ?? false,
     annualHours: candidate.annualHours ?? '7200',
     equipmentIntensity: candidate.equipmentIntensity ?? '32',
@@ -2219,6 +2283,13 @@ function isValidNumberText(value: string) {
 function normalizeOtherHeatMJhText(value: string | undefined | null) {
   const trimmed = (value ?? '').trim()
   return trimmed && isValidNumberText(trimmed) ? trimmed : DEFAULT_OTHER_HEAT_MJH_TEXT
+}
+
+function normalizeHeatBalanceTolerancePctText(value: string | undefined | null) {
+  const trimmed = (value ?? '').trim()
+  if (!trimmed || !isValidNumberText(trimmed)) return DEFAULT_HEAT_BALANCE_TOLERANCE_PCT_TEXT
+  const parsed = parseFloat(trimmed.replace(',', '.'))
+  return Number.isFinite(parsed) && parsed >= 0 ? String(parsed) : DEFAULT_HEAT_BALANCE_TOLERANCE_PCT_TEXT
 }
 
 function isEditableNumberDraft(value: string) {
@@ -2630,8 +2701,9 @@ const PRODUCT_CALCULATION_STEPS = ['列举方程', '求解产物', '生成并回
 const HEAT_BALANCE_CALCULATION_STEPS = ['读取热焓与温度', '计算基础煤热差', '反算补充煤', '联动产物/供氧', '复算热量平衡', '生成回填结果'] as const
 type WorkflowStepStatus = 'completed' | 'active' | 'pending'
 
-function workflowStepMessage(step: number, message: string) {
-  return `步骤 ${step}/7：${message}`
+function workflowStepMessage(step: number, message: string, sectionLabel?: string) {
+  const label = sectionLabel ?? WORKFLOW_FLOW_STEPS[step - 1] ?? '流程'
+  return `${label}：${message}`
 }
 
 function WorkflowFlowStrip({
@@ -2676,7 +2748,7 @@ function WorkflowFlowStrip({
             : ''
           const stepContent = (
             <>
-              {index + 1}. {step.label}
+              {step.label}
               {statusSuffix}
             </>
           )
@@ -2785,7 +2857,7 @@ function IteratingOverlay({
                           : 'bg-gray-100 text-gray-500'
                     }`}
                   >
-                    {index + 1}. {label}
+                    {label}
                   </span>
                 ))}
               </div>
@@ -2848,6 +2920,17 @@ function workflowToastCloseClass(darkMode: boolean, tone: WorkflowMessageTone) {
   return darkMode ? 'text-amber-100 hover:bg-gray-800' : 'text-amber-900 hover:bg-amber-50'
 }
 
+function parseWorkflowMessage(message: string): { title: string; body: string } {
+  const colonIndex = message.indexOf('：')
+  if (colonIndex > 0 && colonIndex < 24) {
+    return {
+      title: message.slice(0, colonIndex),
+      body: message.slice(colonIndex + 1),
+    }
+  }
+  return { title: '', body: message }
+}
+
 function WorkflowMessageToast({
   darkMode,
   message,
@@ -2860,11 +2943,13 @@ function WorkflowMessageToast({
   onClose: () => void
 }) {
   if (!message) return null
+  const parsed = parseWorkflowMessage(message)
+  const title = parsed.title || workflowToastTitle(tone)
   return (
     <div className="fixed right-4 top-4 z-[60] w-[min(28rem,calc(100vw-2rem))]" role="alert" aria-live="assertive">
       <div className={`rounded-lg border px-4 py-3 pr-10 text-sm shadow-xl ${workflowToastStyles(darkMode, tone)}`}>
-        <div className="font-semibold">{workflowToastTitle(tone)}</div>
-        <div className="mt-1 leading-relaxed">{message}</div>
+        <div className="font-semibold">{title}</div>
+        <div className="mt-1 leading-relaxed">{parsed.body}</div>
         <button
           type="button"
           aria-label="关闭提示"
@@ -3022,7 +3107,7 @@ export default function CopperWorkflow({
     const detail = productCalculationDetailRef.current
     setWorkflowMessage(
       workflowStepMessage(
-        5,
+        6,
         detail
           ? `正在中断产出计算（${detail}），当前结果不会回填。`
           : '正在中断产出计算，当前结果不会回填。'
@@ -3107,6 +3192,7 @@ export default function CopperWorkflow({
   const [coolingWaterOutletTemperature, setCoolingWaterOutletTemperature] = useState('34')
   const [coolingWaterMassTh, setCoolingWaterMassTh] = useState('3000')
   const [otherHeatMJh, setOtherHeatMJh] = useState(DEFAULT_OTHER_HEAT_MJH_TEXT)
+  const [heatBalanceTolerancePct, setHeatBalanceTolerancePct] = useState(DEFAULT_HEAT_BALANCE_TOLERANCE_PCT_TEXT)
   const [heatBalanced, setHeatBalanced] = useState(false)
   const [heatBalanceFilledBack, setHeatBalanceFilledBack] = useState(false)
   const [isHeatBalanceCalculating, setIsHeatBalanceCalculating] = useState(false)
@@ -3138,10 +3224,9 @@ export default function CopperWorkflow({
   const [openProductConstraintRuleMenu, setOpenProductConstraintRuleMenu] = useState<string | null>(null)
   const [customConstraintTargetDrafts, setCustomConstraintTargetDrafts] = useState<Record<number, string>>({})
   const [customConstraintExprDrafts, setCustomConstraintExprDrafts] = useState<Record<number, string>>({})
-  const [newCustomConstraintDraft, setNewCustomConstraintDraft] = useState<CustomConstraintDraft>({
-    expr: '',
-    target: '',
-  })
+  const [newCustomConstraintDraft, setNewCustomConstraintDraft] = useState<CustomConstraintDraft>(
+    EMPTY_CUSTOM_CONSTRAINT_DRAFT
+  )
   const [manualAirWeightValid, setManualAirWeightValid] = useState(false)
   const [isPhaseCalculating, setIsPhaseCalculating] = useState(false)
   const [batchTableHighlight, setBatchTableHighlight] = useState(false)
@@ -3408,6 +3493,7 @@ export default function CopperWorkflow({
     coolingWaterOutletTemperature,
     coolingWaterMassTh,
     otherHeatMJh,
+    heatBalanceTolerancePct,
   ].every(isValidNumberText)
   const workflowFlowSteps = useMemo(() => {
     const stepFlags = [
@@ -3440,14 +3526,14 @@ export default function CopperWorkflow({
   ])
   const batchTabGuide = useMemo(() => {
     if (!isCopperProcessSheet || !activeCaseId) return null
-    if (!allRawMaterialsSelected) return '↓ 先选择原料'
-    if (!allRawMaterialsWeighed) return '↓ 填写投料量'
-    if (!allPhaseMaterialsCompleted) return '↓ 双击 O / C 进入物相计算'
-    if (batchTableView === 'phase') return '↓ 可查看物料物相表，也可进入关键参数'
-    if (batchTableView === 'parameters') return '↓ 点击下一步进入产出计算'
-    if (batchTableView === 'productPhase' || batchTableView === 'productElement') return '↓ 设置产出约束后计算产出'
-    if (batchTableView === 'balance') return '↓ 产出回填后计算热平衡'
-    return '↓ 进入关键参数输入'
+    if (!allRawMaterialsSelected) return '原料：请先选择原料'
+    if (!allRawMaterialsWeighed) return '原料投料量：请填写投料量 (t/h)'
+    if (!allPhaseMaterialsCompleted) return '投入物相：双击 O / C 列进入物相计算'
+    if (batchTableView === 'phase') return '投入物相：物相已就绪，可进入关键参数输入或产出计算'
+    if (batchTableView === 'parameters') return '关键参数输入：确认参数后点击下一步进入产出计算'
+    if (batchTableView === 'productPhase' || batchTableView === 'productElement') return '产出计算：设置产出约束后点击「计算产出结果」'
+    if (batchTableView === 'balance') return '热平衡：产出回填后设置温度并计算热平衡'
+    return '关键参数输入：请填写并确认关键参数'
   }, [
     activeCaseId,
     isCopperProcessSheet,
@@ -4426,10 +4512,14 @@ export default function CopperWorkflow({
         row('投入物理热 (MJ/h)', formatTableNumber(result.inputPhysicalHeatMJh)),
         row('化学反应放热合计 (MJ/h)', formatTableNumber(result.chemicalHeatReleaseMJh)),
         row('化学反应吸热合计 (MJ/h)', formatTableNumber(result.chemicalHeatAbsorptionMJh)),
-        row('化学反应净热 (MJ/h)', formatTableNumber(result.chemicalHeatMJh)),
+        row('反应路径净热 (MJ/h)', formatTableNumber(result.chemicalHeatPathMJh ?? result.chemicalHeatReleaseMJh - result.chemicalHeatAbsorptionMJh)),
+        row('化学反应净热 Hess (MJ/h)', formatTableNumber(result.chemicalHeatMJh)),
         row('产物物理热 (MJ/h)', formatTableNumber(result.outputPhysicalHeatMJh)),
         row('冷却水带走热 (MJ/h)', formatTableNumber(result.coolingWaterHeatMJh)),
         row('自然散热 (MJ/h)', formatTableNumber(result.otherHeatMJh)),
+        row('允许误差 (%)', formatTableNumber(result.heatBalanceTolerancePct ?? 2)),
+        row('误差项 (MJ/h)', formatTableNumber(result.balanceErrorMJh ?? 0)),
+        row('误差在允许带内', result.balanceErrorWithinTolerance ? '是' : '否'),
         row('基础煤工况热差 (MJ/h)', formatTableNumber(result.heatDeficitWithoutFuelMJh ?? result.heatDeficitMJh)),
         row('总煤量 (t/h)', formatTableNumber(result.derivedFuelWeightTh ?? 0)),
         row('补充煤量 (t/h)', formatTableNumber(result.supplementalFuelWeightTh ?? 0)),
@@ -4637,7 +4727,7 @@ export default function CopperWorkflow({
         return next
       })
       if (!options.preserveProductCalculation) setWorkflowMessage(
-        workflowStepMessage(5, '煤量已修改，产出计算结果已清除；请重新计算产出与热平衡。'),
+        workflowStepMessage(6, '煤量已修改，产出计算结果已清除；请重新计算产出与热平衡。'),
         'warning'
       )
     }
@@ -5387,7 +5477,7 @@ export default function CopperWorkflow({
 
   const openHeatBalanceWorkspace = (source: 'tab' | 'placeholder' = 'placeholder') => {
     if (!productFilledBack) {
-      setWorkflowMessage(workflowStepMessage(5, '请先完成产出计算并回填到配料总表；可先在热平衡专区检查温度与热收入参数。'), 'flow')
+      setWorkflowMessage(workflowStepMessage(7, '请先完成产出计算并回填到配料总表；可先在热平衡专区检查温度与热收入参数。'), 'flow')
     } else if (source === 'tab' || source === 'placeholder') {
       setWorkflowMessage(workflowStepMessage(7, '已打开热平衡计算专区，请确认温度设置后点击“热平衡计算”。'), 'flow')
     }
@@ -5424,7 +5514,7 @@ export default function CopperWorkflow({
         setShowProductCalculationAssist(true)
         scrollToProductCalculation()
         if (furnaceFeed.totalWeight > 0) {
-          setWorkflowMessage(workflowStepMessage(5, '已打开产出计算专区，请点击“计算产出结果”。'), 'flow')
+          setWorkflowMessage(workflowStepMessage(6, '已打开产出计算专区，请点击“计算产出结果”。'), 'flow')
         }
       }
     }
@@ -5664,7 +5754,7 @@ export default function CopperWorkflow({
     }
     setWorkflowMessage(
       workflowStepMessage(
-        5,
+        6,
         `产出计算完成：产物总量 ${format(bridged.totalProductMass)} t/h（${formatCopperProductMassSummary(bridged, activeProcessStageId)}）。${convergeNote}${actionNote}`
       ),
       canFillBack ? (solverResult.acceptanceLevel === 'strict' ? 'success' : 'warning') : 'error'
@@ -5674,7 +5764,7 @@ export default function CopperWorkflow({
         const detail = productCalculationDetailRef.current
         setWorkflowMessage(
           workflowStepMessage(
-            5,
+            6,
             detail
               ? `产出计算已中断，未回填任何产出结果。中断位置：${detail}`
               : '产出计算已中断，未回填任何产出结果。'
@@ -5830,7 +5920,7 @@ export default function CopperWorkflow({
     setProductConstraintValueDrafts({})
     setCustomConstraintTargetDrafts({})
     setCustomConstraintExprDrafts({})
-    setNewCustomConstraintDraft({ expr: '', target: '' })
+    setNewCustomConstraintDraft(EMPTY_CUSTOM_CONSTRAINT_DRAFT)
     setWorkflowMessage(workflowStepMessage(5, '已恢复产出计算约束默认值。'), 'flow')
   }
 
@@ -5848,11 +5938,16 @@ export default function CopperWorkflow({
       return
     }
     updateProductConstraintConfig((config) =>
-      addCustomConstraintEntry(config, newCustomConstraintDraft.expr, newCustomConstraintDraft.target)
+      addCustomConstraintEntry(
+        config,
+        newCustomConstraintDraft.expr,
+        newCustomConstraintDraft.target,
+        newCustomConstraintDraft.uiKind
+      )
     )
     setCustomConstraintTargetDrafts({})
     setCustomConstraintExprDrafts({})
-    setNewCustomConstraintDraft({ expr: '', target: '' })
+    setNewCustomConstraintDraft(EMPTY_CUSTOM_CONSTRAINT_DRAFT)
   }
 
   const renderProductConstraintEditor = (compact = false) => {
@@ -6082,7 +6177,7 @@ export default function CopperWorkflow({
               <thead className={head}>
                 <tr>
                   <th className="w-[52px] px-2 py-1.5 text-center font-semibold">序号</th>
-                  <th className="w-[56px] px-2 py-1.5 text-center font-semibold">类型</th>
+                  <th className="w-[96px] px-2 py-1.5 text-center font-semibold">类型</th>
                   <th className="px-2 py-1.5 text-center font-semibold">约束</th>
                   <th className="w-[132px] px-2 py-1.5 text-center font-semibold">数值</th>
                   <th className="w-[42px] px-0 py-1.5 text-center font-semibold">操作</th>
@@ -6182,6 +6277,52 @@ export default function CopperWorkflow({
                 )}
                 <tr>
                   <td className={`${tableCell} text-center ${muted}`}>—</td>
+                  <td className={tableCell}>
+                    <div className="relative" data-product-constraint-rule-menu>
+                      <button
+                        type="button"
+                        className={`${ruleMenuTrigger} ${!newCustomConstraintDraft.uiKind ? ignoredControl : ''}`}
+                        aria-haspopup="listbox"
+                        aria-expanded={openProductConstraintRuleMenu === 'new-custom-constraint-ui-kind'}
+                        aria-label="约束类型（仅展示，不参与校验）"
+                        title="仅界面分类，可不选；不参与求解与校验"
+                        onClick={() =>
+                          setOpenProductConstraintRuleMenu((current) =>
+                            current === 'new-custom-constraint-ui-kind' ? null : 'new-custom-constraint-ui-kind'
+                          )
+                        }
+                      >
+                        <span className="block w-full text-center text-xs">
+                          {CUSTOM_CONSTRAINT_UI_KIND_OPTIONS.find(
+                            (option) => option.value === newCustomConstraintDraft.uiKind
+                          )?.label ?? '—'}
+                        </span>
+                        <span
+                          aria-hidden="true"
+                          className={`pointer-events-none absolute right-2 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rotate-45 border-b border-r ${selectArrow}`}
+                        />
+                      </button>
+                      {openProductConstraintRuleMenu === 'new-custom-constraint-ui-kind' && (
+                        <div className={ruleMenuPanel} role="listbox">
+                          {CUSTOM_CONSTRAINT_UI_KIND_OPTIONS.map((option) => (
+                            <button
+                              key={option.value || 'empty'}
+                              type="button"
+                              className={ruleMenuOption}
+                              role="option"
+                              aria-selected={newCustomConstraintDraft.uiKind === option.value}
+                              onClick={() => {
+                                setNewCustomConstraintDraft((prev) => ({ ...prev, uiKind: option.value }))
+                                setOpenProductConstraintRuleMenu(null)
+                              }}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </td>
                   <td className={tableCell}>
                     <input
                       className={textInput}
@@ -6286,7 +6427,7 @@ export default function CopperWorkflow({
   const runHeatBalanceCalculation = async () => {
     if (isHeatBalanceCalculating) return
     if (!productFilledBack) {
-      setWorkflowMessage(workflowStepMessage(6, '请先完成产出计算并回填到配料总表。'), 'flow')
+      setWorkflowMessage(workflowStepMessage(7, '请先完成产出计算并回填到配料总表。'), 'flow')
       scrollToProductCalculation()
       return
     }
@@ -6429,7 +6570,17 @@ export default function CopperWorkflow({
         processFuelWeightTh: number,
         options?: { closureBlockedReason?: string; fuelEffectiveHeatMJt?: number }
       ) => {
-        const result = cloneHeatBalanceResult(candidate.heatBalance)
+        const closedHeatBalance = applyPostFuelClosureToHeatBalance(candidate.heatBalance, {
+          coolingWaterMassTh: coolingWaterMassThValue,
+          coolingWaterInletTemperatureC,
+          tolerancePct: toNumber(heatBalanceTolerancePct, 2),
+        })
+        const result = normalizeHeatBalanceResult(closedHeatBalance, {
+          coolingWaterInletTemperatureC,
+          coolingWaterOutletTemperatureC: closedHeatBalance.coolingWaterOutletTemperatureC,
+          coolingWaterMassTh: coolingWaterMassThValue,
+          heatBalanceTolerancePct: toNumber(heatBalanceTolerancePct, 2),
+        }) ?? closedHeatBalance
         result.derivedFuelWeightTh = candidate.derivedFuelWeightTh
         result.supplementalFuelWeightTh = Math.max(0, candidate.derivedFuelWeightTh - processFuelWeightTh)
         result.heatDeficitWithoutFuelMJh = heatDeficitBeforeSupplementalFuelMJh
@@ -6439,7 +6590,10 @@ export default function CopperWorkflow({
         result.finalProductResult = cloneOxySolverResult(candidate.solverResult)
         result.closureIterations = candidate.iterations
         result.closureResidualMJh = result.balanceAfterFuelMJh
-        result.closureStatus = closureStatus
+        result.closureStatus =
+          Math.abs(result.balanceAfterFuelMJh) <= heatBalanceClosureToleranceMJh(result)
+            ? 'balanced'
+            : closureStatus
         result.closureBlockedReason = options?.closureBlockedReason
         result.fuelEffectiveHeatMJt = options?.fuelEffectiveHeatMJt
         return result
@@ -6482,10 +6636,17 @@ export default function CopperWorkflow({
         shouldCancel
       )
       throwIfCalculationCancelled(cancelToken)
-      const baseCoalSolverResult = normalizeOxySolverAcceptance(baseCoalIterative.result)
-      const baseCoalFuelColumn = baseCoalIterative.fuelColumn
-      const baseCoalSolventColumns = baseCoalIterative.solventColumns
-      const baseCoalAirColumns = baseCoalIterative.airColumns
+      let baseCoalSolverResult = normalizeOxySolverAcceptance(baseCoalIterative.result)
+      let baseCoalFuelColumn = baseCoalIterative.fuelColumn
+      let baseCoalSolventColumns = baseCoalIterative.solventColumns
+      let baseCoalAirColumns = baseCoalIterative.airColumns
+      if (!baseCoalSolverResult.acceptable && oxySolverResult?.acceptable) {
+        await advanceHeatBalanceStep(0, '基础煤联动求解未收敛，回退使用第6步已验收的产出结果计算热平衡。')
+        baseCoalSolverResult = normalizeOxySolverAcceptance(cloneOxySolverResult(oxySolverResult))
+        baseCoalFuelColumn = fuelColumn
+        baseCoalSolventColumns = solventColumns
+        baseCoalAirColumns = airColumns
+      }
       const processFuelHeatBalance = calculateHeatBalanceForInputs(
         baseCoalFuelColumn,
         baseCoalSolventColumns,
@@ -6533,20 +6694,19 @@ export default function CopperWorkflow({
       let closureIterations = 0
       let closureBlockedReason: string | undefined
 
-      const evaluateSupplementalFuel = async (
-        trialSupplementalFuelWeightTh: number,
+      const evaluateTotalFuel = async (
+        trialTotalFuelWeightTh: number,
         iteration: number,
         step2Detail: string
       ): Promise<ClosureCandidate> => {
         throwIfCalculationCancelled(cancelToken)
-        const trialSupplementalFuelWeight = Math.max(0, trialSupplementalFuelWeightTh)
-        const trialFuelWeight = processFuelWeightTh + trialSupplementalFuelWeight
+        const trialFuelWeight = Math.max(0, trialTotalFuelWeightTh)
         await advanceHeatBalanceStep(2, step2Detail)
         const trialFuelColumn = fuelColumnWithDryWeight(fuelColumn, trialFuelWeight)
         const trialConfig = productConstraintConfigWithoutFuelRatio(solvedConstraintConfig)
         await advanceHeatBalanceStep(
           3,
-          `第 ${iteration} 轮：联动求解供氧和产物（补充煤 ${format(trialSupplementalFuelWeight)} t/h，总煤 ${format(trialFuelWeight)} t/h）。`
+          `第 ${iteration} 轮：联动求解供氧和产物（总煤 ${format(trialFuelWeight)} t/h）。`
         )
         const iterative = await withLinkedProductTimeout(
           solveOxySideBlowProductsIterative({
@@ -6562,27 +6722,36 @@ export default function CopperWorkflow({
             shouldCancel,
             maxPasses: HEAT_BALANCE_LINKED_PRODUCT_SOLVER_PASSES,
           }),
-          `第 ${iteration} 轮联动产物/供氧超时（补充煤 ${format(trialSupplementalFuelWeight)} t/h），请检查约束或降低求解难度。`,
+          `第 ${iteration} 轮联动产物/供氧超时（总煤 ${format(trialFuelWeight)} t/h），请检查约束或降低求解难度。`,
           shouldCancel
         )
         throwIfCalculationCancelled(cancelToken)
-        const solverResult = normalizeOxySolverAcceptance(iterative.result)
+        let solverResult = normalizeOxySolverAcceptance(iterative.result)
+        let resolvedFuelColumn = iterative.fuelColumn
+        let resolvedSolventColumns = iterative.solventColumns
+        let resolvedAirColumns = iterative.airColumns
+        if (!solverResult.acceptable && oxySolverResult?.acceptable && Math.abs(trialFuelWeight - processFuelWeightTh) < 1e-6) {
+          solverResult = normalizeOxySolverAcceptance(cloneOxySolverResult(oxySolverResult))
+          resolvedFuelColumn = fuelColumn
+          resolvedSolventColumns = solventColumns
+          resolvedAirColumns = airColumns
+        }
         const candidateHeatBalance = calculateHeatBalanceForInputs(
-          iterative.fuelColumn,
-          iterative.solventColumns,
-          iterative.airColumns,
+          resolvedFuelColumn,
+          resolvedSolventColumns,
+          resolvedAirColumns,
           solverResult
         )
         await advanceHeatBalanceStep(
           4,
-          `第 ${iteration} 轮：闭合前热差 ${format(heatBalanceFuelSearchResidualMJh(candidateHeatBalance))} MJ/h。`
+          `第 ${iteration} 轮：煤量闭合前热差 ${format(heatBalanceFuelSearchResidualMJh(candidateHeatBalance))} MJ/h。`
         )
         return {
           heatBalance: candidateHeatBalance,
           solverResult,
-          fuelColumn: cloneFuelMaterial(iterative.fuelColumn),
-          solventColumns: iterative.solventColumns.map(cloneMaterialColumn),
-          airColumns: iterative.airColumns.map(cloneMaterialColumn),
+          fuelColumn: cloneFuelMaterial(resolvedFuelColumn),
+          solventColumns: resolvedSolventColumns.map(cloneMaterialColumn),
+          airColumns: resolvedAirColumns.map(cloneMaterialColumn),
           derivedFuelWeightTh: trialFuelWeight,
           iterations: iteration,
           usable: solverResult.acceptable,
@@ -6617,23 +6786,32 @@ export default function CopperWorkflow({
         })
       }
 
-      if (heatDeficitBeforeSupplementalFuelMJh > baseTolerance) {
+      const initialResidualMJh = heatBalanceFuelSearchResidualMJh(processFuelHeatBalance)
+      const maxTotalFuelWeight = heatBalanceClosureFuelLimit({
+        estimatedFuelWeightTh: processFuelWeightTh + estimateFuelWeightFromHeatDeficit({
+          heatDeficitMJh: Math.max(0, processFuelHeatBalance.heatDeficitMJh),
+          fuel: fuelColumn,
+          fuelPhases: fuelPhaseContents,
+          feedTemperatureC: heatTemperatures.feed,
+        }),
+        ratioReferenceFuelWeightTh,
+        concentrateMassTh: concentrateMass,
+      })
+
+      if (Math.abs(initialResidualMJh) > baseTolerance) {
         const estimatedSupplementalFuelWeight = estimateFuelWeightFromHeatDeficit({
-          heatDeficitMJh: heatDeficitBeforeSupplementalFuelMJh,
+          heatDeficitMJh: Math.max(0, processFuelHeatBalance.heatDeficitMJh),
           fuel: fuelColumn,
           fuelPhases: fuelPhaseContents,
           feedTemperatureC: heatTemperatures.feed,
         })
-        const maxSupplementalFuelWeight = heatBalanceClosureSupplementalFuelLimit({
-          processFuelWeightTh,
-          estimatedSupplementalFuelWeightTh: estimatedSupplementalFuelWeight,
-          ratioReferenceFuelWeightTh,
-          concentrateMassTh: concentrateMass,
-        })
-        let trialSupplementalFuelWeight = Math.min(
-          maxSupplementalFuelWeight,
-          Math.max(0.01, estimatedSupplementalFuelWeight)
-        )
+        let trialTotalFuelWeight =
+          initialResidualMJh < -baseTolerance
+            ? Math.min(
+                maxTotalFuelWeight,
+                Math.max(0.01, processFuelWeightTh + estimatedSupplementalFuelWeight)
+              )
+            : Math.max(0, processFuelWeightTh * 0.85)
         let previousCandidate: ClosureCandidate | null = null
         let blockedReason: string | null = null
         closureStatus = 'blocked'
@@ -6641,13 +6819,12 @@ export default function CopperWorkflow({
         while (closureIterations < HEAT_BALANCE_CLOSURE_MAX_ITERATIONS) {
           throwIfCalculationCancelled(cancelToken)
           closureIterations += 1
-          const trialTotalFuelWeight = processFuelWeightTh + trialSupplementalFuelWeight
-          const candidate = await evaluateSupplementalFuel(
-            trialSupplementalFuelWeight,
+          const candidate = await evaluateTotalFuel(
+            trialTotalFuelWeight,
             closureIterations,
             closureIterations === 1
-              ? `反算补充煤量 ${format(trialSupplementalFuelWeight)} t/h（总煤 ${format(trialTotalFuelWeight)} t/h）。`
-              : `第 ${closureIterations} 轮：按实测热差修正补充煤量 ${format(trialSupplementalFuelWeight)} t/h（总煤 ${format(trialTotalFuelWeight)} t/h）。`
+              ? `按热差试算总煤量 ${format(trialTotalFuelWeight)} t/h。`
+              : `第 ${closureIterations} 轮：按实测热差修正总煤量 ${format(trialTotalFuelWeight)} t/h。`
           )
           if (isBetterCandidate(candidate, bestCandidate)) bestCandidate = candidate
           syncIterationCandidateToUI(candidate)
@@ -6661,82 +6838,64 @@ export default function CopperWorkflow({
           }
 
           if (!candidate.usable) {
-            blockedReason = `补充煤 ${format(trialSupplementalFuelWeight)} t/h（总煤 ${format(trialTotalFuelWeight)} t/h）时产物约束未闭合；已保留最近可行结果。`
+            blockedReason = `总煤 ${format(trialTotalFuelWeight)} t/h 时产物约束未闭合；已保留最近可行结果。`
             closureStatus = 'blocked'
             break
           }
 
           if (previousCandidate?.usable) {
             const prevResidual = heatBalanceFuelSearchResidualMJh(previousCandidate.heatBalance)
-            const previousSupplementalFuelWeight = supplementalFuelWeightTh(
-              previousCandidate.derivedFuelWeightTh,
-              processFuelWeightTh
-            )
-            const currentSupplementalFuelWeight = supplementalFuelWeightTh(
-              candidate.derivedFuelWeightTh,
-              processFuelWeightTh
-            )
             if (
               fuelSearchSensitivityAbnormal({
                 previous: {
-                  fuelWeightTh: previousSupplementalFuelWeight,
+                  fuelWeightTh: previousCandidate.derivedFuelWeightTh,
                   residualMJh: prevResidual,
                 },
                 current: {
-                  fuelWeightTh: currentSupplementalFuelWeight,
+                  fuelWeightTh: candidate.derivedFuelWeightTh,
                   residualMJh: residual,
                 },
               })
             ) {
-              blockedReason = `加煤后热差未改善（补充煤 ${format(previousSupplementalFuelWeight)} → ${format(
-                currentSupplementalFuelWeight
-              )} t/h，热差 ${format(candidate.heatBalance.balanceAfterFuelMJh)} MJ/h）。加煤会联动增大二次风与排烟热，若每吨煤净热贡献不足则无法闭合；请检查冷却水量、烟气温度或产出约束。`
+              blockedReason = `调煤后热差未改善（总煤 ${format(previousCandidate.derivedFuelWeightTh)} → ${format(
+                candidate.derivedFuelWeightTh
+              )} t/h，热差 ${format(candidate.heatBalance.balanceAfterFuelMJh)} MJ/h）。请检查冷却水量、烟气温度或产出约束。`
               closureStatus = 'blocked'
               break
             }
           }
 
-          if (trialSupplementalFuelWeight >= maxSupplementalFuelWeight - 1e-9 && residual < -tolerance) {
-            blockedReason = `试算补充煤量已达到保护上限 ${format(maxSupplementalFuelWeight)} t/h（总煤 ${format(
-              processFuelWeightTh + maxSupplementalFuelWeight
-            )} t/h），仍未闭合热差。请检查供氧、煤 C%/物相 C、冷却水量或产出约束。`
+          if (trialTotalFuelWeight >= maxTotalFuelWeight - 1e-9 && residual < -tolerance) {
+            blockedReason = `试算总煤量已达到保护上限 ${format(maxTotalFuelWeight)} t/h，仍未闭合热差。请检查供氧、煤 C%/物相 C、冷却水量或产出约束。`
             closureStatus = 'blocked'
             break
           }
 
-          const currentSupplementalFuelWeight = supplementalFuelWeightTh(
-            candidate.derivedFuelWeightTh,
-            processFuelWeightTh
-          )
-          const nextSupplementalFuelWeight = proposeNextFuelWeightTh({
-            current: { fuelWeightTh: currentSupplementalFuelWeight, residualMJh: residual },
+          const nextTotalFuelWeight = proposeNextFuelWeightTh({
+            current: { fuelWeightTh: candidate.derivedFuelWeightTh, residualMJh: residual },
             previous: previousCandidate?.usable
               ? {
-                  fuelWeightTh: supplementalFuelWeightTh(
-                    previousCandidate.derivedFuelWeightTh,
-                    processFuelWeightTh
-                  ),
+                  fuelWeightTh: previousCandidate.derivedFuelWeightTh,
                   residualMJh: heatBalanceFuelSearchResidualMJh(previousCandidate.heatBalance),
                 }
               : null,
             minFuelWeightTh: 0,
-            maxFuelWeightTh: maxSupplementalFuelWeight,
+            maxFuelWeightTh: maxTotalFuelWeight,
             fuelEffectiveHeatMJt,
           })
 
-          if (Math.abs(nextSupplementalFuelWeight - trialSupplementalFuelWeight) < 1e-6) {
-            closureStatus =
-              Math.abs(residual) <= tolerance ? 'balanced' : 'max-iterations'
+          if (Math.abs(nextTotalFuelWeight - trialTotalFuelWeight) < 1e-6) {
+            closureStatus = Math.abs(residual) <= tolerance ? 'balanced' : 'max-iterations'
             break
           }
 
           previousCandidate = candidate
-          trialSupplementalFuelWeight = nextSupplementalFuelWeight
+          trialTotalFuelWeight = nextTotalFuelWeight
         }
 
         if (closureStatus === 'blocked') {
           closureBlockedReason = blockedReason ?? closureBlockedReason
-        } else if (heatDeficitBeforeSupplementalFuelMJh > baseTolerance) {
+        } else {
           const tolerance = heatBalanceClosureToleranceMJh(bestCandidate.heatBalance)
           if (Math.abs(heatBalanceFuelSearchResidualMJh(bestCandidate.heatBalance)) <= tolerance) {
             closureStatus = 'balanced'
@@ -6745,8 +6904,16 @@ export default function CopperWorkflow({
           }
         }
       } else {
-        await advanceHeatBalanceStep(2, '基础煤工况已接近平衡，无需补充煤。')
-        await advanceHeatBalanceStep(4, `最终热差 ${format(processFuelHeatBalance.balanceAfterFuelMJh)} MJ/h。`)
+        await advanceHeatBalanceStep(2, '基础煤工况已接近煤量闭合，转入冷却水/误差闭合。')
+        await advanceHeatBalanceStep(4, `煤量闭合前热差 ${format(processFuelHeatBalance.balanceAfterFuelMJh)} MJ/h。`)
+      }
+
+      if (!bestCandidate.usable) {
+        setWorkflowMessage(
+          workflowStepMessage(7, '热平衡计算失败：无可接受的产出结果用于热支出计算，请先完成产出计算并确保约束收敛。'),
+          'error'
+        )
+        return
       }
 
       throwIfCalculationCancelled(cancelToken)
@@ -6863,9 +7030,7 @@ export default function CopperWorkflow({
     options: { message?: string; tone?: WorkflowMessageTone } = {}
   ) => {
     const closureComplete =
-      heatBalance.closureStatus === 'balanced' ||
-      heatBalance.closureStatus === 'surplus' ||
-      heatBalance.closureStatus === 'not-needed'
+      heatBalance.closureStatus === 'balanced' || heatBalance.closureStatus === 'not-needed'
     setCalculatedHeatBalance(cloneHeatBalanceResult(heatBalance))
     if (heatBalance.finalFuelColumn) {
       const finalFuelColumn = cloneFuelMaterial(heatBalance.finalFuelColumn)
@@ -7182,7 +7347,7 @@ export default function CopperWorkflow({
     window.requestAnimationFrame(() => {
       productCalculationRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
-    setWorkflowMessage(workflowStepMessage(5, '请确认产出约束后点击「计算产出结果」。'), 'flow')
+    setWorkflowMessage(workflowStepMessage(6, '请确认产出约束后点击「计算产出结果」。'), 'flow')
   }, [commitProcessParameters, processParameterDrafts, setWorkflowMessage])
 
   const navigateToWorkflowStep = useCallback(
@@ -7286,6 +7451,7 @@ export default function CopperWorkflow({
     coolingWaterOutletTemperature,
     coolingWaterMassTh,
     otherHeatMJh,
+    heatBalanceTolerancePct,
     batchTableView,
     phaseRatioOverrides: { ...phaseRatioOverrides },
     manualPhaseRatioColumns: { ...manualPhaseRatioColumns },
@@ -7323,6 +7489,7 @@ export default function CopperWorkflow({
     fuelLhv,
     gasTemperature,
     heatBalanceFilledBack,
+    heatBalanceTolerancePct,
     heatBalanced,
     lossTemperature,
     manualAirWeightValid,
@@ -7459,6 +7626,7 @@ export default function CopperWorkflow({
     setCoolingWaterMassTh(state.coolingWaterMassTh ?? '3000')
     setHeatBalanceFilledBack(restoredHeatBalanceFilledBack)
     setOtherHeatMJh(normalizeOtherHeatMJhText(state.otherHeatMJh))
+    setHeatBalanceTolerancePct(normalizeHeatBalanceTolerancePctText(state.heatBalanceTolerancePct))
     setBatchTableView(normalizeBatchTableView(state.batchTableView, state.productFilledBack ?? state.productCalculated ?? false))
     setPhaseRatioOverrides(state.phaseRatioOverrides ?? {})
     setManualPhaseRatioColumns(state.manualPhaseRatioColumns ?? {})
@@ -7469,7 +7637,7 @@ export default function CopperWorkflow({
     setProductConstraintValueDrafts({})
     setCustomConstraintTargetDrafts({})
     setCustomConstraintExprDrafts({})
-    setNewCustomConstraintDraft({ expr: '', target: '' })
+    setNewCustomConstraintDraft(EMPTY_CUSTOM_CONSTRAINT_DRAFT)
     setCustomPhaseRows(state.customPhaseRows ?? {})
     setMaterialPhaseRows(nextMaterialPhaseRows)
     setInputPhaseDrafts({})
@@ -7624,6 +7792,7 @@ export default function CopperWorkflow({
       heatLossMJh: '0',
       heatBalanceFilledBack: currentStageState.heatBalanceFilledBack,
       otherHeatMJh: currentStageState.otherHeatMJh,
+      heatBalanceTolerancePct: currentStageState.heatBalanceTolerancePct,
       annualHours,
       equipmentIntensity,
       targetScaleWanTpa,
@@ -7718,6 +7887,7 @@ export default function CopperWorkflow({
       heatLossMJh: '0',
       heatBalanceFilledBack: false,
       otherHeatMJh: smeltingState.otherHeatMJh,
+      heatBalanceTolerancePct: smeltingState.heatBalanceTolerancePct,
       annualHours: '7200',
       equipmentIntensity: '32',
       targetScaleWanTpa: '10',
@@ -9316,21 +9486,23 @@ export default function CopperWorkflow({
             )}
           </div>
         ) : null}
-        <div className={`mt-4 border-t pt-4 ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
-          <h3 className={`mb-2 text-sm font-medium ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>混料关键参数</h3>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
-            <BlendMetric darkMode={darkMode} label="原料混料" value={`${format(rawBlend.totalWeight)} t/h`} />
-            <BlendMetric darkMode={darkMode} label="混料总量" value={`${format(furnaceFeed.totalWeight)} t/h`} />
-            {mixIndicators.map((item) => (
-              <BlendMetric
-                key={item.label}
-                darkMode={darkMode}
-                label={item.label}
-                value={item.value == null ? '-' : format(item.value)}
-              />
-            ))}
+        {(batchTableView === 'element' || batchTableView === 'phase') && (
+          <div className={`mt-4 border-t pt-4 ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
+            <h3 className={`mb-2 text-sm font-medium ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>混料关键参数</h3>
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+              <BlendMetric darkMode={darkMode} label="原料混料" value={`${format(rawBlend.totalWeight)} t/h`} />
+              <BlendMetric darkMode={darkMode} label="混料总量" value={`${format(furnaceFeed.totalWeight)} t/h`} />
+              {mixIndicators.map((item) => (
+                <BlendMetric
+                  key={item.label}
+                  darkMode={darkMode}
+                  label={item.label}
+                  value={item.value == null ? '-' : format(item.value)}
+                />
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {nextStageAfterCurrent && isCopperProcessSheet && processPageComplete && (
@@ -9988,7 +10160,7 @@ export default function CopperWorkflow({
         </div>
         <div className={`${hintText(darkMode)} mt-3 space-y-1 text-sm leading-relaxed`}>
           <p>打开方式：在配料总表切换到“热平衡计算”，或完成产出回填后展开本区。</p>
-          <p>计算说明：先按煤/精矿比确定工艺基础煤，再只对补充煤量求解，并联动供氧、产物迭代至平衡。</p>
+          <p>计算说明：先按煤/精矿比确定工艺基础煤，再双向调节总煤量；冷却水在 30–38 ℃ 内吸收盈余热；残差在「允许误差」带内时以热支出「误差」项闭合。</p>
         </div>
         {showHeatBalanceAssist && (
           <div className="mt-4 space-y-4">
@@ -10003,7 +10175,7 @@ export default function CopperWorkflow({
                 </div>
               </HeatParameterGroup>
               <HeatParameterGroup darkMode={darkMode} title="热支出">
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
                   <LabeledInput darkMode={darkMode} label="冷却水入口温度 (℃)" value={coolingWaterInletTemperature} onChange={(value) => updateHeatField(setCoolingWaterInletTemperature, value)} />
                   <LabeledInput darkMode={darkMode} label="冷却水出口温度 (℃)" value={coolingWaterOutletTemperature} onChange={(value) => updateHeatField(setCoolingWaterOutletTemperature, value)} />
                   <LabeledInput darkMode={darkMode} label="冷却水质量 (t/h)" value={coolingWaterMassTh} onChange={(value) => updateHeatField(setCoolingWaterMassTh, value)} />
@@ -10012,6 +10184,14 @@ export default function CopperWorkflow({
                     label="自然散热 (MJ/h)"
                     value={normalizeOtherHeatMJhText(otherHeatMJh)}
                     onChange={(value) => updateHeatField(setOtherHeatMJh, normalizeOtherHeatMJhText(value))}
+                  />
+                  <LabeledInput
+                    darkMode={darkMode}
+                    label="允许误差 (%)"
+                    value={normalizeHeatBalanceTolerancePctText(heatBalanceTolerancePct)}
+                    onChange={(value) =>
+                      updateHeatField(setHeatBalanceTolerancePct, normalizeHeatBalanceTolerancePctText(value))
+                    }
                   />
                 </div>
               </HeatParameterGroup>

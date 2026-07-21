@@ -103,12 +103,12 @@ export function CopperProcessParametersPanel({
 
   return (
     <div className={`rounded-lg border ${border} ${compact ? 'p-3' : 'p-4'} space-y-4`}>
-      <h4 className={`text-sm font-semibold ${darkMode ? 'text-gray-100' : 'text-gray-800'}`}>关键参数输入</h4>
+      <h4 className={`text-base font-semibold ${darkMode ? 'text-gray-100' : 'text-gray-800'}`}>关键参数输入</h4>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {FIELD_DEFS.map((field) => (
           <div key={field.key}>
-            <label className={`mb-1 block text-xs font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+            <label className={`mb-1.5 block text-sm font-medium ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>
               {field.label}
             </label>
             <input

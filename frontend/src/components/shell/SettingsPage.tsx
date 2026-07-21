@@ -208,9 +208,19 @@ export default function SettingsPage({
     await (window as any).electronAPI.update.installUpdate()
   }
 
-  const cardCls = `rounded-xl border p-5 2xl:p-6 ${darkMode ? 'bg-gray-700/50 border-gray-600' : 'bg-white border-gray-200'}`
-  const sectionTitleCls = `text-sm font-semibold mb-4 flex items-center gap-2 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`
+  const cardCls = `rounded-lg border p-4 ${darkMode ? 'bg-gray-700/50 border-gray-600' : 'bg-white border-gray-200'}`
+  const sectionTitleCls = `text-sm font-semibold mb-2.5 flex items-center gap-2 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`
   const accentBorder = darkMode ? 'border-l-blue-500' : 'border-l-blue-600'
+  const fieldLabelCls = `text-xs font-medium mb-1.5 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`
+  const segTrackCls = `flex w-full gap-1 rounded-lg p-1 ${darkMode ? 'bg-gray-800/80' : 'bg-gray-100'}`
+  const segBtn = (active: boolean) =>
+    `flex-1 min-w-0 rounded-md px-2 py-2 text-sm font-medium text-center transition-colors ${
+      active
+        ? 'bg-blue-600 text-white shadow-sm'
+        : darkMode
+          ? 'text-gray-300 hover:bg-gray-700'
+          : 'text-gray-600 hover:bg-white'
+    }`
 
   const t = {
     pageTitle: language === 'en' ? 'Settings' : '设置',
@@ -225,16 +235,14 @@ export default function SettingsPage({
     appearance: language === 'en' ? 'Appearance' : '外观与偏好',
     displayMode: language === 'en' ? 'Theme' : '显示模式',
     light: language === 'en' ? 'Light' : '浅色',
-    lightHint: language === 'en' ? 'Day' : '日间',
     dark: language === 'en' ? 'Dark' : '暗色',
-    darkHint: language === 'en' ? 'Easier on eyes' : '护眼',
     uiLang: language === 'en' ? 'Language' : '界面语言',
     uiScale: language === 'en' ? 'Interface scale' : '界面缩放',
     uiScaleHint:
       language === 'en'
-        ? 'Adjust overall UI size. Use Ctrl+wheel, Ctrl+/-/0, or the dropdown below.'
-        : '调整整体界面显示比例。可用 Ctrl+滚轮、Ctrl+/-/0 快捷键，或下方下拉选择。',
-    uiScaleReset: language === 'en' ? 'Reset to 100%' : '重置为 100%',
+        ? 'Ctrl+wheel or Ctrl +/- / 0 also works.'
+        : '亦可用 Ctrl+滚轮或 Ctrl+/-/0。',
+    uiScaleReset: language === 'en' ? 'Reset 100%' : '重置 100%',
     feedbackSection: language === 'en' ? 'Feedback & updates' : '反馈与更新',
     feedbackTitle: language === 'en' ? 'Suggestions & feedback' : '建议与反馈',
     feedbackDesc:
@@ -255,9 +263,8 @@ export default function SettingsPage({
     browserNoUpdate: language === 'en' ? 'No auto-update in browser preview.' : '（浏览器环境下无自动更新）',
     appVerOnly: language === 'en' ? 'App version' : '应用版本',
     legal: language === 'en' ? 'Legal' : '法律与声明',
-    packageBuild: language === 'en' ? 'Installer packaging' : '安装包构建',
-    backendHint: language === 'en' ? 'Deploy metadata & updater hint' : '分发标记与更新提示',
-    aiHintTitle: language === 'en' ? 'Assistant backend' : '助手后端检测',
+    packageAndAssistant: language === 'en' ? 'Installer & assistant' : '安装包与智能助手',
+    packageMeta: language === 'en' ? 'Package metadata' : '安装包信息',
     localDeployLabel: language === 'en' ? 'Local assistant deployment' : '本地助手部署',
     electronVersionLabel: language === 'en' ? 'Electron version' : 'Electron 版本',
     yes: language === 'en' ? 'Yes' : '是',

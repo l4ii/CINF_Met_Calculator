@@ -188,11 +188,14 @@ function BalanceHalfTable({
   const tone = heatFlowTone(darkMode, side)
   const cellBorder = `border ${tone.border}`
   const displayRows = displayHeatFlowRows(rows, side)
-  const total = displayRows.reduce(
-    (sum, row) => (row.isSubtotal ? sum : sum + Math.max(0, row.heatMJh)),
-    0
-  )
+  const total = displayRows.reduce((sum, row) => {
+    if (row.isSubtotal) return sum
+    const isError = row.isBalanceError || row.material === '误差'
+    return sum + (isError ? row.heatMJh : Math.max(0, row.heatMJh))
+  }, 0)
   const subtotalRowClass = darkMode ? 'bg-gray-800/50' : 'bg-gray-100'
+  const errorRowClass = darkMode ? 'bg-red-900/45' : 'bg-red-100'
+  const errorOutOfBandRowClass = darkMode ? 'bg-red-800/60 font-semibold' : 'bg-red-200 font-semibold'
 
   return (
     <div className={`overflow-auto rounded-lg border ${tone.border}`}>
@@ -214,17 +217,26 @@ function BalanceHalfTable({
         </thead>
         <tbody>
           {displayRows.map((row, index) => {
-            const percent = total > 0 ? (Math.max(0, row.heatMJh) / total) * 100 : 0
+            const isError = row.isBalanceError || row.material === '误差'
+            const heatForPercent = isError ? row.heatMJh : Math.max(0, row.heatMJh)
+            const percent = total !== 0 ? (heatForPercent / Math.abs(total)) * 100 : 0
+            const rowClass = isError
+              ? row.isBalanceErrorOutOfBand
+                ? errorOutOfBandRowClass
+                : errorRowClass
+              : row.isSubtotal
+                ? subtotalRowClass
+                : undefined
             return (
             <tr
               key={`${title}-${row.material}-${index}`}
-              className={row.isSubtotal ? subtotalRowClass : undefined}
+              className={rowClass}
             >
               <td className={`${HEAT_TABLE_CELL} ${cellBorder}`}>{row.isSubtotal ? '小计' : index + 1}</td>
               <td className={`${HEAT_TABLE_CELL} ${cellBorder}`}>
                 {heatTypeLabel(row.type)}
               </td>
-              <td className={`${HEAT_TABLE_CELL} ${row.isSubtotal ? 'font-semibold' : ''} ${cellBorder}`}>
+              <td className={`${HEAT_TABLE_CELL} ${row.isSubtotal || isError ? 'font-semibold' : ''} ${cellBorder}`}>
                 {row.material}
               </td>
               <td className={`${HEAT_TABLE_CELL} font-mono ${cellBorder}`}>
@@ -633,40 +645,30 @@ function HeatEnthalpyTable({
   )
 }
 
-function isHessClosureRow(row: HeatReactionTerm) {
-  return row.limitingPhase === 'Hess闭合'
-}
-
 function reactionExtentHelpTitle(row: HeatReactionTerm) {
-  if (isHessClosureRow(row)) {
-    return '进出物流 298 K 生成焓总差与逐反应路径的会计闭合项，不是真实化学反应。'
-  }
   const parts = [
     row.note,
-    `投入基准相 kmol/h：${row.inputExtentKmolh.toFixed(4)}（入炉物料池）`,
-    `实际反应 kmol/h：${row.extentKmolh.toFixed(4)}（${row.extentSource === 'coupled' ? '已与产物耦合' : '仅按投入估算'}；路径进度为解释用）`,
+    `入炉量 kmol/h：${row.inputExtentKmolh.toFixed(4)}（入炉该基准相的量）`,
+    `实际反应 kmol/h：${row.extentKmolh.toFixed(4)}（入炉量扣产物残留，再经顺序消耗与产物锚定）`,
+    row.extentSource === 'coupled'
+      ? '已与产出耦合：产物中残留的相不再作为反应物；部分反应由产物量锚定（如 Fe3O4、Cu2O、造渣）。'
+      : '仅按入炉量估算（尚未耦合产出）',
   ].filter(Boolean)
   return parts.join('\n')
 }
 
 function reactionInputExtentHelpTitle(row: HeatReactionTerm) {
-  if (isHessClosureRow(row)) {
-    return '闭合行无真实反应进度'
-  }
   if (row.limitingPhase === 'C') {
-    return '燃料煤投入碳的摩尔流量；换算煤干量 = kmol/h × 12.011 / 1000 ÷ C%'
+    return '燃料煤入炉碳的摩尔流量；换算煤干量 = kmol/h × 12.011 / 1000 ÷ C%'
   }
-  return '按投入物料池计算的基准相摩尔流量（反应前）'
+  return '入炉物料中该基准相的摩尔流量'
 }
 
 function reactionActualExtentHelpTitle(row: HeatReactionTerm) {
-  if (isHessClosureRow(row)) {
-    return '闭合行无真实反应进度'
-  }
   if (row.limitingPhase === 'C') {
-    return 'C+O₂→CO₂ 路径解释进度，受前面硫化物氧化耗氧与产物耦合限制；不可直接当作煤干量'
+    return 'C+O₂→CO₂ 实际反应量，受前面反应耗氧与顺序扣池限制；不可直接当作煤干量'
   }
-  return '受反应物余量与产物耦合限制后的路径解释进度，非物料衡算反推的真实进度'
+  return '扣除产物残留并经顺序扣池后的实际反应量；产物锚定反应（如 Fe3O4、Cu2O）另受产物量上限约束'
 }
 
 function isFuelCarbonReaction(row: HeatReactionTerm) {
@@ -764,7 +766,8 @@ function ReactionTable({ darkMode, result }: { darkMode: boolean; result: Copper
   const rows = result.equations.filter((row) => Math.abs(row.heatMJh) > 1e-9)
   const releaseMJh = result.chemicalHeatReleaseMJh
   const absorptionMJh = result.chemicalHeatAbsorptionMJh
-  const netMJh = result.chemicalHeatMJh
+  const pathNetMJh = result.chemicalHeatPathMJh ?? releaseMJh - absorptionMJh
+  const hessNetMJh = result.chemicalHeatMJh
   const crosscheck = result.fuelCoalCrosscheck
   return (
     <div className="space-y-3">
@@ -780,11 +783,11 @@ function ReactionTable({ darkMode, result }: { darkMode: boolean; result: Copper
             <th className={`${HEAT_TABLE_HEAD} ${cellBorder}`}>序号</th>
             <th className={`px-3 py-2 text-left ${HEAT_TABLE_TEXT} ${cellBorder}`}>反应</th>
             <th className={`${HEAT_TABLE_HEAD} ${cellBorder}`}>基准相</th>
-            <th className={`${HEAT_TABLE_HEAD} ${cellBorder}`} title="入炉物料池中基准相摩尔流量（路径解释用）">
-              投入 kmol/h
+            <th className={`${HEAT_TABLE_HEAD} ${cellBorder}`} title="入炉物料中该基准相的摩尔流量">
+              入炉量 kmol/h
             </th>
-            <th className={`${HEAT_TABLE_HEAD} ${cellBorder}`} title="路径解释用反应进度，非物料衡算反推的真实进度">
-              路径反应 kmol/h
+            <th className={`${HEAT_TABLE_HEAD} ${cellBorder}`} title="扣除产物残留并经顺序扣池、产物锚定后的实际反应量">
+              实际反应 kmol/h
             </th>
             <th className={`${HEAT_TABLE_HEAD} ${cellBorder}`}>
               <EnthalpyHeaderWithUnit unit="kJ/mol" />
@@ -805,11 +808,7 @@ function ReactionTable({ darkMode, result }: { darkMode: boolean; result: Copper
                 <td className={`${HEAT_TABLE_CELL} ${cellBorder}`}>{index + 1}</td>
                 <td className={`px-3 py-1.5 text-left ${HEAT_TABLE_TEXT} ${cellBorder}`} title={reactionExtentHelpTitle(row)}>
                   <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
-                    {isHessClosureRow(row) ? (
-                      <span>进出焓差闭合（非反应）</span>
-                    ) : (
-                      <ReactionFormula value={row.formula} />
-                    )}
+                    <ReactionFormula value={row.formula} />
                     {isFuelCarbonReaction(row) && crosscheck ? (
                       <button
                         type="button"
@@ -823,21 +822,17 @@ function ReactionTable({ darkMode, result }: { darkMode: boolean; result: Copper
                   </div>
                 </td>
                 <td className={`${HEAT_TABLE_CELL} ${cellBorder}`}>
-                  {isHessClosureRow(row) ? '—' : <PhaseFormula value={row.limitingPhase} />}
+                  <PhaseFormula value={row.limitingPhase} />
                 </td>
                 <td className={`${HEAT_TABLE_CELL} font-mono ${cellBorder}`}>
-                  {isHessClosureRow(row)
-                    ? '—'
-                    : numberCell(darkMode, row.inputExtentKmolh, reactionInputExtentHelpTitle(row))}
+                  {numberCell(darkMode, row.inputExtentKmolh, reactionInputExtentHelpTitle(row))}
                 </td>
                 <td className={`${HEAT_TABLE_CELL} font-mono ${cellBorder}`}>
-                  {isHessClosureRow(row)
-                    ? '—'
-                    : numberCell(
-                        darkMode,
-                        row.extentKmolh,
-                        reactionActualExtentHelpTitle(row)
-                      )}
+                  {numberCell(
+                    darkMode,
+                    row.extentKmolh,
+                    reactionActualExtentHelpTitle(row)
+                  )}
                 </td>
                 <td className={`${HEAT_TABLE_CELL} font-mono ${cellBorder}`}>
                   {numberCell(darkMode, row.reactionHeatKJmol)}
@@ -858,18 +853,26 @@ function ReactionTable({ darkMode, result }: { darkMode: boolean; result: Copper
           </tr>
           <tr className={tone.total}>
             <td colSpan={6} className={`${HEAT_TABLE_CELL} text-right ${cellBorder}`}>
-              吸热合计（减）
+              吸热合计
             </td>
             <td className={`${HEAT_TABLE_CELL} font-mono ${cellBorder}`}>
-              {numberCell(darkMode, -absorptionMJh)}
+              {numberCell(darkMode, absorptionMJh)}
             </td>
           </tr>
           <tr className={tone.total}>
             <td colSpan={6} className={`${HEAT_TABLE_CELL} font-semibold text-right ${cellBorder}`}>
-              净化学热（放热 − 吸热）
+              路径净化学热
             </td>
             <td className={`${HEAT_TABLE_CELL} font-mono font-semibold ${cellBorder}`}>
-              {numberCell(darkMode, netMJh)}
+              {numberCell(darkMode, pathNetMJh)}
+            </td>
+          </tr>
+          <tr className={tone.total}>
+            <td colSpan={6} className={`${HEAT_TABLE_CELL} font-semibold text-right ${cellBorder}`}>
+              总表化学热（Hess）
+            </td>
+            <td className={`${HEAT_TABLE_CELL} font-mono font-semibold ${cellBorder}`}>
+              {numberCell(darkMode, hessNetMJh)}
             </td>
           </tr>
         </tbody>
@@ -879,7 +882,10 @@ function ReactionTable({ darkMode, result }: { darkMode: boolean; result: Copper
         <FuelCoalCrosscheckDetails darkMode={darkMode} crosscheck={crosscheck} />
       ) : null}
       <p className={`text-xs leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-        侧吹熔炼工况下净化学热通常为放热，计入热收入；若净化学热为负（净吸热），总表会改记入热支出，本页仍按「放热 − 吸热」展示。
+        路径净化学热 = 放热合计 − 吸热合计，仅供反应解释；热量总表与 MetCal 对齐，采用进出物流 ΣΔH298 差（Hess）。
+        {Math.abs(pathNetMJh - hessNetMJh) > 1e-3
+          ? ` 路径与 Hess 差额 ${(pathNetMJh - hessNetMJh).toFixed(2)} MJ/h（含水蒸发、Other 等已含于 Hess）。`
+          : null}
       </p>
     </div>
   )

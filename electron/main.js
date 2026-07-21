@@ -132,8 +132,19 @@ let splashWindow
 /** 主窗显示与闪屏关闭仅处理一次（app:ready 或 90s 兜底） */
 let appReadyHandled = false
 let appReadyFallbackTimer = null
+let splashMinVisibleTimer = null
+let splashLoadWatchdogTimer = null
 let mainWindowReadyToShow = false
 let licensePrewarmDone = false
+/** 闪屏已真正 show（或创建失败视为就绪，避免永久卡住） */
+let splashReady = false
+let splashShownAt = 0
+/** 关闭请求已到达但闪屏尚未就绪/未满最短展示时间 */
+let splashCloseRequested = false
+/** 最短可见时间，避免冷启动缓存命中时白屏一闪、内容未绘出就被关掉 */
+const SPLASH_MIN_VISIBLE_MS = 1600
+/** 闪屏加载超时：超时后不再阻塞主窗显示 */
+const SPLASH_LOAD_WATCHDOG_MS = 5000
 
 function tryEarlySplashClose() {
   if (mainWindowReadyToShow && licensePrewarmDone) {
@@ -154,16 +165,59 @@ function setupEarlySplashClose(licensePrewarmPromise) {
     })
 }
 
-function showMainAndCloseSplash() {
-  if (appReadyHandled) return
-  appReadyHandled = true
-  console.log('[启动] splash.close: main window shown')
+function clearSplashTimers() {
   if (appReadyFallbackTimer) {
     try {
       clearTimeout(appReadyFallbackTimer)
     } catch (_) {}
     appReadyFallbackTimer = null
   }
+  if (splashMinVisibleTimer) {
+    try {
+      clearTimeout(splashMinVisibleTimer)
+    } catch (_) {}
+    splashMinVisibleTimer = null
+  }
+  if (splashLoadWatchdogTimer) {
+    try {
+      clearTimeout(splashLoadWatchdogTimer)
+    } catch (_) {}
+    splashLoadWatchdogTimer = null
+  }
+}
+
+/**
+ * @param {{ force?: boolean }} [opts] force=true 时跳过「等闪屏就绪 / 最短展示」约束（90s 兜底）
+ */
+function showMainAndCloseSplash(opts = {}) {
+  if (appReadyHandled) return
+  const force = opts.force === true
+
+  // 闪屏尚未 show：先记住请求，等 ready-to-show 后再关（避免白底一闪）
+  if (!force && splashWindow && !splashWindow.isDestroyed() && !splashReady) {
+    splashCloseRequested = true
+    return
+  }
+
+  // 已 show：保证最短展示时间，让标题/图标有机会画完
+  if (!force && splashWindow && !splashWindow.isDestroyed() && splashShownAt > 0) {
+    const remaining = SPLASH_MIN_VISIBLE_MS - (Date.now() - splashShownAt)
+    if (remaining > 0) {
+      splashCloseRequested = true
+      if (!splashMinVisibleTimer) {
+        splashMinVisibleTimer = setTimeout(() => {
+          splashMinVisibleTimer = null
+          showMainAndCloseSplash()
+        }, remaining)
+      }
+      return
+    }
+  }
+
+  appReadyHandled = true
+  splashCloseRequested = false
+  console.log('[启动] splash.close: main window shown')
+  clearSplashTimers()
   if (splashWindow && !splashWindow.isDestroyed()) {
     splashWindow.close()
     splashWindow = null
@@ -176,8 +230,27 @@ function showMainAndCloseSplash() {
   }
 }
 
+function injectSplashIcon(dataUrl) {
+  if (!splashWindow || splashWindow.isDestroyed() || !dataUrl) return
+  const script = `(function(){
+    try {
+      var iconEl = document.getElementById('appIcon');
+      var fallback = document.getElementById('fallbackMark');
+      if (!iconEl) return;
+      iconEl.style.display = '';
+      iconEl.onload = function () { if (fallback) fallback.style.display = 'none'; };
+      iconEl.onerror = function () { if (fallback) fallback.style.display = ''; };
+      iconEl.src = ${JSON.stringify(dataUrl)};
+    } catch (_) {}
+  })();`
+  void splashWindow.webContents.executeJavaScript(script, true).catch(() => {})
+}
+
 function createSplashWindow() {
   try {
+    splashReady = false
+    splashShownAt = 0
+    splashCloseRequested = false
     splashWindow = new BrowserWindow({
       width: 520,
       height: 320,
@@ -187,7 +260,7 @@ function createSplashWindow() {
       maximizable: false,
       fullscreenable: false,
       frame: false,
-      backgroundColor: '#FFFFFF',
+      backgroundColor: '#f8fafc',
       show: false,
       alwaysOnTop: true,
       webPreferences: {
@@ -212,18 +285,23 @@ function createSplashWindow() {
     if (splashIconPath) {
       try {
         const img = nativeImage.createFromPath(splashIconPath)
-        const png = img && !img.isEmpty() ? img.toPNG() : null
+        // 缩到闪屏实际尺寸，减小注入体积与解码时间
+        const sized = img && !img.isEmpty() ? img.resize({ width: 152, height: 152 }) : null
+        const png = sized && !sized.isEmpty() ? sized.toPNG() : null
         if (png && png.length) splashIconPngDataUrl = `data:image/png;base64,${png.toString('base64')}`
       } catch (_) {}
     }
 
     if (fs.existsSync(splashPath)) {
+      // 不把大图塞进 loadFile query：过长 data URL 会拖慢/拖垮首次绘制，导致只见白闪
       splashWindow.loadFile(splashPath, {
         query: {
-          iconPng: splashIconPngDataUrl,
           name: APP_SPLASH_DISPLAY_NAME,
           tagline: APP_SPLASH_TAGLINE,
         },
+      })
+      splashWindow.webContents.once('did-finish-load', () => {
+        injectSplashIcon(splashIconPngDataUrl)
       })
     } else {
       const fallbackSplashHtml = encodeURIComponent(
@@ -232,15 +310,40 @@ function createSplashWindow() {
       splashWindow.loadURL(`data:text/html;charset=utf-8,${fallbackSplashHtml}`)
     }
 
-    splashWindow.once('ready-to-show', () => {
-      if (splashWindow && !splashWindow.isDestroyed()) splashWindow.show()
-    })
+    const markSplashShown = () => {
+      if (splashReady) return
+      splashReady = true
+      splashShownAt = Date.now()
+      if (splashLoadWatchdogTimer) {
+        try {
+          clearTimeout(splashLoadWatchdogTimer)
+        } catch (_) {}
+        splashLoadWatchdogTimer = null
+      }
+      if (splashWindow && !splashWindow.isDestroyed()) {
+        splashWindow.show()
+      }
+      if (splashCloseRequested) {
+        showMainAndCloseSplash()
+      }
+    }
+
+    splashWindow.once('ready-to-show', markSplashShown)
+    splashLoadWatchdogTimer = setTimeout(() => {
+      splashLoadWatchdogTimer = null
+      if (!splashReady) {
+        console.warn('[启动] splash.load watchdog: forcing show')
+        markSplashShown()
+      }
+    }, SPLASH_LOAD_WATCHDOG_MS)
 
     splashWindow.on('closed', () => {
       splashWindow = null
     })
   } catch (e) {
     splashWindow = null
+    splashReady = true
+    splashShownAt = 0
   }
 }
 
@@ -619,7 +722,7 @@ function createWindow() {
     mainWindowReadyToShow = true
     tryEarlySplashClose()
     if (!appReadyHandled) {
-      appReadyFallbackTimer = setTimeout(showMainAndCloseSplash, 90000)
+      appReadyFallbackTimer = setTimeout(() => showMainAndCloseSplash({ force: true }), 90000)
     }
   })
 
