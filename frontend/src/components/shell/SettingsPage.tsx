@@ -282,92 +282,88 @@ export default function SettingsPage({
 
   return (
     <div className={`flex-1 min-w-0 overflow-y-auto ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
-      <div className="w-full max-w-none px-3 py-4 sm:px-5 lg:px-6 2xl:px-8 2xl:py-6">
-        <div className="mb-8">
-          <BackIconButton label={language === 'en' ? 'Back to Home' : '返回主页面'} darkMode={darkMode} onClick={onBackToHome} className="mb-3" />
-          <h1 className={`text-2xl sm:text-3xl font-bold mb-1 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{t.pageTitle}</h1>
-          <p className={`text-sm mb-5 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{t.pageSubtitle}</p>
-          <div className={`rounded-xl border-l-4 ${accentBorder} ${darkMode ? 'bg-gray-700/60 border-gray-600' : 'bg-white border-gray-200'} px-5 py-4`}>
-            <div className={`font-semibold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{appTitle}</div>
-            <div className={`text-sm mt-0.5 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{t.orgLine}</div>
+      <div className="mx-auto w-full max-w-[1760px] px-5 py-4 sm:px-6 lg:px-8 2xl:px-10 2xl:py-5">
+        <div className="mb-5">
+          <BackIconButton label={language === 'en' ? 'Back to Home' : '返回主页面'} darkMode={darkMode} onClick={onBackToHome} className="mb-2" />
+          <h1 className={`text-2xl font-bold mb-0.5 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{t.pageTitle}</h1>
+          <p className={`text-sm mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{t.pageSubtitle}</p>
+          <div className={`rounded-lg border-l-4 ${accentBorder} ${darkMode ? 'bg-gray-700/60 border-gray-600' : 'bg-white border-gray-200'} px-4 py-3`}>
+            <div className={`text-sm font-semibold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{appTitle}</div>
+            <div className={`text-xs mt-0.5 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{t.orgLine}</div>
           </div>
         </div>
 
-        <section className="mb-8">
-          <h2 className={`${sectionTitleCls} border-l-4 ${accentBorder} pl-3`}>{t.packageBuild}</h2>
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 2xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] 2xl:gap-5">
-            <div className={cardCls}>
-              <h3 className={`text-base font-semibold mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{pkgInfo.title}</h3>
-              <p className={`text-sm leading-relaxed mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{pkgInfo.variantIntro}</p>
-              <p className={`text-sm leading-relaxed mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{pkgInfo.nsisNote}</p>
-              <p className={`text-sm leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{pkgInfo.updateNote}</p>
-              {deployInfo != null && (
-                <div className={`mt-4 rounded-lg border px-3 py-2 text-xs ${darkMode ? 'border-gray-600 bg-gray-800/60 text-gray-300' : 'border-gray-200 bg-gray-50 text-gray-700'}`}>
-                  <div>
-                    {t.localDeployLabel}：{' '}
-                    <span>{deployInfo.assistantLocalDeploy === false ? t.no : t.yes}</span>
-                  </div>
-                  <div className="mt-1">
-                    {t.electronVersionLabel}：<span className="font-mono">{deployInfo.version ?? currentVersion}</span>
-                  </div>
+        <section className="mb-5">
+          <h2 className={`${sectionTitleCls} border-l-4 ${accentBorder} pl-3`}>{t.appearance}</h2>
+          <div className={cardCls}>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 xl:gap-5">
+              <div>
+                <div className={fieldLabelCls}>{t.displayMode}</div>
+                <div className={segTrackCls} role="group" aria-label={t.displayMode}>
+                  <button type="button" onClick={() => onDarkModeChange?.(false)} className={segBtn(!darkModeValue)}>
+                    {t.light}
+                  </button>
+                  <button type="button" onClick={() => onDarkModeChange?.(true)} className={segBtn(darkModeValue)}>
+                    {t.dark}
+                  </button>
                 </div>
-              )}
-            </div>
-            <div className={cardCls}>
-              <h3 className={`text-base font-semibold mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{t.aiHintTitle}</h3>
-              {assistantStatus === 'loading' ? (
-                <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{astUi.loading}</p>
-              ) : assistantStatus === null ? (
-                <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{astUi.unavailable}</p>
-              ) : !localDeployEnabled ? (
-                <p className={`text-sm ${darkMode ? 'text-amber-300' : 'text-amber-800'}`}>{astUi.localDeployOff}</p>
-              ) : (
-                <div className={`space-y-2 text-sm ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`inline-flex h-2 w-2 rounded-full ${inferenceReady ? 'bg-green-500' : 'bg-amber-500'}`}
-                      aria-hidden
-                    />
-                    {inferenceReady ? astUi.inferenceReady : astUi.inferenceNotReady}
-                  </div>
-                  {typeof assistantStatus.knowledgeLoadedChars === 'number' ? (
-                    <div className="text-xs opacity-90">
-                      {astUi.knowledgeChars} {assistantStatus.knowledgeLoadedChars}
-                    </div>
-                  ) : null}
-                  {(assistantStatus as { failureDiagnosticZh?: string }).failureDiagnosticZh &&
-                  language === 'zh' ? (
-                    <p className={`text-xs leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                      {(assistantStatus as { failureDiagnosticZh?: string }).failureDiagnosticZh}
-                    </p>
-                  ) : null}
-                  {(assistantStatus as { failureDiagnosticEn?: string }).failureDiagnosticEn &&
-                  language === 'en' ? (
-                    <p className={`text-xs leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                      {(assistantStatus as { failureDiagnosticEn?: string }).failureDiagnosticEn}
-                    </p>
-                  ) : null}
+              </div>
+              <div>
+                <div className={fieldLabelCls}>{t.uiLang}</div>
+                <div className={segTrackCls} role="group" aria-label={t.uiLang}>
+                  <button type="button" onClick={() => onLanguageChange?.('zh')} className={segBtn(language === 'zh')}>
+                    中文
+                  </button>
+                  <button type="button" onClick={() => onLanguageChange?.('en')} className={segBtn(language === 'en')}>
+                    English
+                  </button>
                 </div>
-              )}
-              <p className={`text-xs mt-4 ${darkMode ? 'text-gray-500' : 'text-gray-500'}`}>{t.backendHint}</p>
+              </div>
+              <div className="md:col-span-2 xl:col-span-1">
+                <div className="mb-1.5 flex items-baseline justify-between gap-2">
+                  <div className={`text-xs font-medium ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{t.uiScale}</div>
+                  <div className={`text-xs ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>{t.uiScaleHint}</div>
+                </div>
+                <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-stretch">
+                  <div className={`${segTrackCls} min-w-0 flex-1`} role="group" aria-label={t.uiScale}>
+                    {UI_SCALE_PRESETS.map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => {
+                          setUiScalePercent(preset)
+                          setUiScale(preset)
+                        }}
+                        className={segBtn(uiScalePercent === preset)}
+                      >
+                        {preset}%
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className={`shrink-0 rounded-md border px-3 py-2 text-sm font-medium transition-colors sm:w-28 ${
+                      darkMode
+                        ? 'border-gray-600 text-gray-200 hover:bg-gray-700'
+                        : 'border-gray-200 text-gray-700 hover:bg-gray-50'
+                    }`}
+                    onClick={() => {
+                      const next = resetUiScale()
+                      setUiScalePercent(next as UiScalePreset)
+                    }}
+                  >
+                    {t.uiScaleReset}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </section>
 
         {hasElectronLicense && (
-          <section className="mb-8 mt-2">
-            <h2
-              className={`text-sm font-semibold mb-3 flex items-center gap-2 border-l-4 ${accentBorder} pl-3 ${
-                darkMode ? 'text-gray-300' : 'text-gray-700'
-              }`}
-            >
-              {licUi.offlineLicense}
-            </h2>
-            <div
-              className={`rounded-xl border px-5 pt-3 pb-5 ${
-                darkMode ? 'bg-gray-700/50 border-gray-600' : 'bg-white border-gray-200'
-              }`}
-            >
+          <section className="mb-5">
+            <h2 className={`${sectionTitleCls} border-l-4 ${accentBorder} pl-3`}>{licUi.offlineLicense}</h2>
+            <div className={cardCls}>
               {licenseInfo?.ok && (
                 <div className={`text-sm mb-2.5 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                   <span className="font-bold">{licUi.validUntil}</span>
@@ -393,89 +389,95 @@ export default function SettingsPage({
                   )}
                 </div>
               )}
-              <div className="text-sm font-medium mb-1.5 text-gray-700 dark:text-gray-300">{licUi.deviceCode}</div>
-              <div className="flex flex-col sm:flex-row gap-2 items-stretch mb-4">
-                <div
-                  className={`flex-1 min-w-0 rounded-lg border px-3 py-2 font-mono text-xs break-all min-h-[2.5rem] flex items-center ${
-                    darkMode ? 'bg-gray-800/80 border-gray-600 text-gray-200' : 'bg-gray-50 border-gray-200 text-gray-800'
-                  }`}
-                >
-                  {licenseInfo?.machineId || '—'}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const id = licenseInfo?.machineId
-                    if (!id) return
-                    void navigator.clipboard.writeText(id).then(() => {
-                      setLicenseCopyOk(true)
-                      window.setTimeout(() => setLicenseCopyOk(false), 2000)
-                    })
-                  }}
-                  disabled={!licenseInfo?.machineId}
-                  className="shrink-0 w-full sm:w-24 rounded-lg text-sm font-medium bg-slate-100 dark:bg-gray-600 text-slate-800 dark:text-gray-200 hover:opacity-90 disabled:opacity-50 inline-flex items-center justify-center min-h-[2.5rem] sm:self-stretch"
-                >
-                  {licenseCopyOk ? licUi.copied : licUi.copyDev}
-                </button>
-              </div>
-              <div className="text-sm font-medium mb-1.5 text-gray-700 dark:text-gray-300">{licUi.licenseCode}</div>
-              <div className="flex flex-col sm:flex-row gap-2 items-stretch mb-2">
-                <textarea
-                  value={licenseInput}
-                  onChange={(e) => {
-                    setLicenseInput(e.target.value)
-                    setLicenseMsg(null)
-                  }}
-                  rows={1}
-                  placeholder={licUi.licensePlaceholder}
-                  spellCheck={false}
-                  className={`flex-1 min-w-0 rounded-lg border px-3 py-2 text-xs font-mono resize-y min-h-[2.5rem] ${
-                    darkMode ? 'bg-gray-800/80 border-gray-600 text-gray-200' : 'bg-white border-gray-200 text-gray-800'
-                  }`}
-                />
-                <button
-                  type="button"
-                  disabled={licenseBusy || !licenseInput.trim()}
-                  onClick={async () => {
-                    const api = (window as {
-                      electronAPI?: {
-                        license?: {
-                          activate: (x: string) => Promise<{ ok: boolean; error?: string }>
-                          getStatus: () => Promise<{ ok: boolean; machineId?: string; expiresAtMs?: number | null }>
-                        }
-                      }
-                    }).electronAPI?.license
-                    if (!api) return
-                    setLicenseBusy(true)
-                    setLicenseMsg(null)
-                    try {
-                      const r = await api.activate(licenseInput.trim())
-                      if (r.ok) {
-                        setLicenseMsg(licUi.licenseSaved)
-                        setLicenseInput('')
-                        const s = await api.getStatus()
-                        setLicenseInfo({
-                          machineId: s.machineId || '',
-                          ok: !!s.ok,
-                          expiresAtMs: s.expiresAtMs != null ? s.expiresAtMs : null,
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2 xl:gap-6">
+                <div>
+                  <div className={fieldLabelCls}>{licUi.deviceCode}</div>
+                  <div className="flex flex-col items-stretch gap-2 sm:flex-row">
+                    <div
+                      className={`flex min-h-[2.5rem] flex-1 min-w-0 items-center break-all rounded-md border px-3 py-2 font-mono text-xs ${
+                        darkMode ? 'bg-gray-800/80 border-gray-600 text-gray-200' : 'bg-gray-50 border-gray-200 text-gray-800'
+                      }`}
+                    >
+                      {licenseInfo?.machineId || '—'}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = licenseInfo?.machineId
+                        if (!id) return
+                        void navigator.clipboard.writeText(id).then(() => {
+                          setLicenseCopyOk(true)
+                          window.setTimeout(() => setLicenseCopyOk(false), 2000)
                         })
-                      } else {
-                        setLicenseMsg(r.error || licUi.saveFailed)
-                      }
-                    } catch (e) {
-                      setLicenseMsg((e as Error)?.message || licUi.saveFailed)
-                    } finally {
-                      setLicenseBusy(false)
-                    }
-                  }}
-                  className="shrink-0 w-full sm:w-24 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 inline-flex items-center justify-center min-h-[2.5rem] sm:self-stretch px-2"
-                >
-                  {licenseBusy ? licUi.applyLicenseBusy : licUi.updateLicense}
-                </button>
+                      }}
+                      disabled={!licenseInfo?.machineId}
+                      className="inline-flex min-h-[2.5rem] w-full shrink-0 items-center justify-center rounded-md bg-slate-100 text-sm font-medium text-slate-800 hover:opacity-90 disabled:opacity-50 sm:w-24 dark:bg-gray-600 dark:text-gray-200"
+                    >
+                      {licenseCopyOk ? licUi.copied : licUi.copyDev}
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <div className={fieldLabelCls}>{licUi.licenseCode}</div>
+                  <div className="flex flex-col items-stretch gap-2 sm:flex-row">
+                    <textarea
+                      value={licenseInput}
+                      onChange={(e) => {
+                        setLicenseInput(e.target.value)
+                        setLicenseMsg(null)
+                      }}
+                      rows={1}
+                      placeholder={licUi.licensePlaceholder}
+                      spellCheck={false}
+                      className={`min-h-[2.5rem] flex-1 min-w-0 resize-y rounded-md border px-3 py-2 font-mono text-xs ${
+                        darkMode ? 'bg-gray-800/80 border-gray-600 text-gray-200' : 'bg-white border-gray-200 text-gray-800'
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      disabled={licenseBusy || !licenseInput.trim()}
+                      onClick={async () => {
+                        const api = (window as {
+                          electronAPI?: {
+                            license?: {
+                              activate: (x: string) => Promise<{ ok: boolean; error?: string }>
+                              getStatus: () => Promise<{ ok: boolean; machineId?: string; expiresAtMs?: number | null }>
+                            }
+                          }
+                        }).electronAPI?.license
+                        if (!api) return
+                        setLicenseBusy(true)
+                        setLicenseMsg(null)
+                        try {
+                          const r = await api.activate(licenseInput.trim())
+                          if (r.ok) {
+                            setLicenseMsg(licUi.licenseSaved)
+                            setLicenseInput('')
+                            const s = await api.getStatus()
+                            setLicenseInfo({
+                              machineId: s.machineId || '',
+                              ok: !!s.ok,
+                              expiresAtMs: s.expiresAtMs != null ? s.expiresAtMs : null,
+                            })
+                          } else {
+                            setLicenseMsg(r.error || licUi.saveFailed)
+                          }
+                        } catch (e) {
+                          setLicenseMsg((e as Error)?.message || licUi.saveFailed)
+                        } finally {
+                          setLicenseBusy(false)
+                        }
+                      }}
+                      className="inline-flex min-h-[2.5rem] w-full shrink-0 items-center justify-center rounded-md bg-blue-600 px-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 sm:w-24"
+                    >
+                      {licenseBusy ? licUi.applyLicenseBusy : licUi.updateLicense}
+                    </button>
+                  </div>
+                </div>
               </div>
               {licenseMsg && (
                 <p
-                  className={`text-sm mb-2 ${
+                  className={`mt-2 text-sm ${
                     licenseMsg === licUi.licenseSaved ? (darkMode ? 'text-green-400' : 'text-green-700') : 'text-red-600'
                   }`}
                 >
@@ -485,122 +487,110 @@ export default function SettingsPage({
             </div>
           </section>
         )}
-        <section className="mb-8">
-          <h2 className={`${sectionTitleCls} border-l-4 ${accentBorder} pl-3`}>{t.appearance}</h2>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3 2xl:gap-5">
+
+        <section className="mb-5">
+          <h2 className={`${sectionTitleCls} border-l-4 ${accentBorder} pl-3`}>{t.packageAndAssistant}</h2>
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-3 xl:gap-4">
             <div className={cardCls}>
-              <h3 className={`text-base font-semibold mb-3 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{t.displayMode}</h3>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => onDarkModeChange?.(false)}
-                  className={`flex-1 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                    !darkModeValue ? 'bg-blue-600 text-white shadow' : darkMode ? 'bg-gray-600/80 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  <span className="font-medium">{t.light}</span>
-                  <span className={`block text-xs mt-0.5 ${!darkModeValue ? 'opacity-90' : 'opacity-70'}`}>{t.lightHint}</span>
-                </button>
-                <button
-                  onClick={() => onDarkModeChange?.(true)}
-                  className={`flex-1 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                    darkModeValue ? 'bg-blue-600 text-white shadow' : darkMode ? 'bg-gray-600/80 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  <span className="font-medium">{t.dark}</span>
-                  <span className={`block text-xs mt-0.5 ${darkModeValue ? 'opacity-90' : 'opacity-70'}`}>{t.darkHint}</span>
-                </button>
+              <h3 className={`mb-2 text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{t.packageMeta}</h3>
+              <div className={`space-y-2 text-sm leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                <p>{pkgInfo.variantIntro}</p>
+                <p>{pkgInfo.nsisNote}</p>
+                <p>{pkgInfo.updateNote}</p>
               </div>
+              {deployInfo != null && (
+                <div className={`mt-3 rounded-md border px-3 py-2 text-xs ${darkMode ? 'border-gray-600 bg-gray-800/60 text-gray-300' : 'border-gray-200 bg-gray-50 text-gray-700'}`}>
+                  <div>
+                    {t.localDeployLabel}：<span>{deployInfo.assistantLocalDeploy === false ? t.no : t.yes}</span>
+                  </div>
+                  <div className="mt-1">
+                    {t.electronVersionLabel}：<span className="font-mono">{deployInfo.version ?? currentVersion}</span>
+                  </div>
+                </div>
+              )}
             </div>
             <div className={cardCls}>
-              <h3 className={`text-base font-semibold mb-3 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{t.uiLang}</h3>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => onLanguageChange?.('zh')}
-                  className={`flex-1 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${language === 'zh' ? 'bg-blue-600 text-white shadow' : darkMode ? 'bg-gray-600/80 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                >
-                  中文
-                </button>
-                <button
-                  onClick={() => onLanguageChange?.('en')}
-                  className={`flex-1 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${language === 'en' ? 'bg-blue-600 text-white shadow' : darkMode ? 'bg-gray-600/80 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                >
-                  English
-                </button>
-              </div>
+              <h3 className={`mb-2 text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{astUi.sectionTitle}</h3>
+              {assistantStatus === 'loading' ? (
+                <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{astUi.loading}</p>
+              ) : assistantStatus === null ? (
+                <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{astUi.unavailable}</p>
+              ) : !localDeployEnabled ? (
+                <p className={`text-sm ${darkMode ? 'text-amber-300' : 'text-amber-800'}`}>{astUi.localDeployOff}</p>
+              ) : (
+                <div className={`space-y-2 text-sm ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`inline-flex h-2 w-2 rounded-full ${inferenceReady ? 'bg-green-500' : 'bg-amber-500'}`}
+                      aria-hidden
+                    />
+                    {inferenceReady ? astUi.inferenceReady : astUi.inferenceNotReady}
+                  </div>
+                  {typeof assistantStatus.knowledgeLoadedChars === 'number' ? (
+                    <div className="text-xs opacity-90">
+                      {astUi.knowledgeChars} {assistantStatus.knowledgeLoadedChars}
+                    </div>
+                  ) : null}
+                  {(assistantStatus as { failureDiagnosticZh?: string }).failureDiagnosticZh && language === 'zh' ? (
+                    <p className={`text-xs leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                      {(assistantStatus as { failureDiagnosticZh?: string }).failureDiagnosticZh}
+                    </p>
+                  ) : null}
+                  {(assistantStatus as { failureDiagnosticEn?: string }).failureDiagnosticEn && language === 'en' ? (
+                    <p className={`text-xs leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                      {(assistantStatus as { failureDiagnosticEn?: string }).failureDiagnosticEn}
+                    </p>
+                  ) : null}
+                </div>
+              )}
             </div>
             <div className={cardCls}>
-              <h3 className={`text-base font-semibold mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{t.uiScale}</h3>
-              <p className={`text-sm mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{t.uiScaleHint}</p>
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  className={`rounded-lg border px-3 py-2 text-sm ${darkMode ? 'border-gray-600 bg-gray-800 text-gray-100' : 'border-gray-300 bg-white text-gray-900'}`}
-                  value={uiScalePercent}
-                  onChange={(event) => {
-                    const next = Number(event.target.value) as UiScalePreset
-                    setUiScalePercent(next)
-                    setUiScale(next)
-                  }}
-                >
-                  {UI_SCALE_PRESETS.map((preset) => (
-                    <option key={preset} value={preset}>
-                      {preset}%
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className={`rounded-lg border px-3 py-2 text-sm font-medium ${darkMode ? 'border-gray-600 text-gray-200 hover:bg-gray-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'}`}
-                  onClick={() => {
-                    const next = resetUiScale()
-                    setUiScalePercent(next as UiScalePreset)
-                  }}
-                >
-                  {t.uiScaleReset}
-                </button>
-              </div>
+              <h3 className={`mb-2 text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{leg.aiAssistantTitle}</h3>
+              <p className={`text-sm leading-relaxed ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>{leg.aiAssistantP}</p>
             </div>
           </div>
         </section>
-        <section className="mb-8">
+
+        <section className="mb-5">
           <h2 className={`${sectionTitleCls} border-l-4 ${accentBorder} pl-3`}>{t.feedbackSection}</h2>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] 2xl:gap-5">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:gap-4">
             <div className={cardCls}>
-              <h3 className={`text-base font-semibold mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{t.feedbackTitle}</h3>
-              <p className={`text-sm mb-4 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{t.feedbackDesc}</p>
+              <h3 className={`mb-1.5 text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{t.feedbackTitle}</h3>
+              <p className={`mb-3 text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>{t.feedbackDesc}</p>
               <a
                 href={feedbackMail}
-                className="inline-flex items-center justify-center px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white transition-colors"
+                className="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 sm:w-auto"
               >
                 {t.feedbackBtn}
               </a>
             </div>
             {typeof window !== 'undefined' && (window as any).electronAPI?.update ? (
               <div className={cardCls}>
-                <h3 className={`text-base font-semibold mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{t.appUpdate}</h3>
-                <div className={`text-sm mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                <h3 className={`mb-1.5 text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{t.appUpdate}</h3>
+                <div className={`mb-3 text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
                   {t.currentVer}{' '}
                   <span className="font-semibold text-blue-600">{currentVersion || '—'}</span>
                 </div>
-                <div className="space-y-3">
+                <div className="space-y-2.5">
                   {updateStatus === 'idle' && (
-                    <button onClick={handleCheckForUpdates} className="w-full px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white transition-colors">
+                    <button onClick={handleCheckForUpdates} className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 sm:w-auto">
                       {t.checkBtn}
                     </button>
                   )}
                   {updateStatus === 'checking' && (
-                    <div className={`text-center py-2 text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                      <span className="inline-block animate-spin mr-2">⟳</span> {t.checking}
+                    <div className={`py-2 text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                      <span className="mr-2 inline-block animate-spin">⟳</span> {t.checking}
                     </div>
                   )}
                   {updateStatus === 'available' && updateInfo && (
-                    <div className="space-y-3">
-                      <div className={`p-3 rounded-lg text-sm ${darkMode ? 'bg-green-900/30 border border-green-700 text-green-300' : 'bg-green-50 border border-green-200 text-green-800'}`}>
+                    <div className="space-y-2.5">
+                      <div className={`rounded-md p-2.5 text-sm ${darkMode ? 'bg-green-900/30 border border-green-700 text-green-300' : 'bg-green-50 border border-green-200 text-green-800'}`}>
                         <div className="font-medium">
                           {t.newVer} {updateInfo.version}
                         </div>
                         {updateInfo.releaseNotes && <div className={`mt-1 text-xs ${darkMode ? 'text-green-400' : 'text-green-700'}`}>{updateInfo.releaseNotes}</div>}
                       </div>
-                      <button onClick={handleDownloadUpdate} className="w-full px-4 py-2 rounded-lg text-sm font-medium bg-green-600 hover:bg-green-700 text-white transition-colors">
+                      <button onClick={handleDownloadUpdate} className="w-full rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-700 sm:w-auto">
                         {t.downloadBtn}
                       </button>
                     </div>
@@ -610,25 +600,25 @@ export default function SettingsPage({
                       <div className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
                         {t.downloading} {updateProgress}%
                       </div>
-                      <div className={`w-full h-2 rounded-full overflow-hidden ${darkMode ? 'bg-gray-600' : 'bg-gray-200'}`}>
+                      <div className={`h-2 w-full overflow-hidden rounded-full ${darkMode ? 'bg-gray-600' : 'bg-gray-200'}`}>
                         <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${updateProgress}%` }} />
                       </div>
                     </div>
                   )}
                   {updateStatus === 'downloaded' && (
-                    <div className="space-y-3">
-                      <div className={`p-3 rounded-lg text-sm ${darkMode ? 'bg-green-900/30 border border-green-700 text-green-300' : 'bg-green-50 border border-green-200 text-green-800'}`}>{t.downloaded}</div>
-                      <button onClick={handleInstallUpdate} className="w-full px-4 py-2 rounded-lg text-sm font-medium bg-green-600 hover:bg-green-700 text-white transition-colors">
+                    <div className="space-y-2.5">
+                      <div className={`rounded-md p-2.5 text-sm ${darkMode ? 'bg-green-900/30 border border-green-700 text-green-300' : 'bg-green-50 border border-green-200 text-green-800'}`}>{t.downloaded}</div>
+                      <button onClick={handleInstallUpdate} className="w-full rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-700 sm:w-auto">
                         {t.installBtn}
                       </button>
                     </div>
                   )}
                   {updateStatus === 'error' && (
-                    <div className="space-y-3">
-                      <div className={`p-3 rounded-lg text-sm ${darkMode ? 'bg-red-900/30 border border-red-700 text-red-300' : 'bg-red-50 border border-red-200 text-red-800'}`}>
+                    <div className="space-y-2.5">
+                      <div className={`rounded-md p-2.5 text-sm ${darkMode ? 'bg-red-900/30 border border-red-700 text-red-300' : 'bg-red-50 border border-red-200 text-red-800'}`}>
                         {updateError || (language === 'en' ? 'Update check failed' : '更新检查失败')}
                       </div>
-                      <button onClick={handleCheckForUpdates} className="w-full px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white transition-colors">
+                      <button onClick={handleCheckForUpdates} className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 sm:w-auto">
                         {t.retry}
                       </button>
                     </div>
@@ -637,7 +627,7 @@ export default function SettingsPage({
               </div>
             ) : (
               <div className={cardCls}>
-                <h3 className={`text-base font-semibold mb-2 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{t.appVerOnly}</h3>
+                <h3 className={`mb-1.5 text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{t.appVerOnly}</h3>
                 <div className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
                   {t.currentVer} <span className="font-semibold">{currentVersion || '—'}</span>
                   {t.browserNoUpdate}
@@ -646,24 +636,21 @@ export default function SettingsPage({
             )}
           </div>
         </section>
+
         <section>
           <h2 className={`${sectionTitleCls} border-l-4 ${accentBorder} pl-3`}>{t.legal}</h2>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:gap-5">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:gap-4">
             <div className={cardCls}>
-              <h3 className={`text-base font-semibold mb-3 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{leg.disclaimerTitle}</h3>
-              <div className={`text-sm leading-relaxed space-y-2 ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+              <h3 className={`mb-2 text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{leg.disclaimerTitle}</h3>
+              <div className={`space-y-2 text-sm leading-relaxed ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
                 <p>{leg.disclaimerP1}</p>
                 <p>{leg.disclaimerP2}</p>
                 <p>{leg.disclaimerP3}</p>
               </div>
             </div>
             <div className={cardCls}>
-              <h3 className={`text-base font-semibold mb-3 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{leg.privacyTitle}</h3>
+              <h3 className={`mb-2 text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{leg.privacyTitle}</h3>
               <p className={`text-sm leading-relaxed ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>{leg.privacyP}</p>
-            </div>
-            <div className={`${cardCls} md:col-span-2 xl:col-span-1`}>
-              <h3 className={`text-base font-semibold mb-3 ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{leg.aiAssistantTitle}</h3>
-              <p className={`text-sm leading-relaxed ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>{leg.aiAssistantP}</p>
             </div>
           </div>
         </section>

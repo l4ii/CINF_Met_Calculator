@@ -2529,24 +2529,6 @@ function heatBalanceClosureFuelLimit(params: {
   return Math.max(1, estimatedLimit, ratioLimit, feedLimit)
 }
 
-function heatBalanceClosureSupplementalFuelLimit(params: {
-  processFuelWeightTh: number
-  estimatedSupplementalFuelWeightTh: number
-  ratioReferenceFuelWeightTh: number
-  concentrateMassTh: number
-}) {
-  const maxTotalFuelWeight = heatBalanceClosureFuelLimit({
-    estimatedFuelWeightTh: params.processFuelWeightTh + params.estimatedSupplementalFuelWeightTh,
-    ratioReferenceFuelWeightTh: params.ratioReferenceFuelWeightTh,
-    concentrateMassTh: params.concentrateMassTh,
-  })
-  return Math.max(0, maxTotalFuelWeight - params.processFuelWeightTh)
-}
-
-function supplementalFuelWeightTh(totalFuelWeightTh: number, processFuelWeightTh: number) {
-  return Math.max(0, totalFuelWeightTh - processFuelWeightTh)
-}
-
 function displaySolventName(name: string) {
   return name === '石灰' ? '石灰石' : name
 }
