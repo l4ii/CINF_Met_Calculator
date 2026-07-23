@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, type CSSProperties } from 'react'
 import Sidebar from './components/Sidebar'
 import MainContent from './components/MainContent'
 import LicenseActivation from './components/LicenseActivation'
 import AssistantPanel from './components/AssistantPanel'
+import ElectronAppTitleBar from './components/shell/ElectronAppTitleBar'
 import { AssistantProvider } from './context/AssistantContext'
 import { CalcProvider } from './context/CalcContext'
 import type { SelectedMethod, SheetId } from './types'
@@ -203,9 +204,42 @@ function App() {
   return (
     <AssistantProvider>
       <CalcProvider>
-        <div className={`relative flex h-screen overflow-hidden ${darkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
-          {selectedMethod || currentView !== 'module' ? (
-            <div className="group fixed inset-y-0 left-0 z-40 w-[292px] -translate-x-[270px] transition-transform duration-300 ease-out hover:translate-x-0 focus-within:translate-x-0">
+        <div
+          className={`relative flex h-screen flex-col overflow-hidden ${darkMode ? 'bg-gray-900' : 'bg-gray-50'}`}
+        >
+          <ElectronAppTitleBar darkMode={darkMode} language={language} />
+          <div className="relative flex min-h-0 flex-1 overflow-hidden">
+            {selectedMethod || currentView !== 'module' ? (
+              <div
+                className="group fixed left-0 z-40 w-[292px] -translate-x-[270px] transition-transform duration-300 ease-out hover:translate-x-0 focus-within:translate-x-0"
+                style={
+                  {
+                    top: 'var(--app-titlebar-height, 0px)',
+                    bottom: 0,
+                  } as CSSProperties
+                }
+              >
+                <Sidebar
+                  selectedMethod={selectedMethod}
+                  onMethodSelect={handleMethodSelect}
+                  onSheetSelect={setActiveSheet}
+                  darkMode={darkMode}
+                  language={language}
+                  onShowAbout={handleShowAbout}
+                  onShowSettings={handleShowSettings}
+                  currentView={currentView}
+                  aboutDepartment={aboutDepartment}
+                />
+                <div
+                  className={`absolute right-0 top-1/2 flex h-24 w-[22px] -translate-y-1/2 items-center justify-center rounded-r-lg border-y border-r text-xs shadow-sm ${
+                    darkMode ? 'border-gray-700 bg-gray-900 text-gray-400' : 'border-gray-200 bg-white text-gray-500'
+                  }`}
+                  aria-hidden
+                >
+                  导航
+                </div>
+              </div>
+            ) : (
               <Sidebar
                 selectedMethod={selectedMethod}
                 onMethodSelect={handleMethodSelect}
@@ -217,42 +251,22 @@ function App() {
                 currentView={currentView}
                 aboutDepartment={aboutDepartment}
               />
-              <div
-                className={`absolute right-0 top-1/2 flex h-24 w-[22px] -translate-y-1/2 items-center justify-center rounded-r-lg border-y border-r text-xs shadow-sm ${
-                  darkMode ? 'border-gray-700 bg-gray-900 text-gray-400' : 'border-gray-200 bg-white text-gray-500'
-                }`}
-                aria-hidden
-              >
-                导航
-              </div>
-            </div>
-          ) : (
-            <Sidebar
+            )}
+            <MainContent
               selectedMethod={selectedMethod}
-              onMethodSelect={handleMethodSelect}
-              onSheetSelect={setActiveSheet}
+              activeSheet={activeSheet}
               darkMode={darkMode}
-              language={language}
-              onShowAbout={handleShowAbout}
-              onShowSettings={handleShowSettings}
               currentView={currentView}
               aboutDepartment={aboutDepartment}
+              language={language}
+              darkModeValue={darkMode}
+              onDarkModeChange={setDarkMode}
+              onLanguageChange={setLanguage}
+              onSheetSelect={setActiveSheet}
+              onBackToHome={handleBackToHome}
             />
-          )}
-          <MainContent
-            selectedMethod={selectedMethod}
-            activeSheet={activeSheet}
-            darkMode={darkMode}
-            currentView={currentView}
-            aboutDepartment={aboutDepartment}
-            language={language}
-            darkModeValue={darkMode}
-            onDarkModeChange={setDarkMode}
-            onLanguageChange={setLanguage}
-            onSheetSelect={setActiveSheet}
-            onBackToHome={handleBackToHome}
-          />
-          <AssistantPanel darkMode={darkMode} language={language} onSheetSelect={setActiveSheet} />
+            <AssistantPanel darkMode={darkMode} language={language} onSheetSelect={setActiveSheet} />
+          </div>
         </div>
       </CalcProvider>
     </AssistantProvider>

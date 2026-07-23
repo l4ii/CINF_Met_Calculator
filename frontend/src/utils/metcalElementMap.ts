@@ -46,6 +46,15 @@ export type MetcalMixFeedStreamName = (typeof METCAL_MIX_FEED_STREAM_NAMES)[numb
 export const METCAL_BLEND_STREAM_NAME = '混合铜精矿'
 export const METCAL_MOISTURE_STREAM_NAME = '含水'
 
+/** 侧吹炉典型熔剂流名（导入读取，不含煤） */
+export const METCAL_SOLVENT_STREAM_NAMES = ['石英石', '石灰石', '石灰'] as const
+
+/** 侧吹炉典型气体流名 */
+export const METCAL_GAS_STREAM_NAMES = ['空气', '氧气', '二次风', '加料口漏风', '漏风'] as const
+
+/** 燃料流名：导入元素组成，不导入干基流量 */
+export const METCAL_FUEL_STREAM_NAMES = ['煤', '粉煤', '焦粉'] as const
+
 export function mapMetcalElementTable(
   table: Record<string, string | number>
 ): Partial<Record<CopperElementKey, number>> {

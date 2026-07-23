@@ -51,7 +51,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   // 导出计算书：显示“另存为”对话框，返回用户选择的路径或 null
   showSaveDialogForExport: (defaultFileName) => ipcRenderer.invoke('show-save-dialog-export', defaultFileName),
-  exportWorkbookToFile: (fileName, content) => ipcRenderer.invoke('export:save-workbook', { fileName, content }),
+  exportWorkbookToFile: (fileName, content, format) =>
+    ipcRenderer.invoke('export:save-workbook', { fileName, content, format }),
+  exportBinaryToFile: (fileName, buffer) => ipcRenderer.invoke('export:save-binary', { fileName, buffer }),
+  openFloTemplateFile: () => ipcRenderer.invoke('export:open-flo-template'),
   saveCopperCaseToDesktop: (fileName, content) => ipcRenderer.invoke('copper-case:save-desktop', { fileName, content }),
   // 离线一机一证：设备码 + 授权码（前缀 CINF-MET-LIC1.）
   license: {
@@ -60,4 +63,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     activate: (token) => ipcRenderer.invoke('license:activate', token),
   },
   getDeployInfo: () => ipcRenderer.invoke('get-deploy-info'),
+  windowChrome: {
+    get: () => ipcRenderer.invoke('window:get-chrome'),
+    setTitleBarOverlay: (payload) => ipcRenderer.invoke('window:set-titlebar-overlay', payload),
+  },
 })

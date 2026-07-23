@@ -1,5 +1,7 @@
+import type { CopperFuelMaterial } from './copperProcessCalc.ts'
 import type { CopperElementKey, CopperMaterialColumn } from './copperWorkflowCalc.ts'
 import { materialWaterWeight } from './copperWorkflowCalc.ts'
+import type { OxySideBlowConstraintConfig } from './copperConstraintConfig.ts'
 import {
   COPPER_TO_METCAL_ELEMENT,
   METCAL_BLEND_STREAM_NAME,
@@ -7,8 +9,8 @@ import {
 } from './metcalElementMap.ts'
 import {
   findStreamBlocks,
-  formatMetcalNumber,
   patchCompositionValue,
+  patchConstraintTargetByExpr,
   patchStreamFlow,
   type FloStreamBlock,
 } from './metcalFloBinary.ts'
@@ -27,8 +29,19 @@ export interface MetcalFloPatchResult {
   buffer: ArrayBuffer
   patchedFlows: string[]
   patchedElements: string[]
+  patchedConstraints: string[]
   skipped: string[]
   warnings: string[]
+}
+
+export interface MetcalFloExportInput {
+  blendDryFlowTH: number
+  blendElementRatios: Partial<Record<CopperElementKey, number>>
+  blendPhaseRatios?: Record<string, number>
+  solvents: CopperMaterialColumn[]
+  fuel: CopperFuelMaterial
+  airColumns: CopperMaterialColumn[]
+  constraintConfig: OxySideBlowConstraintConfig
 }
 
 function escapeCsvCell(value: string | number): string {
@@ -136,6 +149,130 @@ function findPatchableBlock(
   return candidates[0] ?? null
 }
 
+function patchMaterialStream(
+  data: Uint8Array,
+  blocks: FloStreamBlock[],
+  material: { name: string; weight: number; ratios: Partial<Record<CopperElementKey, number>> },
+  patchedFlows: string[],
+  patchedElements: string[],
+  skipped: string[],
+  warnings: string[]
+) {
+  const streamName = material.name.trim()
+  if (!streamName) return
+  const block = findPatchableBlock(blocks, streamName)
+  if (!block) {
+    skipped.push(`${streamName}：模板中未找到对应流块`)
+    return
+  }
+  const dryFlow = Math.max(0, material.weight)
+  if (block.flowTOffset != null && block.flowTLength != null) {
+    const ok = patchStreamFlow(data, block, dryFlow)
+    if (ok) patchedFlows.push(streamName)
+    else skipped.push(`${streamName}：流量字段长度不兼容`)
+  }
+  for (const [copperKey, value] of Object.entries(material.ratios)) {
+    const metcalKey = COPPER_TO_METCAL_ELEMENT[copperKey as CopperElementKey]
+    if (!metcalKey || value == null) continue
+    const entry = block.composition.find((c) => c.name === metcalKey)
+    if (!entry) continue
+    const ok = patchCompositionValue(data, entry, value)
+    if (ok) patchedElements.push(`${streamName}.${metcalKey}`)
+    else warnings.push(`${streamName}.${metcalKey}：成分字段长度不兼容`)
+  }
+}
+
+function patchGasStream(
+  data: Uint8Array,
+  blocks: FloStreamBlock[],
+  column: CopperMaterialColumn,
+  patchedFlows: string[],
+  patchedElements: string[],
+  skipped: string[],
+  warnings: string[]
+) {
+  const streamName = column.name.trim()
+  if (!streamName) return
+  const block = findPatchableBlock(blocks, streamName)
+  if (!block) {
+    skipped.push(`${streamName}：模板中未找到气体流块`)
+    return
+  }
+  const dryFlow = Math.max(0, column.weight)
+  if (block.flowTOffset != null && block.flowTLength != null) {
+    const ok = patchStreamFlow(data, block, dryFlow)
+    if (ok) patchedFlows.push(streamName)
+    else skipped.push(`${streamName}：气体流量字段长度不兼容`)
+  }
+  const gasMap: Array<[string, number]> = [
+    ['O2', column.ratios['O(氧)'] ?? 0],
+    ['N2', column.ratios['N(氮)'] ?? 0],
+    ['H2O', column.moisture ?? 0],
+  ]
+  for (const [metcalKey, value] of gasMap) {
+    const entry = block.composition.find((c) => c.name === metcalKey)
+    if (!entry) continue
+    const ok = patchCompositionValue(data, entry, value)
+    if (ok) patchedElements.push(`${streamName}.${metcalKey}`)
+    else warnings.push(`${streamName}.${metcalKey}：气体成分字段长度不兼容`)
+  }
+}
+
+function patchBlendStream(
+  data: Uint8Array,
+  blocks: FloStreamBlock[],
+  input: Pick<MetcalFloExportInput, 'blendDryFlowTH' | 'blendElementRatios' | 'blendPhaseRatios'>,
+  patchedFlows: string[],
+  patchedElements: string[],
+  skipped: string[],
+  warnings: string[]
+) {
+  const block = findPatchableBlock(blocks, METCAL_BLEND_STREAM_NAME)
+  if (!block) {
+    skipped.push(`${METCAL_BLEND_STREAM_NAME}：模板中未找到混料输出流块`)
+    return
+  }
+  if (block.flowTOffset != null && block.flowTLength != null) {
+    const ok = patchStreamFlow(data, block, Math.max(0, input.blendDryFlowTH))
+    if (ok) patchedFlows.push(METCAL_BLEND_STREAM_NAME)
+    else skipped.push(`${METCAL_BLEND_STREAM_NAME}：流量字段长度不兼容`)
+  }
+  for (const [copperKey, value] of Object.entries(input.blendElementRatios)) {
+    const metcalKey = COPPER_TO_METCAL_ELEMENT[copperKey as CopperElementKey]
+    if (!metcalKey || value == null) continue
+    const entry = block.composition.find((c) => c.name === metcalKey)
+    if (!entry) continue
+    const ok = patchCompositionValue(data, entry, value)
+    if (ok) patchedElements.push(`${METCAL_BLEND_STREAM_NAME}.${metcalKey}`)
+    else warnings.push(`${METCAL_BLEND_STREAM_NAME}.${metcalKey}：元素字段长度不兼容`)
+  }
+  if (input.blendPhaseRatios) {
+    for (const [phaseName, value] of Object.entries(input.blendPhaseRatios)) {
+      if (value == null) continue
+      const entry = block.composition.find((c) => c.name === phaseName)
+      if (!entry) continue
+      const ok = patchCompositionValue(data, entry, value)
+      if (ok) patchedElements.push(`${METCAL_BLEND_STREAM_NAME}.${phaseName}`)
+      else warnings.push(`${METCAL_BLEND_STREAM_NAME}.${phaseName}：物相字段长度不兼容`)
+    }
+  }
+}
+
+function patchConstraintTargets(
+  data: Uint8Array,
+  config: OxySideBlowConstraintConfig,
+  patchedConstraints: string[],
+  warnings: string[]
+) {
+  for (const constraint of config.customConstraints) {
+    const expr = constraint.expr?.trim()
+    if (!expr || typeof constraint.target !== 'number' || !Number.isFinite(constraint.target)) continue
+    const ok = patchConstraintTargetByExpr(data, expr, constraint.target)
+    if (ok) patchedConstraints.push(expr)
+    else warnings.push(`约束目标未能补丁：${expr}`)
+  }
+}
+
 export function patchMetcalFloTemplate(
   templateBuffer: ArrayBuffer,
   rawMaterials: CopperMaterialColumn[]
@@ -143,6 +280,7 @@ export function patchMetcalFloTemplate(
   const warnings: string[] = []
   const patchedFlows: string[] = []
   const patchedElements: string[] = []
+  const patchedConstraints: string[] = []
   const skipped: string[] = []
 
   const buffer = templateBuffer.slice(0)
@@ -152,33 +290,7 @@ export function patchMetcalFloTemplate(
 
   for (const material of rawMaterials) {
     if (material.kind !== 'raw' || !material.name.trim()) continue
-    const streamName = material.name.trim()
-    const block = findPatchableBlock(blocks, streamName)
-    if (!block) {
-      skipped.push(`${streamName}：模板中未找到对应流块`)
-      continue
-    }
-
-    const dryFlow = Math.max(0, material.weight)
-    if (block.flowTOffset != null && block.flowTLength != null) {
-      const ok = patchStreamFlow(data, block, dryFlow)
-      if (ok) patchedFlows.push(streamName)
-      else {
-        skipped.push(`${streamName}：流量字段长度不兼容，需用 CSV 桥接表手动填写`)
-      }
-    }
-
-    for (const [copperKey, value] of Object.entries(material.ratios)) {
-      const metcalKey = COPPER_TO_METCAL_ELEMENT[copperKey as CopperElementKey]
-      if (!metcalKey || value == null) continue
-      const entry = block.composition.find((c) => c.name === metcalKey)
-      if (!entry) continue
-      const ok = patchCompositionValue(data, entry, value)
-      if (ok) patchedElements.push(`${streamName}.${metcalKey}`)
-      else {
-        warnings.push(`${streamName}.${metcalKey}：成分字段长度不兼容`)
-      }
-    }
+    patchMaterialStream(data, blocks, material, patchedFlows, patchedElements, skipped, warnings)
   }
 
   if (!patchedFlows.length && !patchedElements.length) {
@@ -189,6 +301,53 @@ export function patchMetcalFloTemplate(
     buffer,
     patchedFlows,
     patchedElements,
+    patchedConstraints,
+    skipped,
+    warnings: [...warnings, ...extraction.warnings],
+  }
+}
+
+export function patchMetcalFloFromWorkflow(
+  templateBuffer: ArrayBuffer,
+  input: MetcalFloExportInput
+): MetcalFloPatchResult {
+  const warnings: string[] = []
+  const patchedFlows: string[] = []
+  const patchedElements: string[] = []
+  const patchedConstraints: string[] = []
+  const skipped: string[] = []
+
+  const buffer = templateBuffer.slice(0)
+  const data = new Uint8Array(buffer)
+  const blocks = findStreamBlocks(buffer)
+  const extraction = extractMetcalFloMix(buffer)
+
+  patchBlendStream(data, blocks, input, patchedFlows, patchedElements, skipped, warnings)
+
+  for (const solvent of input.solvents) {
+    if (!solvent.name.trim()) continue
+    patchMaterialStream(data, blocks, solvent, patchedFlows, patchedElements, skipped, warnings)
+  }
+
+  if (input.fuel.name.trim()) {
+    patchMaterialStream(data, blocks, input.fuel, patchedFlows, patchedElements, skipped, warnings)
+  }
+
+  for (const airColumn of input.airColumns) {
+    patchGasStream(data, blocks, airColumn, patchedFlows, patchedElements, skipped, warnings)
+  }
+
+  patchConstraintTargets(data, input.constraintConfig, patchedConstraints, warnings)
+
+  if (!patchedFlows.length && !patchedElements.length && !patchedConstraints.length) {
+    warnings.push('未能自动改写任何模板字段，请检查模板流名是否与案例一致。')
+  }
+
+  return {
+    buffer,
+    patchedFlows,
+    patchedElements,
+    patchedConstraints,
     skipped,
     warnings: [...warnings, ...extraction.warnings],
   }

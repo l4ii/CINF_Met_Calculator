@@ -1,67 +1,78 @@
 import { useEffect, useState } from 'react'
-import { btnPrimary, btnSecondary, hintText, inputBase, sectionTitle } from '../../theme/uiTheme'
+import { btnPrimary, btnSecondary, hintText, sectionTitle } from '../../theme/uiTheme'
 
+/** 导出内容分组（勾选后展开为多张具体工作表） */
+export type CopperBatchExportGroupKey = 'input' | 'output' | 'heatBalance'
+
+/** 具体工作表键（内部展开用） */
 export type CopperBatchExportSheetKey =
   | 'element'
+  | 'materialPhase'
   | 'inputPhase'
+  | 'blendResult'
   | 'outputPhase'
   | 'outputElement'
-  | 'materialPhase'
   | 'heatBalance'
 
+export type CopperBatchExportGroupOption = {
+  key: CopperBatchExportGroupKey
+  label: string
+  /** 分组说明：勾选后实际包含哪些表 */
+  description: string
+  available: boolean
+  /** 勾选该分组时实际导出的表 */
+  sheetKeys: CopperBatchExportSheetKey[]
+}
+
+/** @deprecated 使用 CopperBatchExportGroupOption */
 export type CopperBatchExportSheetOption = {
   key: CopperBatchExportSheetKey
   label: string
   available: boolean
 }
 
-const DEFAULT_SELECTION: Record<CopperBatchExportSheetKey, boolean> = {
-  element: true,
-  inputPhase: true,
-  outputPhase: true,
-  outputElement: true,
-  materialPhase: true,
+const DEFAULT_SELECTION: Record<CopperBatchExportGroupKey, boolean> = {
+  input: true,
+  output: true,
   heatBalance: true,
 }
 
 export function CopperBatchExportDialog({
   darkMode,
   open,
-  caseName,
-  sheetOptions,
+  groupOptions,
   onCancel,
   onConfirm,
 }: {
   darkMode: boolean
   open: boolean
-  caseName: string
-  sheetOptions: CopperBatchExportSheetOption[]
+  groupOptions: CopperBatchExportGroupOption[]
   onCancel: () => void
-  onConfirm: (selected: CopperBatchExportSheetKey[], fileBaseName: string) => void
+  onConfirm: (selected: CopperBatchExportSheetKey[]) => void
 }) {
-  const [fileBaseName, setFileBaseName] = useState(caseName)
-  const [selected, setSelected] = useState<Record<CopperBatchExportSheetKey, boolean>>({ ...DEFAULT_SELECTION })
+  const [selected, setSelected] = useState<Record<CopperBatchExportGroupKey, boolean>>({ ...DEFAULT_SELECTION })
 
   useEffect(() => {
     if (!open) return
-    setFileBaseName(caseName)
     const next = { ...DEFAULT_SELECTION }
-    for (const option of sheetOptions) {
+    for (const option of groupOptions) {
       next[option.key] = option.available
     }
     setSelected(next)
-  }, [caseName, open, sheetOptions])
+  }, [open, groupOptions])
 
   if (!open) return null
 
-  const toggle = (key: CopperBatchExportSheetKey) => {
-    const option = sheetOptions.find((item) => item.key === key)
+  const toggle = (key: CopperBatchExportGroupKey) => {
+    const option = groupOptions.find((item) => item.key === key)
     if (!option?.available) return
     setSelected((prev) => ({ ...prev, [key]: !prev[key] }))
   }
 
-  const selectedKeys = sheetOptions.filter((option) => option.available && selected[option.key]).map((option) => option.key)
-  const canExport = selectedKeys.length > 0 && fileBaseName.trim().length > 0
+  const selectedSheetKeys = groupOptions
+    .filter((option) => option.available && selected[option.key])
+    .flatMap((option) => option.sheetKeys)
+  const canExport = selectedSheetKeys.length > 0
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4" role="presentation">
@@ -87,21 +98,17 @@ export function CopperBatchExportDialog({
           <h3 id="batch-export-title" className={sectionTitle(darkMode)}>
             导出 Excel
           </h3>
-          <p className={`${hintText(darkMode)} mt-1 text-xs`}>勾选要导出的表格，文件名可编辑。</p>
+          <p className={`${hintText(darkMode)} mt-1 text-xs`}>
+            勾选要导出的内容，统一导出为 Excel 工作簿（.xlsx）。文件名可在系统另存为对话框中修改。
+          </p>
         </div>
         <div className="space-y-4 px-4 py-4">
-          <label className="block">
-            <span className={`mb-1 block text-xs font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-              文件名（案例名称）
-            </span>
-            <input className={`${inputBase(darkMode)} w-full`} value={fileBaseName} onChange={(event) => setFileBaseName(event.target.value)} />
-          </label>
           <div className="space-y-2">
             <div className={`text-xs font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>导出内容</div>
-            {sheetOptions.map((option) => (
+            {groupOptions.map((option) => (
               <label
                 key={option.key}
-                className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm ${
+                className={`flex cursor-pointer items-start gap-2 rounded-md border px-3 py-2.5 text-sm ${
                   option.available
                     ? darkMode
                       ? 'border-gray-600 hover:bg-gray-700/40'
@@ -113,13 +120,18 @@ export function CopperBatchExportDialog({
               >
                 <input
                   type="checkbox"
-                  className="h-4 w-4"
+                  className="mt-0.5 h-4 w-4 shrink-0"
                   checked={Boolean(selected[option.key])}
                   disabled={!option.available}
                   onChange={() => toggle(option.key)}
                 />
-                <span>{option.label}</span>
-                {!option.available && <span className="text-xs">（暂无数据）</span>}
+                <span className="min-w-0">
+                  <span className="block font-medium">{option.label}</span>
+                  <span className={`mt-0.5 block text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                    {option.description}
+                    {!option.available ? '（暂无数据）' : ''}
+                  </span>
+                </span>
               </label>
             ))}
           </div>
@@ -132,7 +144,7 @@ export function CopperBatchExportDialog({
             type="button"
             className={btnPrimary(darkMode)}
             disabled={!canExport}
-            onClick={() => onConfirm(selectedKeys, fileBaseName.trim())}
+            onClick={() => onConfirm(selectedSheetKeys)}
           >
             导出
           </button>

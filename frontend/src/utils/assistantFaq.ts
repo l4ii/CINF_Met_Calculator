@@ -1,6 +1,11 @@
 import type { AssistantWorkspaceSnapshot } from '../context/AssistantContext'
 import { APP_NAME_EN, APP_NAME_ZH, APP_ORG_NAME_EN } from '../constants/appCopy'
 import { SMELT_TYPES } from '../types'
+import {
+  buildHeatAuxiliaryExplainReply,
+  findHeatAuxiliaryExplainItem,
+  isHeatAuxiliaryExplainQuery,
+} from './copperHeatAuxiliaryExplain.ts'
 
 function normalize(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, ' ')
@@ -65,6 +70,16 @@ export function tryRuleBasedAssistantReply(
       : `Expand smelting categories on the left, then choose a Pyrometallurgy or Hydrometallurgy method. Available calculation sheets appear in the main pane. Settings and About live in the sidebar footer area.`
   }
 
+  // 热平衡相关参数算法说明（无本地 AI 也可回复；有快照时附带当前值）
+  if (zh && isHeatAuxiliaryExplainQuery(raw)) {
+    const focus = findHeatAuxiliaryExplainItem(raw)
+    return buildHeatAuxiliaryExplainReply({
+      focusKey: focus?.key ?? null,
+      live: snapshot?.heatAuxiliaryParams ?? null,
+      trace: snapshot?.heatAuxiliaryTrace ?? null,
+    })
+  }
+
   if (
     zh
       ? /配料|产出|热平衡|炉型|sheet|页签/.test(raw)
@@ -72,7 +87,7 @@ export function tryRuleBasedAssistantReply(
   ) {
     const lines = catalog.map((c) => `• ${c.name}（${c.id}）`).join('\n')
     return zh
-      ? `主内容常见页签如下：\n${lines}\n在配料页填写原料与熔剂等后，可到产出页查看元素分配相关结果。`
+      ? `主内容常见页签如下：\n${lines}\n在配料页填写原料与熔剂等后，可到产出页查看元素分配相关结果。\n若询问「热平衡相关参数」如何计算，可直接说明指标名称（如总尘率、机械尘）。`
       : `Main sheets:\n${lines}\nFill raw batching inputs first, then review outputs on the Product sheet.`
   }
 

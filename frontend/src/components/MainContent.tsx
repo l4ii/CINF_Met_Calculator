@@ -4,7 +4,6 @@ import ElementDistributionFab from './ElementDistributionFab'
 import ErrorBoundary from './ErrorBoundary'
 import BackIconButton from './BackIconButton'
 import { cardBase, descText } from '../theme/uiTheme'
-import { appSubtitleForLang, appTitleForLang } from '../constants/appCopy'
 import { useAssistantSnapshotOptional } from '../context/AssistantContext'
 import { useCalcOptional } from '../context/CalcContext'
 
@@ -51,8 +50,6 @@ export default function MainContent({
   onBackToHome,
 }: MainContentProps) {
   const isEn = language === 'en'
-  const appTitle = appTitleForLang(language)
-  const appSubtitle = appSubtitleForLang(language)
   const { setAssistantSnapshot } = useAssistantSnapshotOptional()
   const calcCtx = useCalcOptional()
   const [copperCaseTitleDraft, setCopperCaseTitleDraft] = useState('')
@@ -90,7 +87,7 @@ export default function MainContent({
   useEffect(() => {
     const mats = calcCtx?.materials ?? []
     const preview = mats.slice(0, 12).map((m) => m.name)
-    setAssistantSnapshot({
+    setAssistantSnapshot((prev) => ({
       currentView,
       language,
       aboutDepartment: aboutDepartment ?? null,
@@ -106,7 +103,9 @@ export default function MainContent({
       mixTotalWeight: calcCtx?.mixResult?.totalWeight ?? null,
       totalCostPerHour: calcCtx?.totalCost ?? 0,
       materialsPreview: preview,
-    })
+      heatAuxiliaryParams: prev?.heatAuxiliaryParams ?? null,
+      heatAuxiliaryTrace: prev?.heatAuxiliaryTrace ?? null,
+    }))
   }, [
     activeSheet,
     aboutDepartment,
@@ -219,9 +218,7 @@ export default function MainContent({
 
   return (
     <div className={`flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`}>
-      <div className="flex-shrink-0 px-3 pt-2 pb-1 sm:px-4 2xl:px-6">
-        <h1 className={`text-2xl font-bold mb-1 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{appTitle}</h1>
-        <p className={`text-sm mb-4 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{appSubtitle}</p>
+      <div className="flex-shrink-0 px-3 pt-3 pb-1 sm:px-4 2xl:px-6">
         <div className="mb-1 flex flex-wrap items-center gap-2">
           <BackIconButton label={headerBackLabel} darkMode={darkMode} onClick={handleHeaderBack} />
           {isCopperSideBlown && activeSheet !== 'raw_material' && hasActiveCopperCase ? (
@@ -257,7 +254,7 @@ export default function MainContent({
               }}
             />
           ) : (
-            <h2 className={`text-lg font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{selectedMethodDisplayName}</h2>
+            <h1 className={`text-lg font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{selectedMethodDisplayName}</h1>
           )}
         </div>
         <div className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{selectedPathLabel}</div>

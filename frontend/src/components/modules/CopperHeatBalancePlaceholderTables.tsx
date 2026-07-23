@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { BATCH_TABLE_MASS_COL_WIDTH, BATCH_TABLE_PCT_COL_WIDTH } from '../../utils/copperBatchTableLayout'
 import {
   copperHeatPhaseMolarMass,
@@ -9,11 +9,16 @@ import {
   type HeatReactionTerm,
 } from '../../utils/copperHeatBalance'
 import {
-  calculateCopperHeatAuxiliaryParams,
+  calculateCopperHeatAuxiliaryWithTrace,
   formatAuxiliaryParam,
 } from '../../utils/copperHeatAuxiliaryParams.ts'
+import {
+  HEAT_AUXILIARY_EXPLAIN_ITEMS,
+  type HeatAuxiliaryParamKey,
+} from '../../utils/copperHeatAuxiliaryExplain.ts'
 import type { OxyConstraintSolverResult } from '../../utils/copperConstraintSolver.ts'
 import type { CopperMaterialColumn } from '../../utils/copperWorkflowCalc.ts'
+import { useAssistantContext } from '../../context/AssistantContext'
 import { BatchTableNumericReadonly } from './BatchTableNumericCell'
 
 type HeatBalanceResultTab =
@@ -896,23 +901,42 @@ function HeatAuxiliaryMetric({
   label,
   value,
   unit,
+  onAskHow,
 }: {
   darkMode: boolean
   label: string
   value: string
   unit: string
+  onAskHow: () => void
 }) {
   return (
     <div
-      className={`min-w-0 rounded-md border px-2 py-1.5 ${
+      className={`min-w-0 rounded-md border px-2.5 py-2 ${
         darkMode ? 'border-gray-600 bg-gray-800/30' : 'border-gray-200 bg-gray-50/70'
       }`}
     >
-      <div className={`truncate text-xs ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-        {label}
-        <span className={`ml-1 ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>({unit})</span>
+      <div className="flex items-start justify-between gap-1">
+        <div className={`min-w-0 flex-1 text-sm ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+          <span className="break-words">{label}</span>
+          <span className={`ml-1 ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>({unit})</span>
+        </div>
+        <button
+          type="button"
+          onClick={onAskHow}
+          className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-xs font-semibold leading-none transition-colors ${
+            darkMode
+              ? 'border-gray-500 text-gray-200 hover:border-blue-400 hover:bg-blue-950/50 hover:text-blue-200'
+              : 'border-gray-300 text-gray-600 hover:border-blue-500 hover:bg-blue-50 hover:text-blue-700'
+          }`}
+          title={`${label}如何计算？`}
+          aria-label={`${label}如何计算？`}
+        >
+          ?
+        </button>
       </div>
-      <div className="mt-0.5 truncate font-mono text-sm">{value}</div>
+      <div className={`mt-1 truncate font-mono text-base ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>
+        {value}
+      </div>
     </div>
   )
 }
@@ -928,9 +952,11 @@ function HeatAuxiliaryParamsStrip({
   productResult: OxyConstraintSolverResult | null | undefined
   airColumns: CopperMaterialColumn[] | null | undefined
 }) {
-  const params = useMemo(
+  const { askAssistant, setAssistantSnapshot } = useAssistantContext()
+
+  const { params, trace } = useMemo(
     () =>
-      calculateCopperHeatAuxiliaryParams({
+      calculateCopperHeatAuxiliaryWithTrace({
         concentrateMassTh,
         productResult,
         airColumns,
@@ -938,28 +964,50 @@ function HeatAuxiliaryParamsStrip({
     [airColumns, concentrateMassTh, productResult]
   )
 
-  const items: Array<{ label: string; unit: string; value: string }> = [
-    { label: '富氧风浓度', unit: '%', value: formatAuxiliaryParam(params.oxygenEnrichmentPct, 2) },
-    { label: '熔炼烟气含尘', unit: 'g/m³', value: formatAuxiliaryParam(params.flueDustContentGm3, 2) },
-    { label: '熔炼总尘率', unit: '%', value: formatAuxiliaryParam(params.totalDustRatePct, 2) },
-    { label: '熔炼烟气总含S', unit: 't/a', value: formatAuxiliaryParam(params.flueSulfurAnnualTa, 2) },
-    { label: '烟气含As', unit: 'g/m³', value: formatAuxiliaryParam(params.flueAsContentGm3, 2) },
-    { label: '机械尘', unit: '%', value: formatAuxiliaryParam(params.mechanicalDustPct, 2) },
-  ]
+  useEffect(() => {
+    setAssistantSnapshot((prev) => ({
+      ...(prev ?? {
+        currentView: 'module' as const,
+        aboutDepartment: null,
+        language: 'zh' as const,
+        selectedMethod: null,
+        activeSheet: 'cu_smelting' as const,
+        materialCount: 0,
+        mixTotalWeight: null,
+        totalCostPerHour: 0,
+        materialsPreview: [],
+      }),
+      heatAuxiliaryParams: params,
+      heatAuxiliaryTrace: trace,
+    }))
+  }, [params, trace, setAssistantSnapshot])
+
+  const items: Array<{ key: HeatAuxiliaryParamKey; label: string; unit: string; value: string }> =
+    HEAT_AUXILIARY_EXPLAIN_ITEMS.map((item) => ({
+      key: item.key,
+      label: item.label,
+      unit: item.unit,
+      value: formatAuxiliaryParam(params[item.key], 2),
+    }))
+
+  const askHowCalculated = (label: string) => {
+    askAssistant(`${label}如何计算？`)
+  }
 
   return (
     <div className={`rounded-lg border p-3 ${darkMode ? 'border-gray-600 bg-gray-900/40' : 'border-gray-200 bg-white'}`}>
-      <h4 className={`mb-2 text-sm font-medium ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>
-        热平衡关键参数
+      <h4 className={`mb-3 text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>
+        热平衡相关参数
       </h4>
-      <div className="grid grid-cols-6 gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
         {items.map((item) => (
           <HeatAuxiliaryMetric
-            key={item.label}
+            key={item.key}
             darkMode={darkMode}
             label={item.label}
             value={item.value}
             unit={item.unit}
+            onAskHow={() => askHowCalculated(item.label)}
           />
         ))}
       </div>

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.7.3",
+    "exceljs": "^4.4.0",
     "katex": "^0.16.45",
     "met_calculator": "file:..",
     "react": "^18.2.0",

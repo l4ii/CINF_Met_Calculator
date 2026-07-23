@@ -188,3 +188,62 @@ export function patchCompositionValue(
   if (!formatted) return false
   return writePascalString(data, entry.valueOffset, formatted)
 }
+
+/** 在二进制中按约束表达式定位并等长补丁目标数值 */
+export function patchConstraintTargetByExpr(
+  data: Uint8Array,
+  expr: string,
+  target: number
+): boolean {
+  const exprBytes = new TextEncoder().encode(expr)
+  for (let i = 0; i <= data.length - exprBytes.length; i += 1) {
+    let matched = true
+    for (let j = 0; j < exprBytes.length; j += 1) {
+      if (data[i + j] !== exprBytes[j]) {
+        matched = false
+        break
+      }
+    }
+    if (!matched) continue
+    const scanEnd = Math.min(data.length, i + exprBytes.length + 320)
+    for (let pos = i + exprBytes.length; pos < scanEnd; pos += 1) {
+      const len = data[pos]
+      if (len < 4 || len > 48) continue
+      const start = pos + 1
+      if (start + len > data.length) break
+      const text = new TextDecoder('utf-8', { fatal: false }).decode(data.subarray(start, start + len))
+      if (!/^-?\d+(\.\d+)?$/.test(text)) continue
+      const formatted = formatMetcalNumber(target, len)
+      if (formatted && writePascalString(data, pos, formatted)) return true
+    }
+  }
+  return false
+}
+
+/** 读取 Flo 中紧跟某约束表达式后的数值目标（等长 Pascal 数字串） */
+export function readConstraintTargetByExpr(data: Uint8Array | ArrayBuffer, expr: string): number | null {
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data)
+  const exprBytes = new TextEncoder().encode(expr)
+  for (let i = 0; i <= bytes.length - exprBytes.length; i += 1) {
+    let matched = true
+    for (let j = 0; j < exprBytes.length; j += 1) {
+      if (bytes[i + j] !== exprBytes[j]) {
+        matched = false
+        break
+      }
+    }
+    if (!matched) continue
+    const scanEnd = Math.min(bytes.length, i + exprBytes.length + 320)
+    for (let pos = i + exprBytes.length; pos < scanEnd; pos += 1) {
+      const len = bytes[pos]
+      if (len < 1 || len > 48) continue
+      const start = pos + 1
+      if (start + len > bytes.length) break
+      const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(start, start + len))
+      if (!/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(text)) continue
+      const num = Number.parseFloat(text)
+      if (Number.isFinite(num)) return num
+    }
+  }
+  return null
+}

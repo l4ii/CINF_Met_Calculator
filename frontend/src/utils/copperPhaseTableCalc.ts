@@ -41,10 +41,11 @@ export const INPUT_PHASE_EXTRA_DISPLAY: Record<'Other', string> = {
   Other: 'Other',
 }
 
-/** Storage key -> display label. Gas rows use O2/N2 to avoid colliding with element O/N. */
+/** Storage key -> display label. */
 export function phaseStorageKeyToDisplayLabel(key: string): string {
-  if (key === 'O2') return 'O2'
-  if (key === 'N2') return 'N2'
+  if (key === 'O2') return 'O₂'
+  if (key === 'N2') return 'N₂'
+  if (key === 'H2O') return 'H₂O'
   const inputDisplay = INPUT_PHASE_DISPLAY[key as CopperPhaseAssignmentKey]
   if (inputDisplay) return inputDisplay
   const extraDisplay = INPUT_PHASE_EXTRA_DISPLAY[key as 'Other']

@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type DragEvent as ReactDragEvent,
+  type ChangeEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -18,13 +19,21 @@ import { APP_NAME_ZH } from '../../constants/appCopy'
 import { btnPrimary, btnSecondary, cardBase, cardCompact, hintText, inputBase, inputSm, sectionTitle } from '../../theme/uiTheme'
 import {
   buildCopperBatchExportFilename,
-  buildCopperBatchWorkbookHtml,
-  getCopperStageExportName,
   saveCopperBatchExcelWorkbook,
   type CopperBatchExportColumn,
+  type CopperBatchExportFormat,
   type CopperBatchExportRow,
+  type CopperBatchWorkbookPayload,
   type CopperBatchWorkbookSheet,
 } from '../../utils/copperBatchExport'
+import { buildHeatBalanceExportSheets } from '../../utils/copperHeatBalanceExport.ts'
+import { buildMetcalFloExportFilename, saveMetcalFloFile } from '../../utils/metcalFloExport.ts'
+import { patchMetcalFloFromWorkflow } from '../../utils/metcalFloBridge.ts'
+import {
+  buildMetcalFloImportBundle,
+  buildMetcalImportedPhaseState,
+  type MetcalFloImportBundle,
+} from '../../utils/metcalFloMixExtract.ts'
 import {
   batchElementTableWidth,
   batchPhaseTableWidth,
@@ -69,9 +78,10 @@ import {
 } from './CopperProcessParametersPanel'
 import {
   CopperBatchExportDialog,
+  type CopperBatchExportGroupOption,
   type CopperBatchExportSheetKey,
-  type CopperBatchExportSheetOption,
 } from './CopperBatchExportDialog'
+import { MetcalFloImportPanel } from './MetcalFloImportPanel'
 import { WorkflowContextFloatingHint } from './WorkflowContextHint'
 import { BatchTableNumericReadonly } from './BatchTableNumericCell'
 import { batchTableHasResult, formatBatchTableDisplay, formatBatchTableTooltip } from '../../utils/batchTableNumeric'
@@ -2162,8 +2172,22 @@ function sanitizeCaseFileName(value: string) {
   return value.trim().replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, '_') || '铜冶炼案例'
 }
 
+const COPPER_CASE_FILE_EXT = '.metcal'
+
+function isCopperCaseFileName(fileName: string) {
+  return fileName.trim().toLowerCase().endsWith(COPPER_CASE_FILE_EXT)
+}
+
+function isMetcalFloFileName(fileName: string) {
+  return fileName.trim().toLowerCase().endsWith('.flo')
+}
+
+function isWorkspaceImportFileName(fileName: string) {
+  return isCopperCaseFileName(fileName) || isMetcalFloFileName(fileName)
+}
+
 function buildCopperCaseFileName(record: CopperCaseRecord) {
-  return `${sanitizeCaseFileName(record.name)}.metcal-copper-case.json`
+  return `${sanitizeCaseFileName(record.name)}${COPPER_CASE_FILE_EXT}`
 }
 
 function buildCopperCaseFileText(record: CopperCaseRecord) {
@@ -2859,18 +2883,48 @@ type WorkflowMessageState = {
 } | null
 
 function getElectronExportWorkbookSaver():
-  | ((fileName: string, content: string) => Promise<{ ok: boolean; cancelled?: boolean; error?: string; filePath?: string }>)
+  | ((fileName: string, payload: CopperBatchWorkbookPayload) => Promise<{ ok: boolean; cancelled?: boolean; error?: string; filePath?: string }>)
   | undefined {
-  return (
+  const exportWorkbookToFile = (
     window as {
       electronAPI?: {
         exportWorkbookToFile?: (
           fileName: string,
-          content: string
+          content: string | ArrayBuffer,
+          format?: CopperBatchExportFormat
         ) => Promise<{ ok: boolean; cancelled?: boolean; error?: string; filePath?: string }>
       }
     }
   ).electronAPI?.exportWorkbookToFile
+  if (!exportWorkbookToFile) return undefined
+  return async (fileName, payload) => exportWorkbookToFile(fileName, payload.content, payload.format)
+}
+
+function getElectronFloTemplateOpener():
+  | (() => Promise<{ ok: boolean; cancelled?: boolean; error?: string; buffer?: ArrayBuffer }>)
+  | undefined {
+  return (
+    window as {
+      electronAPI?: {
+        openFloTemplateFile?: () => Promise<{ ok: boolean; cancelled?: boolean; error?: string; buffer?: ArrayBuffer }>
+      }
+    }
+  ).electronAPI?.openFloTemplateFile
+}
+
+function getElectronFloSaver():
+  | ((fileName: string, buffer: ArrayBuffer) => Promise<{ ok: boolean; cancelled?: boolean; error?: string; filePath?: string }>)
+  | undefined {
+  return (
+    window as {
+      electronAPI?: {
+        exportBinaryToFile?: (
+          fileName: string,
+          buffer: ArrayBuffer
+        ) => Promise<{ ok: boolean; cancelled?: boolean; error?: string; filePath?: string }>
+      }
+    }
+  ).electronAPI?.exportBinaryToFile
 }
 
 function workflowToastStyles(darkMode: boolean, tone: WorkflowMessageTone) {
@@ -3040,6 +3094,11 @@ export default function CopperWorkflow({
     })
   }, [])
   const [showBatchExportDialog, setShowBatchExportDialog] = useState(false)
+  const floTemplateInputRef = useRef<HTMLInputElement>(null)
+  const [floImportPreview, setFloImportPreview] = useState<{
+    bundle: MetcalFloImportBundle
+    fileName: string
+  } | null>(null)
 
   const [elementTableView, setElementTableView] = useState<CopperElementDisplayMode>('compound')
   const [phaseElementView, setPhaseElementView] = useState<CopperElementDisplayMode>('compound')
@@ -4139,18 +4198,19 @@ export default function CopperWorkflow({
     return { columns, rows }
   }
 
-  const buildPhaseExportTable = (titlePrefix: string) => {
-    const inputColumns: CopperBatchExportColumn[] = inputPhaseColumnData.map((column) => ({
+  const buildPhaseExportTable = () => {
+    const inputPhaseColumns = inputPhaseColumnData.filter((column) => column.kind !== 'blend')
+    const inputColumns: CopperBatchExportColumn[] = inputPhaseColumns.map((column) => ({
       header: column.header,
       subHeader: column.subHeader,
     }))
     const gasInputRowKeys = ['O2', 'N2', 'H2O'].filter((key) =>
-      inputPhaseColumnData.some((column) => column.kind === 'oxygen' && getPhaseExportValue(column, key) !== '')
+      inputPhaseColumns.some((column) => column.kind === 'oxygen' && getPhaseExportValue(column, key) !== '')
     )
     const inputRowKeys = [...new Set([...gasInputRowKeys, ...phaseTableRowKeys.filter((key) =>
-      inputPhaseColumnData.some((column) => {
+      inputPhaseColumns.some((column) => {
         if (column.kind === 'product') return false
-        if (key === 'O2' || key === 'N2' || key === 'H2O') return column.kind === 'oxygen' || column.kind === 'blend'
+        if (key === 'O2' || key === 'N2' || key === 'H2O') return column.kind === 'oxygen'
         return column.kind !== 'oxygen' && getPhaseExportValue(column, key) !== ''
       })
     )])]
@@ -4161,28 +4221,27 @@ export default function CopperWorkflow({
     }
     const phaseExportWaterWeight = (column: PhaseTableColumn) => {
       if (column.kind === 'oxygen') return column.waterWeight ?? 0
-      if (column.kind === 'blend') return column.waterWeight ?? furnaceBlendWaterWeight
       return column.waterWeight ?? 0
     }
     const inputRows: CopperBatchExportRow[] = [
       {
         label: 't/h（干基）',
-        values: inputPhaseColumnData.map((column) => formatTableNumber(phaseExportDryWeight(column))),
+        values: inputPhaseColumns.map((column) => formatTableNumber(phaseExportDryWeight(column))),
       },
       {
         label: '含水 t/h',
-        values: inputPhaseColumnData.map((column) => {
+        values: inputPhaseColumns.map((column) => {
           const water = phaseExportWaterWeight(column)
           return water > 0 ? formatTableNumber(water) : ''
         }),
       },
       ...inputRowKeys.map((key) => ({
         label: phaseStorageKeyToDisplayLabel(key),
-        values: inputPhaseColumnData.map((column) => inputValue(column, key)),
+        values: inputPhaseColumns.map((column) => inputValue(column, key)),
       })),
       {
         label: '合计',
-        values: inputPhaseColumnData.map((column) =>
+        values: inputPhaseColumns.map((column) =>
           column.phaseReady === false ? '' : formatTableNumber(phaseExportColumnTotal(column))
         ),
       },
@@ -4210,12 +4269,66 @@ export default function CopperWorkflow({
     ]
 
     return {
-      inputSheet: { title: `${titlePrefix} 投入-物料物相表`, columns: inputColumns, rows: inputRows },
-      outputSheet: { title: `${titlePrefix} 产出-产物物相表`, columns: outputColumns, rows: outputRows },
+      inputSheet: { title: '投入-物料物相表', columns: inputColumns, rows: inputRows },
+      outputSheet: { title: '产出-产物物相表', columns: outputColumns, rows: outputRows },
     } satisfies { inputSheet: CopperBatchWorkbookSheet; outputSheet: CopperBatchWorkbookSheet }
   }
 
-  const buildProductElementExportTable = (titlePrefix: string): CopperBatchWorkbookSheet => {
+  const buildBlendResultExportSheets = (): CopperBatchWorkbookSheet[] => {
+    const dryWeight = rawMaterials.reduce((sum, material) => sum + Math.max(0, material.weight), 0)
+    const waterWeight = rawConcentrateWaterWeight
+    const wetWeight = dryWeight + waterWeight
+    const materialTotal = formatTableNumber(
+      calculateKnownTotal(rawBlend.ratios) + (rawBlend.ratios['Other(其他)'] ?? 0)
+    )
+    const elementSheet: CopperBatchWorkbookSheet = {
+      title: '混料结果-元素表',
+      columns: [{ header: '混料', subHeader: '混料' }],
+      rows: [
+        { label: 't/h（干基）', values: [formatTableNumber(dryWeight)] },
+        { label: '含水 t/h', values: [formatTableNumber(waterWeight)] },
+        { label: 't/h（湿基）', values: [formatTableNumber(wetWeight)] },
+        ...batchExportElementKeys.map((element) => ({
+          label: elementSymbolLabel(element),
+          values: [formatTableNumber(rawBlend.ratios[element] ?? 0)],
+        })),
+        { label: '合计', values: [materialTotal] },
+      ],
+    }
+
+    const rawPhaseColumns = inputPhaseColumnData.filter((column) => column.kind === 'raw')
+    const blendRowKeys = phaseTableRowKeys.filter((key) =>
+      rawPhaseColumns.some((column) => getPhaseExportValue(column, key) !== '')
+    )
+    const weightedBlendPhaseValue = (key: string) => {
+      if (dryWeight <= 0) return ''
+      let sum = 0
+      for (const column of rawPhaseColumns) {
+        const value = phaseTableColumnPhaseValue(column, key)
+        if (value != null) sum += column.weight * value
+      }
+      return formatTableNumber(sum / dryWeight)
+    }
+    const phaseSheet: CopperBatchWorkbookSheet = {
+      title: '混料结果-物相表',
+      columns: [{ header: '混料', subHeader: '混料' }],
+      rows: [
+        { label: 't/h（干基）', values: [formatTableNumber(dryWeight)] },
+        { label: '含水 t/h', values: [formatTableNumber(waterWeight)] },
+        ...blendRowKeys.map((key) => ({
+          label: phaseStorageKeyToDisplayLabel(key),
+          values: [weightedBlendPhaseValue(key)],
+        })),
+        {
+          label: '合计',
+          values: [dryWeight > 0 ? '100' : ''],
+        },
+      ],
+    }
+    return [elementSheet, phaseSheet]
+  }
+
+  const buildProductElementExportTable = (): CopperBatchWorkbookSheet => {
     const columns: CopperBatchExportColumn[] = [
       { header: 't/h', subHeader: 't/h' },
       ...outputProductElementKeys.map((element) => ({
@@ -4236,7 +4349,7 @@ export default function CopperWorkflow({
           : '',
       ],
     }))
-    return { title: `${titlePrefix} 产出-产物元素表`, columns, rows }
+    return { title: '产出-产物元素表', columns, rows }
   }
 
   const updateInputPhaseDraft = (columnId: string, key: string, value: string) => {
@@ -4399,158 +4512,255 @@ export default function CopperWorkflow({
     setShowBatchExportDialog(true)
   }
 
-  const batchExportSheetOptions = useMemo((): CopperBatchExportSheetOption[] => {
+  const batchExportGroupOptions = useMemo((): CopperBatchExportGroupOption[] => {
     const hasMaterialPhase = Boolean(
       phaseBatchResults && Object.values(phaseBatchResults).some((result) => result?.valid)
     )
+    const hasBlendResult = rawMaterials.some((material) => material.name.trim() && material.weight > 0)
+    const hasElement = rawMaterials.some((material) => material.name.trim())
+    const hasInputPhase = inputPhaseColumnData.some((column) => column.kind !== 'blend')
+    const inputSheetKeys: CopperBatchExportSheetKey[] = []
+    if (hasElement) inputSheetKeys.push('element')
+    if (hasMaterialPhase) inputSheetKeys.push('materialPhase')
+    if (hasInputPhase) inputSheetKeys.push('inputPhase')
+    if (hasBlendResult) inputSheetKeys.push('blendResult')
+
+    const hasHeatBalance = Boolean(heatBalanceFilledBack && calculatedHeatBalance)
+
     return [
-      { key: 'element', label: '投入-物料元素表', available: rawMaterials.some((material) => material.name.trim()) },
-      { key: 'inputPhase', label: '投入-物料物相表', available: inputPhaseColumnData.length > 0 },
-      { key: 'outputPhase', label: '产出-产物物相表', available: productFilledBack },
-      { key: 'outputElement', label: '产出-产物元素表', available: productFilledBack },
-      { key: 'materialPhase', label: '各原料物相成分', available: hasMaterialPhase },
-      { key: 'heatBalance', label: '热平衡表', available: Boolean(heatBalanceFilledBack && calculatedHeatBalance) },
+      {
+        key: 'input',
+        label: '投入计算表',
+        description: '物料元素组成、原料物相成分、投入物相及混料结果',
+        available: inputSheetKeys.length > 0,
+        sheetKeys: inputSheetKeys,
+      },
+      {
+        key: 'output',
+        label: '产出计算结果',
+        description: '产物物相表与产物元素表',
+        available: productFilledBack,
+        sheetKeys: productFilledBack ? ['outputPhase', 'outputElement'] : [],
+      },
+      {
+        key: 'heatBalance',
+        label: '热平衡计算结果',
+        description: '热收入、热支出及相关热平衡表',
+        available: hasHeatBalance,
+        sheetKeys: hasHeatBalance ? ['heatBalance'] : [],
+      },
     ]
   }, [
     calculatedHeatBalance,
-    heatBalanced,
-    inputPhaseColumnData.length,
+    heatBalanceFilledBack,
+    inputPhaseColumnData,
     phaseBatchResults,
     productFilledBack,
     rawMaterials,
   ])
 
-  const buildMaterialPhaseExportSheets = useCallback(
-    (titlePrefix: string): CopperBatchWorkbookSheet[] => {
-      if (!phaseBatchResults) return []
-      return rawMaterials.flatMap((material) => {
-        const result = phaseBatchResults[material.id]
-        if (!result?.valid || !material.name.trim()) return []
-        const rows = ensureMaterialPhaseRows(materialPhaseRows[material.id])
-        const preview = buildPhasePreviewUnknowns(material.id, result)
-        const pivotRows = buildPhasePivotRows(
-          sortMaterialPhaseRows(rows),
-          preview.phaseContents,
-          material.weight
-        )
-        const pivotTotals = sumPhasePivotTotals(pivotRows)
-        const pivotDisplayTotals = decomposePhaseElementMasses(pivotTotals.elements, phaseElementView)
-        const materialName = displayRawMaterialName(material.name)
-        const columns: CopperBatchExportColumn[] = [
-          { header: 'w%', subHeader: 'w%' },
-          ...phaseTableColumnKeys.map((element) => ({
-            header: phaseTableHeaderLabel(element, phaseElementView),
-            subHeader: phaseTableHeaderLabel(element, phaseElementView),
-          })),
-        ]
-        const exportRows: CopperBatchExportRow[] = sortMaterialPhaseRows(rows).map((row) => {
-          const pivot = pivotRows.find((item) => item.rowId === row.id)
-          const phasePercent = pivot?.phasePercent ?? null
-          const rowElementDisplay = pivot?.elements
-            ? decomposePhaseElementMasses(pivot.elements, phaseElementView)
-            : {}
-          const label = row.kind === 'draft' ? row.formula.trim() || '待填物相' : row.displayLabel
-          const showValues = material.weight > 0 && phasePercent != null && phasePercent > 0
-          return {
-            label,
-            values: [
-              showValues ? formatTableNumber(phasePercent ?? 0) : '',
-              ...phaseTableColumnKeys.map((element) =>
-                showValues
-                  ? formatTableNumber(massThToWeightPercent(rowElementDisplay[element] ?? 0, material.weight))
-                  : ''
-              ),
-            ],
-          }
-        })
-        exportRows.push({
-          label: '合计',
+  const buildMaterialPhaseExportSheets = useCallback((): CopperBatchWorkbookSheet[] => {
+    if (!phaseBatchResults) return []
+    return rawMaterials.flatMap((material) => {
+      const result = phaseBatchResults[material.id]
+      if (!result?.valid || !material.name.trim()) return []
+      const rows = ensureMaterialPhaseRows(materialPhaseRows[material.id])
+      const preview = buildPhasePreviewUnknowns(material.id, result)
+      const pivotRows = buildPhasePivotRows(
+        sortMaterialPhaseRows(rows),
+        preview.phaseContents,
+        material.weight
+      )
+      const pivotTotals = sumPhasePivotTotals(pivotRows)
+      const pivotDisplayTotals = decomposePhaseElementMasses(pivotTotals.elements, phaseElementView)
+      const materialName = displayRawMaterialName(material.name)
+      const columns: CopperBatchExportColumn[] = [
+        { header: 'w%', subHeader: 'w%' },
+        ...phaseTableColumnKeys.map((element) => ({
+          header: phaseTableHeaderLabel(element, phaseElementView),
+          subHeader: phaseTableHeaderLabel(element, phaseElementView),
+        })),
+      ]
+      const exportRows: CopperBatchExportRow[] = sortMaterialPhaseRows(rows).map((row) => {
+        const pivot = pivotRows.find((item) => item.rowId === row.id)
+        const phasePercent = pivot?.phasePercent ?? null
+        const rowElementDisplay = pivot?.elements
+          ? decomposePhaseElementMasses(pivot.elements, phaseElementView)
+          : {}
+        const label = row.kind === 'draft' ? row.formula.trim() || '待填物相' : row.displayLabel
+        const showValues = material.weight > 0 && phasePercent != null && phasePercent > 0
+        return {
+          label,
           values: [
-            formatTableNumber(pivotTotals.phaseTotal),
+            showValues ? formatTableNumber(phasePercent ?? 0) : '',
             ...phaseTableColumnKeys.map((element) =>
-              material.weight > 0
-                ? formatTableNumber(massThToWeightPercent(pivotDisplayTotals[element] ?? 0, material.weight))
+              showValues
+                ? formatTableNumber(massThToWeightPercent(rowElementDisplay[element] ?? 0, material.weight))
                 : ''
             ),
           ],
-        })
-        return [{ title: `${titlePrefix} 物相成分 ${materialName}`, columns, rows: exportRows }]
+        }
       })
+      exportRows.push({
+        label: '合计',
+        values: [
+          formatTableNumber(pivotTotals.phaseTotal),
+          ...phaseTableColumnKeys.map((element) =>
+            material.weight > 0
+              ? formatTableNumber(massThToWeightPercent(pivotDisplayTotals[element] ?? 0, material.weight))
+              : ''
+          ),
+        ],
+      })
+      return [{ title: `物相成分 ${materialName}`, columns, rows: exportRows }]
+    })
+  }, [materialPhaseRows, phaseBatchResults, phaseElementView, phaseTableColumnKeys, rawMaterials])
+
+  const runFloExport = useCallback(
+    async (templateBuffer: ArrayBuffer) => {
+      const dryWeight = rawMaterials.reduce((sum, material) => sum + Math.max(0, material.weight), 0)
+      const rawPhaseColumns = inputPhaseColumnData.filter((column) => column.kind === 'raw')
+      const blendPhaseRatios: Record<string, number> = {}
+      if (dryWeight > 0) {
+        for (const key of phaseTableRowKeys) {
+          let sum = 0
+          for (const column of rawPhaseColumns) {
+            const value = phaseTableColumnPhaseValue(column, key)
+            if (value != null) sum += column.weight * value
+          }
+          if (sum > 0) blendPhaseRatios[key] = sum / dryWeight
+        }
+      }
+      const patchResult = patchMetcalFloFromWorkflow(templateBuffer, {
+        blendDryFlowTH: dryWeight,
+        blendElementRatios: rawBlend.ratios,
+        blendPhaseRatios,
+        solvents: solventColumns,
+        fuel: fuelColumn,
+        airColumns,
+        constraintConfig: productConstraintConfig,
+      })
+      const filename = buildMetcalFloExportFilename({
+        stageName: activeStage.name,
+        caseName: activeCase?.name ?? formatCopperCaseName(new Date(), smeltMethodName),
+      })
+      const electronSaver = getElectronFloSaver()
+      const saveResult = await saveMetcalFloFile(
+        filename,
+        patchResult.buffer,
+        electronSaver
+          ? async (fileName, buffer) => {
+              const result = await electronSaver(fileName, buffer)
+              return result.ok
+                ? { ok: true as const, filePath: result.filePath }
+                : { ok: false as const, cancelled: result.cancelled, error: result.error }
+            }
+          : undefined
+      )
+      if (!saveResult.ok) {
+        if (!saveResult.cancelled && saveResult.error) {
+          setWorkflowMessage(`导出 Flo 失败：${saveResult.error}`, 'error')
+        }
+        return
+      }
+      const notice = [...patchResult.skipped, ...patchResult.warnings].slice(0, 2).join('；')
+      setWorkflowMessage(
+        `已导出 Flo（${patchResult.patchedFlows.length} 路流量、${patchResult.patchedElements.length} 项组成、${patchResult.patchedConstraints.length} 项约束）。${notice}`,
+        notice ? 'flow' : 'success'
+      )
     },
-    [materialPhaseRows, phaseBatchResults, phaseElementView, phaseTableColumnKeys, rawMaterials]
+    [
+      activeCase?.name,
+      activeStage.name,
+      airColumns,
+      fuelColumn,
+      inputPhaseColumnData,
+      phaseTableRowKeys,
+      productConstraintConfig,
+      rawBlend.ratios,
+      rawMaterials,
+      smeltMethodName,
+      solventColumns,
+    ]
   )
 
-  const buildHeatBalanceExportTable = useCallback(
-    (titlePrefix: string, result: CopperHeatBalanceResult): CopperBatchWorkbookSheet => {
-      const columns: CopperBatchExportColumn[] = [
-        { header: '项目', subHeader: '项目' },
-        { header: '数值', subHeader: '数值' },
-      ]
-      const row = (label: string, value: string | number) => ({
-        label,
-        values: [value],
+  const exportFloToMetcal = useCallback(() => {
+    const opener = getElectronFloTemplateOpener()
+    if (opener) {
+      void opener().then((picked) => {
+        if (!picked.ok || !picked.buffer) {
+          if (!picked.cancelled && picked.error) {
+            setWorkflowMessage(`读取 Flo 模板失败：${picked.error}`, 'error')
+          }
+          return
+        }
+        void runFloExport(picked.buffer)
       })
-      const rows: CopperBatchExportRow[] = [
-        row('投入物理热 (MJ/h)', formatTableNumber(result.inputPhysicalHeatMJh)),
-        row('化学反应放热合计 (MJ/h)', formatTableNumber(result.chemicalHeatReleaseMJh)),
-        row('化学反应吸热合计 (MJ/h)', formatTableNumber(result.chemicalHeatAbsorptionMJh)),
-        row('反应路径净热 (MJ/h)', formatTableNumber(result.chemicalHeatPathMJh ?? result.chemicalHeatReleaseMJh - result.chemicalHeatAbsorptionMJh)),
-        row('化学反应净热 Hess (MJ/h)', formatTableNumber(result.chemicalHeatMJh)),
-        row('产物物理热 (MJ/h)', formatTableNumber(result.outputPhysicalHeatMJh)),
-        row('冷却水带走热 (MJ/h)', formatTableNumber(result.coolingWaterHeatMJh)),
-        row('自然散热 (MJ/h)', formatTableNumber(result.otherHeatMJh)),
-        row('允许误差 (%)', formatTableNumber(result.heatBalanceTolerancePct ?? 2)),
-        row('误差项 (MJ/h)', formatTableNumber(result.balanceErrorMJh ?? 0)),
-        row('误差在允许带内', result.balanceErrorWithinTolerance ? '是' : '否'),
-        row('基础煤工况热差 (MJ/h)', formatTableNumber(result.heatDeficitWithoutFuelMJh ?? result.heatDeficitMJh)),
-        row('总煤量 (t/h)', formatTableNumber(result.derivedFuelWeightTh ?? 0)),
-        row('补充煤量 (t/h)', formatTableNumber(result.supplementalFuelWeightTh ?? 0)),
-        row('加煤后热差 (MJ/h)', formatTableNumber(result.balanceAfterFuelMJh)),
-      ]
-      return { title: `${titlePrefix} 热平衡`, columns, rows }
+      return
+    }
+    floTemplateInputRef.current?.click()
+  }, [runFloExport])
+
+  const handleFloTemplatePicked = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      event.target.value = ''
+      if (!file) return
+      void file.arrayBuffer().then((buffer) => runFloExport(buffer))
     },
-    []
+    [runFloExport]
   )
 
   const confirmBatchExport = useCallback(
-    async (selected: CopperBatchExportSheetKey[], fileBaseName: string) => {
+    async (selected: CopperBatchExportSheetKey[]) => {
       setShowBatchExportDialog(false)
-      const titlePrefix = `${APP_NAME_ZH} ${getCopperStageExportName(activeStage.name)} 配料总表`
       const sheets: CopperBatchWorkbookSheet[] = []
       if (selected.includes('element')) {
         const { columns, rows } = buildCalculationExportTable()
-        sheets.push({ title: `${titlePrefix} 投入-物料元素表`, columns, rows })
+        sheets.push({ title: '投入-物料元素表', columns, rows })
       }
-      const phaseTables = buildPhaseExportTable(titlePrefix)
+      if (selected.includes('materialPhase')) {
+        sheets.push(...buildMaterialPhaseExportSheets())
+      }
+      const phaseTables = buildPhaseExportTable()
       if (selected.includes('inputPhase')) sheets.push(phaseTables.inputSheet)
+      if (selected.includes('blendResult')) sheets.push(...buildBlendResultExportSheets())
       if (selected.includes('outputPhase')) sheets.push(phaseTables.outputSheet)
-      if (selected.includes('outputElement')) sheets.push(buildProductElementExportTable(titlePrefix))
-      if (selected.includes('materialPhase')) sheets.push(...buildMaterialPhaseExportSheets(titlePrefix))
+      if (selected.includes('outputElement')) sheets.push(buildProductElementExportTable())
       if (selected.includes('heatBalance') && calculatedHeatBalance) {
-        sheets.push(buildHeatBalanceExportTable(titlePrefix, calculatedHeatBalance))
+        sheets.push(...buildHeatBalanceExportSheets(calculatedHeatBalance))
       }
       if (sheets.length === 0) {
         setWorkflowMessage('请至少选择一项可导出的表格。', 'flow')
         return
       }
       const filename = buildCopperBatchExportFilename({
-        appName: APP_NAME_ZH,
         stageName: activeStage.name,
-        caseName: fileBaseName,
+        caseName: activeCase?.name ?? formatCopperCaseName(new Date(), smeltMethodName),
+        format: 'xlsx',
       })
-      const html = buildCopperBatchWorkbookHtml(sheets)
-      const result = await saveCopperBatchExcelWorkbook(filename, html, getElectronExportWorkbookSaver())
-      if (result.ok) {
-        setWorkflowMessage(`已导出 ${sheets.length} 个工作表。`, 'success')
-      } else if ('error' in result && result.error) {
-        setWorkflowMessage(`导出失败：${result.error}`, 'error')
+      try {
+        const { buildCopperBatchWorkbookXlsx } = await import('../../utils/copperBatchExportXlsx')
+        const payload: CopperBatchWorkbookPayload = {
+          format: 'xlsx',
+          content: await buildCopperBatchWorkbookXlsx(sheets),
+        }
+        const result = await saveCopperBatchExcelWorkbook(filename, payload, getElectronExportWorkbookSaver())
+        if (result.ok) {
+          setWorkflowMessage(`已导出 ${sheets.length} 张表格（xlsx）。`, 'success')
+        } else if ('error' in result && result.error) {
+          setWorkflowMessage(`导出失败：${result.error}`, 'error')
+        }
+      } catch (error) {
+        setWorkflowMessage(`导出失败：${error instanceof Error ? error.message : String(error)}`, 'error')
       }
     },
     [
+      activeCase?.name,
       activeStage.name,
-      buildHeatBalanceExportTable,
       buildMaterialPhaseExportSheets,
       calculatedHeatBalance,
+      smeltMethodName,
     ]
   )
 
@@ -8049,7 +8259,10 @@ export default function CopperWorkflow({
           types: [
             {
               description: '铜冶炼案例',
-              accept: { 'application/json': ['.metcal-copper-case.json', '.json'] },
+              accept: {
+                'application/octet-stream': [COPPER_CASE_FILE_EXT],
+                'application/json': ['.metcal-copper-case.json', '.json'],
+              },
             },
           ],
         })
@@ -8083,8 +8296,114 @@ export default function CopperWorkflow({
       persistCopperCases([record, ...caseRecords])
       setCaseMessage(`已导入案例：${record.name}`)
     } catch {
-      setCaseMessage('案例文件读取失败，请确认文件为 .metcal-copper-case.json 格式。')
+      setCaseMessage('案例文件读取失败，请确认文件为本软件导出的 .metcal 格式。')
     }
+  }
+
+  const importMetcalFloFile = async (file: File | null) => {
+    if (!file) return
+    try {
+      const buffer = await file.arrayBuffer()
+      const bundle = buildMetcalFloImportBundle(buffer)
+      if (!bundle.rawMaterials.length) {
+        setCaseMessage('未从 Flo 文件中解析到混料/原料信息，请确认是否为 MetCal 侧吹铜流程模板。')
+        return
+      }
+      setFloImportPreview({ bundle, fileName: file.name })
+      setCaseMessage(`已解析 Flo：${file.name}（${bundle.rawMaterials.length} 路原料，仅导入混料信息）`)
+    } catch (error) {
+      setCaseMessage(`Flo 文件读取失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  const importWorkspaceFile = async (file: File | null) => {
+    if (!file) return
+    if (isMetcalFloFileName(file.name)) {
+      await importMetcalFloFile(file)
+      return
+    }
+    if (isCopperCaseFileName(file.name)) {
+      await importCopperCaseFile(file)
+      return
+    }
+    setCaseMessage('请选择 .metcal（本软件案例）或 .flo（MetCal，仅导入混料/原料）文件。')
+  }
+
+  const confirmFloImport = (caseNameInput: string) => {
+    if (!floImportPreview) return
+    const { bundle, fileName } = floImportPreview
+    const materials = bundle.rawMaterials.map(cloneMaterialColumn)
+    const solvents = bundle.solventColumns.map(cloneMaterialColumn)
+    const gases = bundle.airColumns.map(cloneMaterialColumn)
+    const fuel = cloneFuelMaterial({ ...bundle.fuelColumn, weight: 0, waterWeight: 0 })
+    const baseName = fileName.replace(/\.flo$/i, '').trim()
+    const caseName = caseNameInput.trim() || baseName || suggestCopperCaseName(smeltMethodName)
+    const phaseState = buildMetcalImportedPhaseState(materials, bundle.extraction.feeds)
+    const importedParams = bundle.constraints.processParameters
+    const importedConstraints = applyProcessParameters(
+      normalizeOxyConstraintConfig(bundle.constraints.config),
+      importedParams,
+      { addMissingConstraints: true }
+    )
+    const record = buildBlankCaseRecord(caseName)
+    record.rawMaterials = materials.map(cloneMaterialColumn)
+    record.rawWeightDrafts = Object.fromEntries(
+      materials.map((material) => [material.id, String(material.weight)])
+    )
+    record.solventColumns = solvents.map(cloneMaterialColumn)
+    record.fuelColumn = cloneFuelMaterial(fuel)
+    record.airColumns = gases.map(cloneMaterialColumn)
+    record.oxygenAirColumn = cloneMaterialColumn(
+      gases.find((column) => column.airRole === 'oxygen') ?? gases[0] ?? createOxygenAirColumn()
+    )
+    record.phaseBatchResults = phaseState.phaseBatchResults
+    record.phaseCompletedMaterials = { ...phaseState.phaseCompletedMaterials }
+    record.phaseCompleted = phaseState.phaseCompleted
+    record.materialPhaseRows = Object.fromEntries(
+      Object.entries(phaseState.materialPhaseRows).map(([id, rows]) => [
+        id,
+        rows.map((row) => ({ ...row, fractions: { ...row.fractions } })),
+      ])
+    )
+    record.productConstraintConfig = cloneOxyConstraintConfig(importedConstraints)
+    record.processParameters = { ...importedParams }
+    record.targetFeSiO2 = String(importedParams.feSiO2)
+    record.batchTableView = 'element'
+    const smelting = record.processStages?.cu_smelting
+    if (smelting) {
+      smelting.rawMaterials = materials.map(cloneMaterialColumn)
+      smelting.rawWeightDrafts = { ...record.rawWeightDrafts }
+      smelting.solventColumns = solvents.map(cloneMaterialColumn)
+      smelting.fuelColumn = cloneFuelMaterial(fuel)
+      smelting.airColumns = gases.map(cloneMaterialColumn)
+      smelting.phaseBatchResults = phaseState.phaseBatchResults
+      smelting.phaseCompletedMaterials = { ...phaseState.phaseCompletedMaterials }
+      smelting.phaseCompleted = phaseState.phaseCompleted
+      smelting.materialPhaseRows = Object.fromEntries(
+        Object.entries(phaseState.materialPhaseRows).map(([id, rows]) => [
+          id,
+          rows.map((row) => ({ ...row, fractions: { ...row.fractions } })),
+        ])
+      )
+      smelting.productConstraintConfig = cloneOxyConstraintConfig(importedConstraints)
+      smelting.processParameters = { ...importedParams }
+      smelting.targetFeSiO2 = String(importedParams.feSiO2)
+      smelting.batchTableView = 'element'
+    }
+    persistCopperCases([record, ...caseRecords])
+    void openCopperCase(record).then(() => {
+      setBatchTableView('element')
+      window.requestAnimationFrame(() => {
+        calculationTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
+    })
+    setNewCaseName(suggestCopperCaseName(smeltMethodName))
+    setFloImportPreview(null)
+    setCaseMessage(
+      phaseState.phaseCompleted
+        ? `已从 Flo 导入投入数据（原料 ${materials.length}、熔剂 ${solvents.length}、气体 ${gases.length}；煤元素已导入、煤量未导入）并跳过物相：${record.name}`
+        : `已从 Flo 导入投入数据（原料 ${materials.length}、熔剂 ${solvents.length}、气体 ${gases.length}；煤元素已导入、煤量未导入）：${record.name}`
+    )
   }
 
   const handleCaseDragEnter = (event: ReactDragEvent<HTMLDivElement>) => {
@@ -8114,11 +8433,11 @@ export default function CopperWorkflow({
     setCaseDropActive(false)
     const file = event.dataTransfer.files?.[0] ?? null
     if (!file) return
-    if (!file.name.endsWith('.metcal-copper-case.json') && !file.name.endsWith('.json')) {
-      setCaseMessage('请拖入 .metcal-copper-case.json 案例文件。')
+    if (!isWorkspaceImportFileName(file.name)) {
+      setCaseMessage('请拖入 .metcal（本软件案例）或 .flo（MetCal，仅导入混料/原料）文件。')
       return
     }
-    void importCopperCaseFile(file)
+    void importWorkspaceFile(file)
   }
 
   const confirmSaveBeforeCaseNavigation = (sheet: SheetId) => {
@@ -8348,8 +8667,8 @@ export default function CopperWorkflow({
               </h3>
               <p className={`${hintText(darkMode)} max-w-5xl leading-relaxed`}>
                 {isEn
-                  ? `Create and manage ${smeltMethodName.toLowerCase()} copper smelting cases. After creating a case, continue with smelting, converting, refining, and equipment selection in the same project.`
-                  : `用于建立、管理和追溯${smeltMethodName}铜冶炼计算案例。新建案例后进入熔炼工作表，后续可在同一案例内完成吹炼、精炼和设备选型计算。`}
+                  ? `Create and manage ${smeltMethodName.toLowerCase()} copper smelting cases. After creating a case, continue with smelting, converting, refining, and equipment selection in the same project. Import .metcal cases from this app, or import mix/raw-material data from MetCal .flo files.`
+                  : `用于建立、管理和追溯${smeltMethodName}铜冶炼计算案例。新建案例后进入熔炼工作表，后续可在同一案例内完成吹炼、精炼和设备选型计算。可导入本软件 .metcal 案例，也可从 MetCal .flo 导入混料/原料信息。`}
               </p>
             </div>
           </div>
@@ -8367,10 +8686,10 @@ export default function CopperWorkflow({
             <input
               ref={caseImportInputRef}
               type="file"
-              accept=".json,.metcal-copper-case.json,application/json"
+              accept=".metcal,.flo"
               className="hidden"
               onChange={(event) => {
-                importCopperCaseFile(event.target.files?.[0] ?? null)
+                void importWorkspaceFile(event.target.files?.[0] ?? null)
                 event.currentTarget.value = ''
               }}
             />
@@ -8398,12 +8717,22 @@ export default function CopperWorkflow({
           onDrop={handleCaseDrop}
         >
           <p className={`text-base font-medium ${darkMode ? 'text-gray-100' : 'text-gray-800'}`}>
-            {caseDropActive ? '松开鼠标即可导入案例' : '将案例文件拖入此处即可导入'}
+            {caseDropActive ? '松开鼠标即可导入' : '将案例或 MetCal 文件拖入此处即可导入'}
           </p>
           <p className={`mt-2 text-sm ${hintText(darkMode)}`}>
-            支持从本机拖入案例文件，也可使用上方「导入案例」按钮选择文件。
+            支持 .metcal（本软件导出的案例）与 .flo（MetCal 流程文件，仅获取混料/原料信息）；也可使用上方「导入案例」选择文件。
           </p>
         </div>
+
+        {floImportPreview && (
+          <MetcalFloImportPanel
+            darkMode={darkMode}
+            bundle={floImportPreview.bundle}
+            sourceFileName={floImportPreview.fileName}
+            onConfirm={confirmFloImport}
+            onCancel={() => setFloImportPreview(null)}
+          />
+        )}
 
         <div className={cardBase(darkMode)}>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -8845,10 +9174,9 @@ export default function CopperWorkflow({
       <CopperBatchExportDialog
         darkMode={darkMode}
         open={showBatchExportDialog}
-        caseName={activeCase?.name ?? formatCopperCaseName(new Date(), smeltMethodName)}
-        sheetOptions={batchExportSheetOptions}
+        groupOptions={batchExportGroupOptions}
         onCancel={() => setShowBatchExportDialog(false)}
-        onConfirm={(selected, fileBaseName) => void confirmBatchExport(selected, fileBaseName)}
+        onConfirm={(selected) => void confirmBatchExport(selected)}
       />
       <div ref={stagePageTopRef} className={stagePageTopShellClass(darkMode, stageEnterHighlight)}>
         <StageSheetTabs darkMode={darkMode} activeSheet={activeSheet} onStageSelect={confirmSaveBeforeCaseNavigation} />
@@ -9266,6 +9594,16 @@ export default function CopperWorkflow({
             <button type="button" className={btnSecondary(darkMode)} onClick={exportCalculationTable}>
               导出Excel
             </button>
+            <button type="button" className={btnSecondary(darkMode)} onClick={exportFloToMetcal}>
+              导出Flo
+            </button>
+            <input
+              ref={floTemplateInputRef}
+              type="file"
+              accept=".flo"
+              className="hidden"
+              onChange={handleFloTemplatePicked}
+            />
           </div>
         </div>
         {batchTableView === 'element' ? (

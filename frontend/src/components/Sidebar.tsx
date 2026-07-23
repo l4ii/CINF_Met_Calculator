@@ -219,19 +219,6 @@ export default function Sidebar({
           </button>
           <button
             type="button"
-            onClick={() => onShowAbout('metallurgy')}
-            className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
-              currentView === 'about' && aboutDepartment === 'metallurgy'
-                ? 'bg-blue-600 text-white'
-                : darkMode
-                ? 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
-                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
-            }`}
-          >
-            {t.metallurgy}
-          </button>
-          <button
-            type="button"
             onClick={() => onShowAbout('research')}
             className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
               currentView === 'about' && aboutDepartment === 'research'
@@ -242,6 +229,19 @@ export default function Sidebar({
             }`}
           >
             {t.research}
+          </button>
+          <button
+            type="button"
+            onClick={() => onShowAbout('metallurgy')}
+            className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
+              currentView === 'about' && aboutDepartment === 'metallurgy'
+                ? 'bg-blue-600 text-white'
+                : darkMode
+                ? 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
+                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+            }`}
+          >
+            {t.metallurgy}
           </button>
         </div>
         <button

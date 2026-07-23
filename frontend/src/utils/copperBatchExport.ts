@@ -20,6 +20,9 @@ export interface CopperBatchWorkbookSheet {
   rows: CopperBatchExportRow[]
 }
 
+/** 导出仅支持标准 Excel 工作簿（.xlsx） */
+export type CopperBatchExportFormat = 'xlsx'
+
 export function getCopperStageExportName(stageName: string) {
   const trimmed = stageName.trim()
   if (trimmed.startsWith('铜')) return trimmed
@@ -38,21 +41,30 @@ export function sanitizeExcelFilePart(value: string) {
 }
 
 export function buildCopperBatchExportFilename({
-  appName,
   stageName,
   caseName,
+  format = 'xlsx',
   date = new Date(),
 }: {
-  appName: string
   stageName: string
   caseName?: string
+  format?: CopperBatchExportFormat
   date?: Date
 }) {
-  const safeAppName = sanitizeExcelFilePart(appName)
   const safeStageName = sanitizeExcelFilePart(getCopperStageExportName(stageName))
   const safeCaseName = caseName ? sanitizeExcelFilePart(caseName) : ''
-  const parts = [safeCaseName || safeAppName, safeStageName, formatExportDate(date)].filter(Boolean)
-  return `${parts.join('_')}.xls`
+  const parts = safeCaseName
+    ? [safeCaseName, safeStageName, formatExportDate(date)]
+    : [safeStageName, formatExportDate(date)]
+  return `${parts.join('_')}.${format}`
+}
+
+/** 为导出表添加「表N」前缀编号 */
+export function numberCopperBatchSheetTitles(sheets: CopperBatchWorkbookSheet[]): CopperBatchWorkbookSheet[] {
+  return sheets.map((sheet, index) => ({
+    ...sheet,
+    title: `表${index + 1} ${sheet.title}`,
+  }))
 }
 
 export function escapeExcelHtml(value: string | number | null | undefined) {
@@ -65,18 +77,20 @@ export function escapeExcelHtml(value: string | number | null | undefined) {
 }
 
 export function buildCopperBatchWorkbookHtml(sheets: CopperBatchWorkbookSheet[]) {
-  const sheetBlocks = sheets
-    .map((sheet) => {
+  const numberedSheets = numberCopperBatchSheetTitles(sheets)
+  const sheetBlocks = numberedSheets
+    .map((sheet, index) => {
       const columnCount = sheet.columns.length + 1
       const headerRow = sheet.columns.map((column) => `<th>${escapeExcelHtml(column.header)}</th>`).join('')
       const subHeaderRow = sheet.columns.map((column) => `<th>${escapeExcelHtml(column.subHeader ?? '')}</th>`).join('')
       const bodyRows = sheet.rows
         .map((row) => {
-          const cells = sheet.columns.map((_, index) => `<td>${escapeExcelHtml(row.values[index])}</td>`).join('')
+          const cells = sheet.columns.map((_, colIndex) => `<td>${escapeExcelHtml(row.values[colIndex])}</td>`).join('')
           return `<tr><th>${escapeExcelHtml(row.label)}</th>${cells}</tr>`
         })
         .join('')
-      return `<table>
+      const spacer = index > 0 ? '<div class="sheet-spacer"></div>' : ''
+      return `${spacer}<table>
     <tr><th class="title" colspan="${columnCount}">${escapeExcelHtml(sheet.title)}</th></tr>
     <tr><th>项目</th>${headerRow}</tr>
     <tr><th>名称</th>${subHeaderRow}</tr>
@@ -93,10 +107,11 @@ export function buildCopperBatchWorkbookHtml(sheets: CopperBatchWorkbookSheet[])
   <meta name="ProgId" content="Excel.Sheet" />
   <meta name="MimeType" content="application/vnd.ms-excel" />
   <style>
-    table { border-collapse: collapse; font-family: "Microsoft YaHei", Arial, sans-serif; font-size: 11pt; margin-bottom: 24px; }
-    th, td { border: 1px solid #9ca3af; padding: 6px 8px; text-align: center; mso-number-format:"\\@"; }
-    th { background: #f3f4f6; font-weight: 600; }
-    .title { font-size: 15pt; text-align: left; background: #ffffff; }
+    table { border-collapse: collapse; font-family: "Microsoft YaHei", Arial, sans-serif; font-size: 11pt; margin-bottom: 0; }
+    th, td { border: 1px solid #9ca3af; padding: 6px 8px; text-align: center; mso-number-format:"\\@"; font-weight: normal; }
+    th { background: #f3f4f6; }
+    .title { font-size: 12pt; text-align: left; background: #ffffff; border: none; }
+    .sheet-spacer { height: 14px; }
   </style>
 </head>
 <body>
@@ -121,18 +136,34 @@ export function downloadCopperBatchExcel(filename: string, html: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
+export function downloadCopperBatchXlsx(filename: string, buffer: ArrayBuffer) {
+  const blob = new Blob([buffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename.endsWith('.xlsx') ? filename : `${filename}.xlsx`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
 export type ExportWorkbookSaveResult =
   | { ok: true; filePath?: string }
   | { ok: false; cancelled?: boolean; error?: string }
 
+export type CopperBatchWorkbookPayload = { format: 'xlsx'; content: ArrayBuffer }
+
 export async function saveCopperBatchExcelWorkbook(
   filename: string,
-  html: string,
-  saveToFile?: (fileName: string, content: string) => Promise<ExportWorkbookSaveResult>
+  payload: CopperBatchWorkbookPayload,
+  saveToFile?: (fileName: string, payload: CopperBatchWorkbookPayload) => Promise<ExportWorkbookSaveResult>
 ): Promise<ExportWorkbookSaveResult> {
   if (saveToFile) {
-    return saveToFile(filename, html)
+    return saveToFile(filename, payload)
   }
-  downloadCopperBatchExcel(filename, html)
+  downloadCopperBatchXlsx(filename, payload.content)
   return { ok: true }
 }

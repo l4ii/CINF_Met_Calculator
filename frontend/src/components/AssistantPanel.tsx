@@ -84,7 +84,13 @@ async function fetchAssistantInferenceReady(): Promise<boolean> {
 const SHEET_IDS = new Set<string>(SHEETS.map((s) => s.id))
 
 export default function AssistantPanel({ darkMode, language, onSheetSelect }: AssistantPanelProps) {
-  const { assistantSnapshot } = useAssistantContext()
+  const {
+    assistantSnapshot,
+    assistantDockOpen,
+    setAssistantDockOpen,
+    pendingAssistantPrompt,
+    clearPendingAssistantPrompt,
+  } = useAssistantContext()
   const [dockHover, setDockHover] = useState(false)
   const [input, setInput] = useState('')
   const [messages, setMessages] = useState<ChatTurn[]>([])
@@ -95,6 +101,9 @@ export default function AssistantPanel({ darkMode, language, onSheetSelect }: As
   const dockRef = useRef<HTMLDivElement | null>(null)
   const hideTimerRef = useRef<number | null>(null)
   const lastPointerRef = useRef({ x: 0, y: 0 })
+  const sendRef = useRef<(text?: string) => Promise<void>>(async () => {})
+
+  const dockOpen = dockHover || assistantDockOpen
 
   const catalog = useMemo(() => flattenCatalog(language), [language])
   const allowedIds = useMemo(() => new Set(catalog.map((x) => x.id)), [catalog])
@@ -133,7 +142,7 @@ export default function AssistantPanel({ darkMode, language, onSheetSelect }: As
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, busy, dockHover])
+  }, [messages, busy, dockOpen])
 
   const clearHideTimer = () => {
     if (hideTimerRef.current != null) {
@@ -145,13 +154,18 @@ export default function AssistantPanel({ darkMode, language, onSheetSelect }: As
   useEffect(() => () => clearHideTimer(), [])
 
   useEffect(() => {
-    if (!dockHover) return
+    if (!dockOpen) return
     const track = (e: PointerEvent) => {
       lastPointerRef.current = { x: e.clientX, y: e.clientY }
     }
     window.addEventListener('pointermove', track, { capture: true })
     return () => window.removeEventListener('pointermove', track, { capture: true })
-  }, [dockHover])
+  }, [dockOpen])
+
+  const closeDock = () => {
+    setDockHover(false)
+    setAssistantDockOpen(false)
+  }
 
   const tryCloseDockAfterLeave = () => {
     clearHideTimer()
@@ -159,11 +173,12 @@ export default function AssistantPanel({ darkMode, language, onSheetSelect }: As
       hideTimerRef.current = null
       const root = dockRef.current
       if (!root) {
-        setDockHover(false)
+        closeDock()
         return
       }
       if (busyRef.current) return
       if (root.contains(document.activeElement)) return
+      if (pendingAssistantPrompt) return
 
       const r = root.getBoundingClientRect()
       const pad = 6
@@ -180,8 +195,15 @@ export default function AssistantPanel({ darkMode, language, onSheetSelect }: As
       }
       if (topEl && root.contains(topEl)) return
 
-      setDockHover(false)
+      closeDock()
     }, 480)
+  }
+
+  const ensureWelcome = () => {
+    setMessages((prev) => {
+      if (prev.length > 0) return prev
+      return [{ id: 'assistant-welcome', role: 'assistant', content: buildAssistantWelcome(language) }]
+    })
   }
 
   const onDockEnter = (ev?: Pick<React.MouseEvent<Element>, 'clientX' | 'clientY'>) => {
@@ -190,11 +212,13 @@ export default function AssistantPanel({ darkMode, language, onSheetSelect }: As
       lastPointerRef.current = { x: ev.clientX, y: ev.clientY }
     }
     setDockHover(true)
-    setMessages((prev) => {
-      if (prev.length > 0) return prev
-      return [{ id: 'assistant-welcome', role: 'assistant', content: buildAssistantWelcome(language) }]
-    })
+    ensureWelcome()
   }
+
+  useEffect(() => {
+    if (!assistantDockOpen) return
+    ensureWelcome()
+  }, [assistantDockOpen, language])
 
   const onDockPointerLeave = (e: React.MouseEvent<HTMLDivElement>) => {
     const rt = e.relatedTarget
@@ -213,10 +237,10 @@ export default function AssistantPanel({ darkMode, language, onSheetSelect }: As
     })
   }
 
-  const send = async () => {
-    const text = input.trim()
+  const send = async (forcedText?: string) => {
+    const text = (forcedText ?? input).trim()
     if (!text || busy) return
-    setInput('')
+    if (!forcedText) setInput('')
     const userMsg: ChatTurn = { id: newId('u'), role: 'user', content: text }
     setMessages((prev) => [...prev, userMsg])
     setBusy(true)
@@ -362,6 +386,21 @@ export default function AssistantPanel({ darkMode, language, onSheetSelect }: As
     }
   }
 
+  sendRef.current = send
+
+  useEffect(() => {
+    if (!pendingAssistantPrompt || busy) return
+    const prompt = pendingAssistantPrompt
+    clearPendingAssistantPrompt()
+    setInput(prompt)
+    ensureWelcome()
+    // 稍等一帧，让输入框先显示问题，再自动发送
+    window.setTimeout(() => {
+      void sendRef.current(prompt)
+      setInput('')
+    }, 50)
+  }, [busy, clearPendingAssistantPrompt, pendingAssistantPrompt])
+
   const applyNavigate = (fid: string) => {
     if (SHEET_IDS.has(fid)) onSheetSelect(fid as SheetId)
   }
@@ -379,7 +418,7 @@ export default function AssistantPanel({ darkMode, language, onSheetSelect }: As
         onFocusCapture={clearHideTimer}
         onBlurCapture={onDockFocusOutCapture}
       >
-        {dockHover && (
+        {dockOpen && (
           <div
             className={`flex max-h-[min(72vh,520px)] w-[min(100vw-2rem,22rem)] flex-col overflow-hidden rounded-xl border shadow-2xl ${surface}`}
           >

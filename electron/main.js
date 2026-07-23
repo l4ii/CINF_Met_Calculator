@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, nativeImage } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, nativeImage, Menu } = require('electron')
 const path = require('path')
 const http = require('http')
 const { spawn, execSync, exec } = require('child_process')
@@ -61,6 +61,89 @@ const APP_DISPLAY_NAME = '长沙有色冶金设计研究院冶金工艺计算与
 /** 闪屏标题略短，去掉「一体化」以便单行显示；正式产品名仍以 APP_DISPLAY_NAME 为准 */
 const APP_SPLASH_DISPLAY_NAME = '长沙有色冶金设计研究院冶金工艺计算与三维设计平台'
 const APP_SPLASH_TAGLINE = '面向有色冶炼配料计算、三维设备选型和案例报告的专业工程工具。支持原料、熔剂、物相和阶段流程的本地化计算与复核。'
+
+/** 应用菜单（可按需增删项）；Windows 常显中文菜单栏 */
+function buildApplicationMenu() {
+  const isMac = process.platform === 'darwin'
+  /** @type {Electron.MenuItemConstructorOptions[]} */
+  const template = [
+    ...(isMac
+      ? [
+          {
+            label: APP_DISPLAY_NAME,
+            submenu: [
+              { role: 'about', label: '关于' },
+              { type: 'separator' },
+              { role: 'services', label: '服务' },
+              { type: 'separator' },
+              { role: 'hide', label: '隐藏' },
+              { role: 'hideOthers', label: '隐藏其他' },
+              { role: 'unhide', label: '全部显示' },
+              { type: 'separator' },
+              { role: 'quit', label: '退出' },
+            ],
+          },
+        ]
+      : []),
+    {
+      label: '文件',
+      submenu: [isMac ? { role: 'close', label: '关闭窗口' } : { role: 'quit', label: '退出' }],
+    },
+    {
+      label: '编辑',
+      submenu: [
+        { role: 'undo', label: '撤销' },
+        { role: 'redo', label: '重做' },
+        { type: 'separator' },
+        { role: 'cut', label: '剪切' },
+        { role: 'copy', label: '复制' },
+        { role: 'paste', label: '粘贴' },
+        { role: 'selectAll', label: '全选' },
+      ],
+    },
+    {
+      label: '查看',
+      submenu: [
+        { role: 'reload', label: '重新加载' },
+        { role: 'forceReload', label: '强制重新加载' },
+        ...( !app.isPackaged ? [{ role: 'toggleDevTools', label: '开发者工具' }] : []),
+        { type: 'separator' },
+        { role: 'resetZoom', label: '实际大小' },
+        { role: 'zoomIn', label: '放大' },
+        { role: 'zoomOut', label: '缩小' },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: '切换全屏' },
+      ],
+    },
+    {
+      label: '窗口',
+      submenu: [
+        { role: 'minimize', label: '最小化' },
+        { role: 'zoom', label: '缩放' },
+        ...(isMac
+          ? [{ type: 'separator' }, { role: 'front', label: '前置全部窗口' }]
+          : [{ role: 'close', label: '关闭' }]),
+      ],
+    },
+    {
+      label: '帮助',
+      submenu: [
+        {
+          label: '关于本软件',
+          click: () => {
+            dialog.showMessageBox({
+              type: 'info',
+              title: '关于',
+              message: APP_DISPLAY_NAME,
+              detail: APP_SPLASH_TAGLINE,
+            })
+          },
+        },
+      ],
+    },
+  ]
+  return Menu.buildFromTemplate(template)
+}
 
 // 仅根据是否打包判断：打包后的 exe 始终为生产模式
 const isDev = !app.isPackaged
@@ -667,11 +750,15 @@ function createWindow() {
     height: 1080,
     minWidth: 1280,
     minHeight: 720,
+    title: APP_DISPLAY_NAME,
+    backgroundColor: '#111827',
+    autoHideMenuBar: false,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
     },
+    // Windows 用默认标题栏，才能常显应用菜单（文件/编辑/查看…）
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     show: false, // 先不显示，等加载完成后再显示
   }
@@ -693,6 +780,12 @@ function createWindow() {
   }
   
   mainWindow = new BrowserWindow(windowOptions)
+  // Windows：确保本窗口挂上中文应用菜单并常显
+  if (process.platform === 'win32') {
+    mainWindow.setAutoHideMenuBar(false)
+    mainWindow.setMenuBarVisibility(true)
+    mainWindow.setMenu(Menu.getApplicationMenu())
+  }
 
   // 开发环境加载本地服务器，生产环境加载打包后的文件（不自动打开 DevTools）
   if (isDev) {
@@ -864,6 +957,31 @@ ipcMain.on('app:ready', () => {
   showMainAndCloseSplash()
 })
 
+ipcMain.handle('window:get-chrome', () => ({
+  platform: process.platform,
+  // Windows 已改回默认标题栏以常显菜单，不再使用 titleBarOverlay
+  usesTitleBarOverlay: false,
+  titleBarHeight: 0,
+}))
+
+ipcMain.handle('window:set-titlebar-overlay', (event, payload) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win || process.platform !== 'win32' || typeof win.setTitleBarOverlay !== 'function') {
+      return { ok: false }
+    }
+    const dark = Boolean(payload?.dark)
+    win.setTitleBarOverlay({
+      color: dark ? '#111827' : '#f9fafb',
+      symbolColor: dark ? '#e5e7eb' : '#111827',
+      height: 36,
+    })
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: error?.message ?? String(error) }
+  }
+})
+
 ipcMain.handle('license:get-cached-status', () => {
   return license.getCachedLicenseStatus()
 })
@@ -897,23 +1015,84 @@ ipcMain.handle('show-save-dialog-export', async (event, defaultFileName) => {
 ipcMain.handle('export:save-workbook', async (event, payload) => {
   try {
     const win = BrowserWindow.fromWebContents(event.sender)
-    const rawName = typeof payload?.fileName === 'string' ? payload.fileName : 'export.xls'
+    const rawName = typeof payload?.fileName === 'string' ? payload.fileName : 'export.xlsx'
     const baseName = path.basename(rawName).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
-    const fileName = /\.xls$/i.test(baseName) ? baseName : `${baseName}.xls`
+    const fileName = /\.xlsx$/i.test(baseName) ? baseName : `${baseName.replace(/\.(xlsx|xls)$/i, '')}.xlsx`
     const result = await dialog.showSaveDialog(win ?? undefined, {
       title: '导出 Excel',
       defaultPath: fileName,
-      filters: [{ name: 'Excel 工作簿', extensions: ['xls'] }],
+      filters: [
+        { name: 'Excel 工作簿 (*.xlsx)', extensions: ['xlsx'] },
+        { name: '所有文件', extensions: ['*'] },
+      ],
     })
     if (result.canceled || !result.filePath) {
       return { ok: false, cancelled: true }
     }
     let filePath = result.filePath
-    if (!/\.xls$/i.test(filePath)) {
-      filePath = `${filePath}.xls`
+    if (!/\.xlsx$/i.test(filePath)) {
+      filePath = `${filePath.replace(/\.(xlsx|xls)$/i, '')}.xlsx`
     }
-    fs.writeFileSync(filePath, `\ufeff${String(payload?.content ?? '')}`, 'utf8')
+    const bytes = payload?.content
+    const data = Buffer.from(
+      bytes instanceof ArrayBuffer
+        ? new Uint8Array(bytes)
+        : bytes?.buffer
+          ? new Uint8Array(bytes.buffer, bytes.byteOffset ?? 0, bytes.byteLength ?? bytes.length)
+          : bytes ?? []
+    )
+    fs.writeFileSync(filePath, data)
     return { ok: true, filePath }
+  } catch (error) {
+    return { ok: false, error: error?.message ?? String(error) }
+  }
+})
+
+ipcMain.handle('export:save-binary', async (event, payload) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const rawName = typeof payload?.fileName === 'string' ? payload.fileName : 'export.flo'
+    const baseName = path.basename(rawName).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    const fileName = /\.flo$/i.test(baseName) ? baseName : `${baseName}.flo`
+    const result = await dialog.showSaveDialog(win ?? undefined, {
+      title: '导出 Flo',
+      defaultPath: fileName,
+      filters: [{ name: 'MetCal Flo', extensions: ['flo'] }],
+    })
+    if (result.canceled || !result.filePath) {
+      return { ok: false, cancelled: true }
+    }
+    let filePath = result.filePath
+    if (!/\.flo$/i.test(filePath)) {
+      filePath = `${filePath}.flo`
+    }
+    const bytes = payload?.buffer
+    const data = Buffer.from(bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes ?? [])
+    fs.writeFileSync(filePath, data)
+    return { ok: true, filePath }
+  } catch (error) {
+    return { ok: false, error: error?.message ?? String(error) }
+  }
+})
+
+ipcMain.handle('export:open-flo-template', async (event) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showOpenDialog(win ?? undefined, {
+      title: '选择 MetCal Flo 模板',
+      filters: [{ name: 'MetCal Flo', extensions: ['flo'] }],
+      properties: ['openFile'],
+    })
+    if (result.canceled || !result.filePaths?.length) {
+      return { ok: false, cancelled: true }
+    }
+    const filePath = result.filePaths[0]
+    const data = fs.readFileSync(filePath)
+    return {
+      ok: true,
+      filePath,
+      buffer: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+    }
   } catch (error) {
     return { ok: false, error: error?.message ?? String(error) }
   }
@@ -922,23 +1101,28 @@ ipcMain.handle('export:save-workbook', async (event, payload) => {
 ipcMain.handle('copper-case:save-desktop', async (event, payload) => {
   try {
     const win = BrowserWindow.fromWebContents(event.sender)
-    const rawName = typeof payload?.fileName === 'string' ? payload.fileName : '铜冶炼案例.metcal-copper-case.json'
+    const rawName = typeof payload?.fileName === 'string' ? payload.fileName : '铜冶炼案例.metcal'
     const baseName = path.basename(rawName).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
-    const fileName = baseName.endsWith('.metcal-copper-case.json') ? baseName : `${baseName}.metcal-copper-case.json`
+    const lower = baseName.toLowerCase()
+    const hasKnownExt =
+      lower.endsWith('.metcal') ||
+      lower.endsWith('.metcal-copper-case.json') ||
+      lower.endsWith('.json')
+    const fileName = hasKnownExt ? baseName : `${baseName}.metcal`
     const result = await dialog.showSaveDialog(win ?? undefined, {
       title: '导出铜冶炼案例',
       defaultPath: fileName,
       filters: [
-        { name: '铜冶炼案例', extensions: ['metcal-copper-case.json'] },
-        { name: 'JSON', extensions: ['json'] },
+        { name: '铜冶炼案例', extensions: ['metcal'] },
+        { name: '旧版案例 JSON', extensions: ['metcal-copper-case.json', 'json'] },
       ],
     })
     if (result.canceled || !result.filePath) {
       return { ok: false, cancelled: true }
     }
     let filePath = result.filePath
-    if (!/\.(metcal-copper-case\.json|json)$/i.test(filePath)) {
-      filePath = `${filePath}.metcal-copper-case.json`
+    if (!/\.(metcal|metcal-copper-case\.json|json)$/i.test(filePath)) {
+      filePath = `${filePath}.metcal`
     }
     fs.writeFileSync(filePath, String(payload?.content ?? ''), 'utf8')
     return { ok: true, filePath }
@@ -954,6 +1138,8 @@ app.whenReady().then(async () => {
   try {
     license.setElectronApp(app)
     mark('license.init')
+    Menu.setApplicationMenu(buildApplicationMenu())
+    mark('menu.ready')
     createSplashWindow()
     mark('splash.created')
 
