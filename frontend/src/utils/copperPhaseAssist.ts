@@ -1,4 +1,4 @@
-import { validatePhaseFormulaInput } from './chemicalFormula.ts'
+import { normalizeMetcalPhaseFormula, validatePhaseFormulaInput } from './chemicalFormula.ts'
 import { atomicMass, COMPOUND_MOLAR_MASS } from './atomicMass.ts'
 import { CONCENTRATE_DEFAULT_PHASE_FORMULAS, concentratePhaseFractionsForFormula } from './copperConcentratePhaseNorm.ts'
 import {
@@ -23,6 +23,7 @@ import {
 import type { CopperMaterialColumn } from './copperWorkflowCalc.ts'
 import { BATCH_PHASE_ASSIST_MIN_DISPLAY_COLUMNS } from './copperBatchTableLayout.ts'
 import type { PhasePivotRow } from './copperPhaseBatchCalc.ts'
+import { COPPER_BUILTIN_PHASE_FRACTIONS } from './copperPhaseStoichiometry.ts'
 
 export type MaterialPhaseAssistRow = {
   id: string
@@ -125,9 +126,12 @@ export function createMaterialPhaseRowsFromFormulas(formulas: string[]): Materia
   const rows = formulas.flatMap((formula): MaterialPhaseAssistRow[] => {
     if (formula.trim().toLowerCase() === 'other') return [createOtherMaterialPhaseRow()]
     const trimmed = formula.trim()
-    const elementComponentRow = createElementComponentPhaseRow(trimmed)
+    const normalized = normalizeMetcalPhaseFormula(trimmed) || trimmed
+    const elementComponentRow = createElementComponentPhaseRow(trimmed) ?? createElementComponentPhaseRow(normalized)
     if (elementComponentRow) return [elementComponentRow]
-    const builtinKey = COPPER_BUILTIN_PHASE_DISPLAY_ORDER.find((key) => key.toLowerCase() === trimmed.toLowerCase())
+    const builtinKey = COPPER_BUILTIN_PHASE_DISPLAY_ORDER.find(
+      (key) => key.toLowerCase() === trimmed.toLowerCase() || key.toLowerCase() === normalized.toLowerCase()
+    )
     if (builtinKey) {
       return [
         {
@@ -140,20 +144,51 @@ export function createMaterialPhaseRowsFromFormulas(formulas: string[]): Materia
         },
       ]
     }
-    const concentrateFractions = concentratePhaseFractionsForFormula(trimmed)
-    if (Object.keys(concentrateFractions).length > 0) {
+    const stoichKey = [trimmed, normalized].find((key) => COPPER_BUILTIN_PHASE_FRACTIONS[key])
+    if (stoichKey) {
       return [
         {
-          id: `custom:${trimmed}`,
+          id: `custom:${stoichKey}`,
           kind: 'custom',
-          formula: trimmed,
-          displayLabel: phaseStorageKeyToDisplayLabel(trimmed),
+          formula: stoichKey,
+          displayLabel: phaseStorageKeyToDisplayLabel(stoichKey),
+          fractions: { ...(COPPER_BUILTIN_PHASE_FRACTIONS[stoichKey] as Partial<Record<CopperElementKey, number>>) },
+        },
+      ]
+    }
+    const concentrateFractionsTrimmed = concentratePhaseFractionsForFormula(trimmed)
+    const concentrateFractionsNormalized = concentratePhaseFractionsForFormula(normalized)
+    const concentrateFractions =
+      Object.keys(concentrateFractionsTrimmed).length > 0
+        ? concentrateFractionsTrimmed
+        : concentrateFractionsNormalized
+    if (Object.keys(concentrateFractions).length > 0) {
+      const formulaKey =
+        Object.keys(concentrateFractionsTrimmed).length > 0 ? trimmed : normalized
+      return [
+        {
+          id: `custom:${formulaKey}`,
+          kind: 'custom',
+          formula: formulaKey,
+          displayLabel: phaseStorageKeyToDisplayLabel(formulaKey),
           fractions: concentrateFractions,
         },
       ]
     }
-    const resolved = resolveMaterialPhaseFormula(formula)
-    if (!resolved.ok || !resolved.row) return []
+    const resolved = resolveMaterialPhaseFormula(normalized)
+    if (!resolved.ok || !resolved.row) {
+      const fallback = resolveMaterialPhaseFormula(trimmed)
+      if (!fallback.ok || !fallback.row) return []
+      return [
+        {
+          id: `custom:${fallback.row.formula}`,
+          kind: 'custom',
+          formula: fallback.row.formula,
+          displayLabel: fallback.row.displayLabel,
+          fractions: fallback.row.fractions,
+        },
+      ]
+    }
     return [
       {
         id: `custom:${resolved.row.formula}`,
@@ -183,12 +218,70 @@ export function createDefaultMaterialPhaseRowsForMaterial(
   material?: Pick<CopperMaterialColumn, 'id' | 'name' | 'kind'>
 ): MaterialPhaseAssistRow[] {
   const name = material?.name.trim() ?? ''
-  const isSilica = material?.id === 'silica' || material?.id === 'solvent-silica' || name.includes('石英石')
+  const id = material?.id ?? ''
+  const isSilica = id === 'silica' || id === 'solvent-silica' || name.includes('石英石')
   if (material?.kind === 'solvent' && isSilica) {
     return createSilicaMaterialPhaseRows()
   }
   if (material?.kind === 'fuel') {
     return createCoalMaterialPhaseRows()
+  }
+  if (
+    id === 'raw-scrap-1' ||
+    id === 'raw-scrap-2' ||
+    name === '残极一' ||
+    name === '残极二' ||
+    name === '残极' ||
+    name === '残极三' ||
+    name === '残极1' ||
+    name === '残极2'
+  ) {
+    return createMaterialPhaseRowsFromFormulas([
+      'Cu',
+      'Cu2O',
+      'Cu2S',
+      'Cu3As',
+      'Fe',
+      'Pb',
+      'Zn',
+      'Ni',
+      'Bi',
+      'Sb',
+      'Sn',
+      'Se',
+      'Cd',
+      'Au',
+      'Ag',
+      'Te',
+      'Other',
+    ])
+  }
+  if (id === 'raw-oxide-slag' || name === '氧化渣') {
+    return createMaterialPhaseRowsFromFormulas([
+      'Cu2O',
+      'Cu3As',
+      'Fe3O4',
+      'PbO',
+      'ZnO',
+      'NiO',
+      'BiO',
+      'SbO',
+      'SeO2',
+      'SnO',
+      'Cd',
+      'Au',
+      'Ag',
+      'Te',
+      'Other',
+    ])
+  }
+  if (
+    id === 'solvent-lime' ||
+    id === 'lime' ||
+    name === '石灰石' ||
+    name === '石灰'
+  ) {
+    return createMaterialPhaseRowsFromFormulas(['SiO2', 'CaCO3', 'MgCO3', 'Fe', 'Other'])
   }
   return createDefaultMaterialPhaseRows()
 }
@@ -331,12 +424,11 @@ export function mapPhaseContentsToTableKeys(
 }
 
 function componentPercentForFormula(formula: string, ratios: Record<CopperElementKey, number>): number {
+  // FeO 已由 normalizeCopperRatios(splitFeO) 折入 Fe(铁)/O(氧)，元素键不含 FeO
   if (formula === 'Fe') {
-    return Math.max(0, ratios['Fe(铁)'] ?? 0) + Math.max(0, ratios['FeO(氧化亚铁)'] ?? 0)
+    return Math.max(0, ratios['Fe(铁)'] ?? 0)
   }
   if (formula === 'Fe2O3') {
-    const storedOxide = Math.max(0, ratios['FeO(氧化亚铁)'] ?? 0)
-    if (storedOxide > 0) return storedOxide
     const fe = Math.max(0, ratios['Fe(铁)'] ?? 0)
     const feFraction = (2 * atomicMass('Fe')) / COMPOUND_MOLAR_MASS.Fe2O3
     return feFraction > 0 ? fe / feFraction : fe

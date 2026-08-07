@@ -66,6 +66,19 @@ export const COPPER_BUILTIN_PHASE_FRACTIONS: Record<string, Partial<Record<strin
     'Fe(铁)': elementMassFraction({ Fe: 3, O: 4 }, 'Fe'),
     'O(氧)': elementMassFraction({ Fe: 3, O: 4 }, 'O'),
   },
+  Fe2SiO4: {
+    'Fe(铁)': elementMassFraction({ Fe: 2, Si: 1, O: 4 }, 'Fe'),
+    'SiO₂(二氧化硅)':
+      elementMassFraction({ Fe: 2, Si: 1, O: 4 }, 'Si') * (MM.SiO2 / atomicMass('Si')),
+    'O(氧)': elementMassFraction({ Fe: 2, Si: 1, O: 4 }, 'O'),
+  },
+  /** MetCal 常用 CaO·Fe2O3 */
+  CaFe2O4: {
+    'CaO(氧化钙)':
+      elementMassFraction({ Ca: 1, Fe: 2, O: 4 }, 'Ca') * (MM.CaO / atomicMass('Ca')),
+    'Fe(铁)': elementMassFraction({ Ca: 1, Fe: 2, O: 4 }, 'Fe'),
+    'O(氧)': elementMassFraction({ Ca: 1, Fe: 2, O: 4 }, 'O'),
+  },
   SiO2: { 'SiO₂(二氧化硅)': 1 },
   CaO: { 'CaO(氧化钙)': 1 },
   Al2O3: { 'Al₂O₃(三氧化二铝)': 1 },
@@ -99,11 +112,32 @@ export const COPPER_BUILTIN_PHASE_FRACTIONS: Record<string, Partial<Record<strin
     'Bi(铋)': elementMassFraction({ Bi: 2, O: 3 }, 'Bi'),
     'O(氧)': elementMassFraction({ Bi: 2, O: 3 }, 'O'),
   },
+  /** MetCal 氧化渣常写作 BiO */
+  BiO: {
+    'Bi(铋)': elementMassFraction({ Bi: 1, O: 1 }, 'Bi'),
+    'O(氧)': elementMassFraction({ Bi: 1, O: 1 }, 'O'),
+  },
+  /** MetCal 氧化渣常写作 SbO */
+  SbO: {
+    'Sb(锑)': elementMassFraction({ Sb: 1, O: 1 }, 'Sb'),
+    'O(氧)': elementMassFraction({ Sb: 1, O: 1 }, 'O'),
+  },
   SnO: {
     'Sn(锡)': elementMassFraction({ Sn: 1, O: 1 }, 'Sn'),
     'O(氧)': elementMassFraction({ Sn: 1, O: 1 }, 'O'),
   },
   MgO: { 'MgO(氧化镁)': 1 },
+  /** 石灰石碳酸盐：CaO/MgO 当量 + C + 碳酸根氧（与产物 CO2 氧守恒对齐） */
+  CaCO3: {
+    'CaO(氧化钙)': MM.CaO / MM.CaCO3,
+    'C (碳)': atomicMass('C') / MM.CaCO3,
+    'O(氧)': (2 * atomicMass('O')) / MM.CaCO3,
+  },
+  MgCO3: {
+    'MgO(氧化镁)': MM.MgO / MM.MgCO3,
+    'C (碳)': atomicMass('C') / MM.MgCO3,
+    'O(氧)': (2 * atomicMass('O')) / MM.MgCO3,
+  },
   PbS: {
     'Pb(铅)': elementMassFraction({ Pb: 1, S: 1 }, 'Pb'),
     'S (硫)': elementMassFraction({ Pb: 1, S: 1 }, 'S'),
@@ -152,6 +186,7 @@ export const COPPER_BUILTIN_PHASE_FRACTIONS: Record<string, Partial<Record<strin
   },
   Hg: { 'Hg(汞)': 1 },
   Cu: { 'Cu(铜)': 1 },
+  Fe: { 'Fe(铁)': 1 },
   Ni: { 'Ni(镍)': 1 },
   Pb: { 'Pb(铅)': 1 },
   Zn: { 'Zn(锌)': 1 },
@@ -163,6 +198,11 @@ export const COPPER_BUILTIN_PHASE_FRACTIONS: Record<string, Partial<Record<strin
   Au: { 'Au(金)': 1 },
   Ag: { 'Ag(银)': 1 },
   Te: { 'Te(碲)': 1 },
+  /** 残极常见砷铜化合物 */
+  Cu3As: {
+    'Cu(铜)': elementMassFraction({ Cu: 3, As: 1 }, 'Cu'),
+    'As(砷)': elementMassFraction({ Cu: 3, As: 1 }, 'As'),
+  },
 }
 
 /** 物相中氧质量分数（SiO₂/CaO/Al₂O₃ 中的氧不计入 O₂ 列） */

@@ -3,6 +3,7 @@
  * 输出目录：release-win7，安装包名带 -Win7兼容
  * 需先完成前端构建与（可选）后端打包，再执行本脚本
  */
+require('./electron-mirrors')
 const path = require('path')
 const fs = require('fs')
 const { execSync } = require('child_process')

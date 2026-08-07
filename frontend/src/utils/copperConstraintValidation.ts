@@ -1,17 +1,18 @@
-import { phaseFractionsFromFormula } from './chemicalFormula.ts'
 import { resolveConstraintElementBinding } from './copperConstraintElementBridge.ts'
 import {
   CONSTRAINT_PLACEHOLDER_ELEMENTS,
   OXY_PRODUCT_KEY_TO_CN,
   OXY_SIDE_BLOW_PRODUCT_KEYS,
+  isOxyConvertingConstraintConfig,
+  oxyProductDisplayName,
   resolveProductEffectiveAllowedElements,
   type ConstraintElementKey,
   type DistributionRuleType,
   type ElementDistributionRule,
+  type OxyProductDisplayStage,
   type OxySideBlowConstraintConfig,
   type OxySideBlowProductKey,
 } from './copperConstraintConfig.ts'
-import { COPPER_BUILTIN_PHASE_FRACTIONS } from './copperPhaseStoichiometry.ts'
 import { COPPER_ELEMENT_KEYS, type CopperElementKey } from './copperWorkflowCalc.ts'
 
 export const CONSTRAINT_PERCENT_TOLERANCE = 1e-6
@@ -53,6 +54,8 @@ export interface ProductConstraintValidationResult {
 
 export interface ProductConstraintValidationOptions {
   allowBlankDAutoFill?: boolean
+  /** 校验文案中的产物显示名；默认熔炼 */
+  productDisplayStage?: OxyProductDisplayStage
 }
 
 function formatPct(value: number) {
@@ -133,31 +136,6 @@ function ruleKey(product: OxySideBlowProductKey, element: ConstraintElementKey, 
   return `${type}:${element}:${product}`
 }
 
-function phaseFormulaFractions(phaseKey: string): Partial<Record<CopperElementKey, number>> {
-  if (phaseKey === 'Other') return { 'Other(其他)': 1 }
-  const builtin = COPPER_BUILTIN_PHASE_FRACTIONS[phaseKey] as Partial<Record<CopperElementKey, number>> | undefined
-  if (builtin && Object.keys(builtin).length > 0) return builtin
-  return phaseFractionsFromFormula(phaseKey) as Partial<Record<CopperElementKey, number>>
-}
-
-function phaseConstraintElementFraction(phaseKey: string, constraintElement: ConstraintElementKey): number {
-  const binding = resolveConstraintElementBinding(constraintElement)
-  const fractions = phaseFormulaFractions(phaseKey)
-  const compoundFraction = fractions[binding.poolKey] ?? 0
-  return compoundFraction * binding.poolMetalFraction
-}
-
-function singleCarrierPhaseKey(
-  config: OxySideBlowConstraintConfig,
-  productKey: OxySideBlowProductKey,
-  constraintElement: ConstraintElementKey
-): string | null {
-  const carriers = config.products[productKey].phases
-    .map((phaseKey) => ({ phaseKey, fraction: phaseConstraintElementFraction(phaseKey, constraintElement) }))
-    .filter((item) => item.fraction > 1e-12)
-  return carriers.length === 1 ? carriers[0]!.phaseKey : null
-}
-
 function cloneOxySideBlowConstraintConfig(config: OxySideBlowConstraintConfig): OxySideBlowConstraintConfig {
   return {
     ...config,
@@ -186,15 +164,28 @@ export function migrateOxyProductConstraintDefaults(
   config: OxySideBlowConstraintConfig,
   defaultConfig: OxySideBlowConstraintConfig
 ): OxySideBlowConstraintConfig {
+  // 禁止熔炼默认模板与吹炼配置互迁（否则自定义约束产物名会串味）
+  if (isOxyConvertingConstraintConfig(config) !== isOxyConvertingConstraintConfig(defaultConfig)) {
+    return cloneOxySideBlowConstraintConfig(defaultConfig)
+  }
+
   const next = cloneOxySideBlowConstraintConfig(config)
   if ((next.version ?? 0) >= defaultConfig.version) return next
 
   const defaults = cloneOxySideBlowConstraintConfig(defaultConfig)
+  const previousVersion = next.version ?? 0
   next.version = defaults.version
   next.products = defaults.products
+  next.method = defaults.method
   next.solverParams = next.solverParams
     ? { ...(defaults.solverParams ?? {}), ...next.solverParams }
     : defaults.solverParams
+
+  const defaultElements = new Set(defaults.elementDistributions.map((entry) => entry.element))
+  // v6+：按默认开闭收敛产物规则（去掉已关闭产物上的空白/旧规则，补齐新增默认）
+  if (previousVersion < 6 && defaults.version >= 6) {
+    next.elementDistributions = next.elementDistributions.filter((entry) => defaultElements.has(entry.element))
+  }
 
   const entriesByElement = new Map(next.elementDistributions.map((entry) => [entry.element, entry]))
   for (const defaultEntry of defaults.elementDistributions) {
@@ -203,6 +194,10 @@ export function migrateOxyProductConstraintDefaults(
       entry = { element: defaultEntry.element, rules: [] }
       next.elementDistributions.push(entry)
       entriesByElement.set(entry.element, entry)
+    }
+    const defaultProducts = new Set(defaultEntry.rules.map((rule) => rule.product))
+    if (previousVersion < 6 && defaults.version >= 6) {
+      entry.rules = entry.rules.filter((rule) => defaultProducts.has(rule.product))
     }
     const productsWithRules = new Set(entry.rules.map((rule) => rule.product))
     for (const defaultRule of defaultEntry.rules) {
@@ -214,8 +209,15 @@ export function migrateOxyProductConstraintDefaults(
 
   next.customConstraints = [
     ...defaults.customConstraints.map((defaultConstraint) => ({ ...defaultConstraint })),
-    ...next.customConstraints.slice(defaults.customConstraints.length),
   ]
+  // 熔炼：保留默认表之后用户追加的自定义约束。吹炼升级时以默认表为准，
+  // 避免 slice 拼接把旧版「渣游离 CaO」或重复供氧系数残条带回来。
+  if (!isOxyConvertingConstraintConfig(defaults) && next.customConstraints.length < config.customConstraints.length) {
+    next.customConstraints = [
+      ...next.customConstraints,
+      ...config.customConstraints.slice(defaults.customConstraints.length).map((entry) => ({ ...entry })),
+    ]
+  }
 
   return next
 }
@@ -234,33 +236,11 @@ function setAutoFillRule(
 
 function collectAutoFillCandidates(config: OxySideBlowConstraintConfig): ProductConstraintAutoFill[] {
   const fills: ProductConstraintAutoFill[] = []
-  const zeroPhaseKeys = new Set<string>()
-
-  for (const entry of config.elementDistributions) {
-    for (const rule of entry.rules) {
-      if (rule.type !== 'D%') continue
-      if (!productCanCarryConstraintElement(config, rule.product, entry.element)) continue
-      if (isBlankConstraintRuleValue(rule.value)) continue
-      const resolved = resolveConstraintRuleValue(rule.value, config.variables, `${entry.element} ${OXY_PRODUCT_KEY_TO_CN[rule.product]} ${rule.type}`)
-      if (!resolved.valid) continue
-      if (Math.abs(resolved.value) <= CONSTRAINT_PERCENT_TOLERANCE) {
-        const phaseKey = singleCarrierPhaseKey(config, rule.product, entry.element)
-        if (phaseKey) zeroPhaseKeys.add(`${rule.product}:${phaseKey}`)
-      }
-    }
-  }
 
   for (const entry of config.elementDistributions) {
     const dRules = entry.rules.filter((rule) => rule.type === 'D%' && productCanCarryConstraintElement(config, rule.product, entry.element))
     const blankRules = dRules.filter((rule) => isBlankConstraintRuleValue(rule.value))
     if (blankRules.length === 0) continue
-
-    for (const rule of blankRules) {
-      const phaseKey = singleCarrierPhaseKey(config, rule.product, entry.element)
-      if (phaseKey && zeroPhaseKeys.has(`${rule.product}:${phaseKey}`)) {
-        fills.push({ product: rule.product, element: entry.element, type: 'D%', value: 0 })
-      }
-    }
 
     if (entry.rules.some((rule) => rule.type === 'W%')) continue
 
@@ -318,17 +298,19 @@ export function validateOxyProductConstraintConfig(
   const dTotalsByElement: Record<string, number> = {}
   const wTotalsByProduct: Partial<Record<OxySideBlowProductKey, number>> = {}
   const dRulesByElement: Record<string, ElementDistributionRule[]> = {}
+  const stage = options.productDisplayStage ?? 'smelting'
+  const productName = (productKey: OxySideBlowProductKey) => oxyProductDisplayName(productKey, stage)
 
   for (const entry of config.elementDistributions) {
     const seenProducts = new Set<string>()
     for (const rule of entry.rules) {
       const key = ruleKey(rule.product, entry.element, rule.type)
-      const productName = OXY_PRODUCT_KEY_TO_CN[rule.product]
+      const displayProduct = productName(rule.product)
       const duplicateKey = `${rule.product}:${rule.type}`
       if (seenProducts.has(duplicateKey)) {
         errors.push({
           key: `${key}:duplicate`,
-          message: `${entry.element} 在 ${productName} 存在重复 ${rule.type} 约束`,
+          message: `${entry.element} 在 ${displayProduct} 存在重复 ${rule.type} 约束`,
           product: rule.product,
           element: entry.element,
           type: rule.type,
@@ -336,10 +318,21 @@ export function validateOxyProductConstraintConfig(
       }
       seenProducts.add(duplicateKey)
 
+      if (CONSTRAINT_PLACEHOLDER_ELEMENTS.has(entry.element)) {
+        warnings.push({
+          key: `${key}:placeholder`,
+          message: `${entry.element} 为占位元素，不参与产出求解；请清除该列约束`,
+          product: rule.product,
+          element: entry.element,
+          type: rule.type,
+        })
+        continue
+      }
+
       if (!productCanCarryConstraintElement(config, rule.product, entry.element)) {
         errors.push({
           key,
-          message: `${productName} 不能承接 ${entry.element}，请取消该单元格约束或调整产物物相`,
+          message: `${displayProduct} 不能承接 ${entry.element}，请取消该单元格约束或调整产物物相`,
           product: rule.product,
           element: entry.element,
           type: rule.type,
@@ -354,7 +347,7 @@ export function validateOxyProductConstraintConfig(
         continue
       }
 
-      const resolved = resolveConstraintRuleValue(rule.value, config.variables, `${entry.element} ${productName} ${rule.type}`)
+      const resolved = resolveConstraintRuleValue(rule.value, config.variables, `${entry.element} ${displayProduct} ${rule.type}`)
       if (!resolved.valid) {
         errors.push({ key, message: resolved.error ?? '约束值无效', product: rule.product, element: entry.element, type: rule.type })
         continue
@@ -385,18 +378,12 @@ export function validateOxyProductConstraintConfig(
     if (total > 100 + CONSTRAINT_PERCENT_TOLERANCE) {
       errors.push({
         key: `W:${productKey}:total`,
-        message: `${OXY_PRODUCT_KEY_TO_CN[productKey]} 的 W 合计为 ${formatPct(total)}%，不能超过 100%`,
-        product: productKey,
-        type: 'W%',
-      })
-    } else if (total > CONSTRAINT_PERCENT_TOLERANCE && total < 100 - CONSTRAINT_PERCENT_TOLERANCE) {
-      warnings.push({
-        key: `W:${productKey}:total`,
-        message: `${OXY_PRODUCT_KEY_TO_CN[productKey]} 的 W 合计为 ${formatPct(total)}%，尚未闭合到 100%`,
+        message: `${productName(productKey)} 的 W 合计为 ${formatPct(total)}%，不能超过 100%`,
         product: productKey,
         type: 'W%',
       })
     }
+    // W 未满 100% 不提示：由空白格留给求解分配，只有超过 100% 才是错误
   }
 
   const autoFills = options.allowBlankDAutoFill === false ? [] : collectAutoFillCandidates(config)

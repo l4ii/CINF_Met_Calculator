@@ -430,7 +430,7 @@ export function validateRawMaterialPhaseInputs(params: {
     const names = missingPhase.map((m) => m.name).join('、')
     return {
       ok: false,
-      message: `请先在「投入物相」完成以下原料的物相回填：${names}。`,
+      message: `请先在「投入-物料物相表」完成以下原料的物相：${names}。`,
     }
   }
   if (!params.blendPhaseMass || Object.keys(params.blendPhaseMass).length === 0) {

@@ -26,7 +26,7 @@ import {
   calculateHessChemicalHeatMJh,
   sourceMaterialFromColumn,
 } from '../src/utils/copperHeatBalance.ts'
-import { applyPostFuelClosureToHeatBalance, DEFAULT_HEAT_BALANCE_TOLERANCE_PCT } from '../src/utils/copperHeatBalanceClosure.ts'
+import { applyPostFuelClosureToHeatBalance } from '../src/utils/copperHeatBalanceClosure.ts'
 import {
   COPPER_MATERIAL_LIBRARY,
   calculateWeightedComposition,
@@ -242,7 +242,6 @@ const heatBalance = calculateCopperHeatBalanceDetailed({
 const closed = applyPostFuelClosureToHeatBalance(heatBalance, {
   coolingWaterMassTh: 3000,
   coolingWaterInletTemperatureC: 30,
-  tolerancePct: DEFAULT_HEAT_BALANCE_TOLERANCE_PCT,
 })
 
 const incomeTotal = closed.heatIncomeRows.reduce((sum, row) => sum + Math.max(0, row.heatMJh), 0)
@@ -260,7 +259,11 @@ assert(
 )
 assert(
   !closed.equations.some((row) => row.limitingPhase === 'Hess闭合'),
-  '化学反应热不应再含 Hess/进出焓差闭合行；配平用总表「误差」'
+  '化学反应热不应再含 Hess/进出焓差闭合行'
+)
+assert(
+  !closed.heatExpenditureRows.some((row) => row.isBalanceError || row.material === '误差'),
+  '热支出不应使用「误差」项配平'
 )
 
 const hessFromRows = calculateHessChemicalHeatMJh(closed.inputPhysicalRows, closed.outputPhysicalRows)
@@ -339,8 +342,6 @@ const output = {
   coolingWaterOutletTemperatureC: round(closed.coolingWaterOutletTemperatureC, 2),
   otherHeatMJh: round(closed.otherHeatMJh, 2),
   balanceErrorMJh: round(closed.balanceErrorMJh ?? 0, 2),
-  heatBalanceTolerancePct: closed.heatBalanceTolerancePct ?? DEFAULT_HEAT_BALANCE_TOLERANCE_PCT,
-  balanceErrorWithinTolerance: closed.balanceErrorWithinTolerance ?? false,
   closureStatus: closed.closureStatus,
   reactions: closed.equations
     .filter((row) => Math.abs(row.heatMJh) > 1e-6)

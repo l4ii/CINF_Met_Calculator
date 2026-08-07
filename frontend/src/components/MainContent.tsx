@@ -263,8 +263,8 @@ export default function MainContent({
         )}
       </div>
 
-      <div ref={mainScrollRef} className="flex-1 min-h-0 overflow-y-auto">
-        <div className="w-full max-w-none px-3 py-3 xl:px-4 2xl:px-6">
+      <div ref={mainScrollRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div className="flex w-full max-w-none flex-1 flex-col px-3 pt-3 pb-0 xl:px-4 2xl:px-6">
           {isAntimonySideBlown && (
             <div
               className={`mb-3 flex flex-wrap gap-2 rounded-lg border p-2 ${

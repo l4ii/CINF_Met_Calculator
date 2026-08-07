@@ -84,7 +84,7 @@ export type BatchContextHint =
 
 type BatchContextHintPayload<
   Anchor extends string,
-  Extra extends Record<string, unknown> = Record<string, never>,
+  Extra extends object = object,
 > = Extra & {
   anchor: Anchor
   message: string

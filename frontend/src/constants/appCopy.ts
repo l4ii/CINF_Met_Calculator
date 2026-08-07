@@ -3,8 +3,11 @@
  * 与根目录 electron-builder*.yml 的 productName 及 electron/main.js 中 APP_DISPLAY_NAME 保持语义一致（修改时请同步）。
  */
 
+/** 不含机构前缀的平台名（弹窗等窄宽度场景） */
+export const APP_PLATFORM_NAME_ZH = '冶金工艺计算与三维设计一体化平台'
+
 /** 正式产品名：与安装器 productName、窗口对外展示一致 */
-export const APP_NAME_ZH = '长沙有色冶金设计研究院冶金工艺计算与三维设计一体化平台'
+export const APP_NAME_ZH = `长沙有色冶金设计研究院${APP_PLATFORM_NAME_ZH}`
 export const APP_NAME_EN = 'CINF Metallurgical Intelligent Process Design Platform'
 
 export const APP_TITLE_MAIN_ZH = APP_NAME_ZH

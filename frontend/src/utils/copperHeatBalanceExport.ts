@@ -73,7 +73,7 @@ type ComponentHeatGroup = {
   orderIndex: number
 }
 
-function buildComponentHeatGroups(rows: HeatComponentRow[], side: 'input' | 'output'): ComponentHeatGroup[] {
+function buildComponentHeatGroups(rows: HeatComponentRow[]): ComponentHeatGroup[] {
   const grouped = new Map<string, { rows: HeatComponentRow[]; orderIndex: number }>()
   rows.forEach((row, index) => {
     const existing = grouped.get(row.section)
@@ -93,8 +93,8 @@ function buildComponentHeatGroups(rows: HeatComponentRow[], side: 'input' | 'out
     .sort((a, b) => a.orderIndex - b.orderIndex)
 }
 
-function buildComponentPhysicalHeatSheet(title: string, rows: HeatComponentRow[], side: 'input' | 'output'): CopperBatchWorkbookSheet {
-  const groups = buildComponentHeatGroups(rows, side)
+function buildComponentPhysicalHeatSheet(title: string, rows: HeatComponentRow[]): CopperBatchWorkbookSheet {
+  const groups = buildComponentHeatGroups(rows)
   const maxRowCount = Math.max(0, ...groups.map((group) => group.rows.length))
   const columns: CopperBatchExportColumn[] = [
     { header: '№', subHeader: '№' },
@@ -125,7 +125,7 @@ function buildComponentPhysicalHeatSheet(title: string, rows: HeatComponentRow[]
     label: '总计',
     values: [
       '总计',
-      ...groups.flatMap((group, index) =>
+      ...groups.flatMap((_, index) =>
         index === groups.length - 1 ? ['', fmt(grandTotal)] : ['', '']
       ),
     ],
@@ -159,15 +159,25 @@ function buildReactionHeatSheet(title: string, result: CopperHeatBalanceResult):
   const releaseMJh = result.chemicalHeatReleaseMJh
   const absorptionMJh = result.chemicalHeatAbsorptionMJh
   const pathNetMJh = result.chemicalHeatPathMJh ?? releaseMJh - absorptionMJh
-  const hessNetMJh = result.chemicalHeatMJh
+  const hessNetMJh = result.chemicalHeatHessMJh ?? result.chemicalHeatMJh
+  const mode = result.chemicalHeatMode === 'reaction' ? 'reaction' : 'hess'
+  const usesStream298 = result.chemicalHeatCalculationBasis === 'stream298'
   const summary = (label: string, value: number) => ({
     label,
     values: ['', '', '', '', '', label, fmt(value)],
   })
   exportRows.push(summary('放热合计', releaseMJh))
   exportRows.push(summary('吸热合计', absorptionMJh))
-  exportRows.push(summary('路径净化学热', pathNetMJh))
-  exportRows.push(summary('总表化学热（Hess）', hessNetMJh))
+  if (usesStream298) {
+    exportRows.push(summary('总表化学热（进出物流 298 K Σn×ΔH298）', hessNetMJh))
+    exportRows.push(summary('反应方程明细净热（不计入总表）', pathNetMJh))
+  } else if (mode === 'reaction') {
+    exportRows.push(summary('总表化学热（化学反应）', pathNetMJh))
+    exportRows.push(summary('对照：Hess', hessNetMJh))
+  } else {
+    exportRows.push(summary('总表化学热（Hess）', hessNetMJh))
+    exportRows.push(summary('对照：反应路径净热', pathNetMJh))
+  }
   return { title, columns, rows: exportRows }
 }
 
@@ -184,7 +194,7 @@ type EnthalpyMatrixGroup = {
   temperature: number | null
 }
 
-function buildEnthalpyMatrixGroups(rows: HeatComponentRow[], side: 'input' | 'output'): EnthalpyMatrixGroup[] {
+function buildEnthalpyMatrixGroups(rows: HeatComponentRow[]): EnthalpyMatrixGroup[] {
   const grouped = new Map<string, { rows: HeatComponentRow[]; orderIndex: number }>()
   rows.forEach((row, index) => {
     const existing = grouped.get(row.section)
@@ -213,8 +223,8 @@ function enthalpyKelvinLabel(temperature: number | null): string {
   return String(Math.round(temperature + 273.15))
 }
 
-function buildEnthalpySheet(title: string, rows: HeatComponentRow[], side: 'input' | 'output'): CopperBatchWorkbookSheet {
-  const groups = buildEnthalpyMatrixGroups(rows, side)
+function buildEnthalpySheet(title: string, rows: HeatComponentRow[]): CopperBatchWorkbookSheet {
+  const groups = buildEnthalpyMatrixGroups(rows)
   const maxRowCount = Math.max(0, ...groups.map((group) => group.rows.length))
   const columns: CopperBatchExportColumn[] = [
     { header: '№', subHeader: '№' },
@@ -263,9 +273,9 @@ function buildHeatBalanceSummarySheet(title: string, result: CopperHeatBalanceRe
 export function buildHeatBalanceExportSheets(result: CopperHeatBalanceResult): CopperBatchWorkbookSheet[] {
   return [
     buildHeatBalanceSummarySheet('热量平衡总表', result),
-    buildComponentPhysicalHeatSheet('热收入-投入组分物理热', result.inputPhysicalRows, 'input'),
+    buildComponentPhysicalHeatSheet('热收入-投入组分物理热', result.inputPhysicalRows),
     buildReactionHeatSheet('化学反应热', result),
-    buildEnthalpySheet('热收入-投入组分热焓', result.inputPhysicalRows, 'input'),
-    buildEnthalpySheet('热支出-产物组分热焓', result.outputPhysicalRows, 'output'),
+    buildEnthalpySheet('热收入-投入组分热焓', result.inputPhysicalRows),
+    buildEnthalpySheet('热支出-产物组分热焓', result.outputPhysicalRows),
   ]
 }

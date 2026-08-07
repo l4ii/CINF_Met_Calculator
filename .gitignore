@@ -30,6 +30,7 @@ lerna-debug.log*
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
+!.vscode/settings.json
 .idea
 *.suo
 *.ntvs*
@@ -45,6 +46,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 ENV/
 env.bak/
 venv.bak/
@@ -103,5 +105,5 @@ build_env/
 # Documentation (moved to docs/)
 # Keep root README.md only
 
-# 冶金配料离线授权签发私钥（公钥 electron/license-public.pem 可入库）
-scripts/license-private.pem
+# Flo 吹炼约束探测临时输出
+.flo_converting_probe/

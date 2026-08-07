@@ -110,6 +110,20 @@ body {
     monospace;
 }
 
+/* 中英混排长文（如自定义约束表达式）退出 KaTeX，与界面无衬线一致 */
+.katex-app-typography .ui-app-sans {
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    'Roboto',
+    'Helvetica Neue',
+    'Noto Sans SC',
+    'PingFang SC',
+    'Microsoft YaHei',
+    sans-serif;
+}
+
 /* ---- Sidebar slim scrollbar ---- */
 .sidebar-scroll::-webkit-scrollbar {
   width: 5px;
@@ -165,325 +179,149 @@ code {
   100% { background-position: 0% 50%; }
 }
 
-.equipment-3d-stage {
-  min-height: clamp(460px, 58vh, 680px);
-  display: grid;
-  place-items: center;
-  overflow: hidden;
+/* 侧吹炉 three.js 视图：容器占满整宽，画布由组件按容器尺寸挂载 */
+.furnace-viewer-stage {
   position: relative;
-  border: 1px solid rgba(148, 163, 184, 0.36);
+  width: 100%;
+  height: clamp(520px, 62vh, 760px);
+  overflow: hidden;
   border-radius: 1rem;
-  cursor: grab;
-  user-select: none;
-  touch-action: none;
+  border: 1px solid rgba(148, 163, 184, 0.36);
   background:
-    linear-gradient(rgba(148, 163, 184, 0.18) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 184, 0.18) 1px, transparent 1px),
-    radial-gradient(circle at 50% 18%, rgba(96, 165, 250, 0.22), transparent 34%),
-    linear-gradient(180deg, #f8fafc 0%, #e2e8f0 62%, #cbd5e1 100%);
-  background-size: 44px 44px, 44px 44px, auto, auto;
+    radial-gradient(circle at 50% 22%, rgba(255, 255, 255, 0.95), transparent 46%),
+    linear-gradient(180deg, #ffffff 0%, #f1f5f9 58%, #e2e8f0 100%);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.76),
-    inset 0 -34px 80px rgba(15, 23, 42, 0.10);
-  perspective: 1320px;
+    inset 0 -34px 80px rgba(15, 23, 42, 0.08);
+  touch-action: none;
+  user-select: none;
 }
 
-.equipment-3d-stage:active {
-  cursor: grabbing;
-}
-
-.equipment-3d-stage-dark {
+.furnace-viewer-stage-dark {
+  border-color: rgba(71, 85, 105, 0.6);
   background:
-    linear-gradient(rgba(59, 130, 246, 0.12) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(59, 130, 246, 0.12) 1px, transparent 1px),
-    radial-gradient(circle at 50% 18%, rgba(59, 130, 246, 0.24), transparent 35%),
-    linear-gradient(180deg, #111827 0%, #020617 78%, #020617 100%);
-  background-size: 44px 44px, 44px 44px, auto, auto;
+    radial-gradient(circle at 50% 22%, rgba(30, 41, 59, 0.92), transparent 46%),
+    linear-gradient(180deg, #0f172a 0%, #020617 100%);
 }
 
-.equipment-3d-scene {
-  --furnace-scale: 1;
-  --furnace-rotation: -34deg;
-  --furnace-tilt: 58deg;
-  position: relative;
-  width: min(720px, 92%);
-  height: 440px;
-  transform-style: preserve-3d;
-  transform: rotateX(var(--furnace-tilt)) rotateZ(var(--furnace-rotation)) scale(var(--furnace-scale));
-  transition: transform 120ms ease-out;
-}
-
-.furnace-foundation {
+.furnace-viewer-canvas-host {
   position: absolute;
-  left: 132px;
-  top: 292px;
-  width: 430px;
-  height: 112px;
-  transform: translateZ(-46px);
-  border-radius: 16px;
-  background:
-    linear-gradient(90deg, rgba(148, 163, 184, 0.28), rgba(71, 85, 105, 0.18)),
-    repeating-linear-gradient(90deg, rgba(15, 23, 42, 0.12) 0 18px, transparent 18px 38px);
-  box-shadow: 0 26px 50px rgba(15, 23, 42, 0.22);
+  inset: 0;
 }
 
-.furnace-body {
+.furnace-viewer-canvas-host canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+}
+
+.furnace-viewer-hint {
   position: absolute;
-  left: 190px;
-  top: 178px;
-  width: 275px;
-  height: 104px;
-  transform-style: preserve-3d;
-  animation: furnace-float 4.6s ease-in-out infinite;
+  left: 50%;
+  bottom: 0.75rem;
+  transform: translateX(-50%);
+  max-width: calc(100% - 1.5rem);
+  padding: 0.28rem 0.75rem;
+  border-radius: 0.75rem;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  text-align: center;
+  color: #334155;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  pointer-events: none;
 }
 
-.furnace-face {
+.furnace-viewer-layer-toggles {
   position: absolute;
-  border: 1px solid rgba(15, 23, 42, 0.22);
-  background:
-    linear-gradient(180deg, rgba(226, 232, 240, 0.18), transparent 26%),
-    linear-gradient(135deg, #64748b, #1f2937);
-  box-shadow:
-    inset 0 0 30px rgba(255, 255, 255, 0.08),
-    inset 0 -24px 32px rgba(15, 23, 42, 0.22);
+  z-index: 2;
+  top: 0.75rem;
+  right: 0.75rem;
+  left: auto;
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 0.45rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.65rem;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
 }
 
-.furnace-face-front,
-.furnace-face-back {
-  width: 275px;
-  height: 104px;
+.furnace-viewer-layer-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+  user-select: none;
 }
 
-.furnace-face-front {
-  transform: translateZ(64px);
-  background:
-    linear-gradient(180deg, rgba(226, 232, 240, 0.16), transparent 26%),
-    linear-gradient(135deg, #64748b 0%, #334155 48%, #111827 100%);
+.furnace-viewer-layer-toggle input {
+  margin: 0;
+  accent-color: #2563eb;
 }
 
-.furnace-face-back {
-  transform: rotateY(180deg) translateZ(64px);
+.furnace-viewer-stage-dark .furnace-viewer-layer-toggles {
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.88);
+  border-color: rgba(71, 85, 105, 0.7);
 }
 
-.furnace-face-right,
-.furnace-face-left {
-  width: 128px;
-  height: 104px;
-  left: 74px;
+.furnace-viewer-stage-dark .furnace-viewer-hint {
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.82);
+  border-color: rgba(71, 85, 105, 0.7);
 }
 
-.furnace-face-right {
-  transform: rotateY(90deg) translateZ(201px);
-  background: linear-gradient(135deg, #334155, #0f172a);
+.furnace-viewer-stage-axes-hover,
+.furnace-viewer-stage-axes-hover .furnace-viewer-canvas-host canvas {
+  cursor: pointer;
 }
 
-.furnace-face-left {
-  transform: rotateY(-90deg) translateZ(74px);
-  background: linear-gradient(135deg, #94a3b8, #334155);
-}
-
-.furnace-face-top,
-.furnace-face-bottom {
-  width: 275px;
-  height: 128px;
-  top: -12px;
-}
-
-.furnace-face-top {
-  transform: rotateX(90deg) translateZ(64px);
-  background:
-    linear-gradient(90deg, rgba(15, 23, 42, 0.18) 0 10px, transparent 10px 42px),
-    linear-gradient(135deg, #94a3b8, #475569);
-}
-
-.furnace-face-bottom {
-  transform: rotateX(-90deg) translateZ(40px);
-}
-
-.furnace-tap,
-.furnace-stack,
-.furnace-stack-base,
-.furnace-feed-hopper,
-.furnace-feed-chute,
-.furnace-offgas-duct,
-.furnace-water-jacket,
-.furnace-molten-window,
-.furnace-tuyere,
-.furnace-platform,
-.furnace-support {
+/* 悬停水套/风口时跟随鼠标的编号提示 */
+.furnace-viewer-tooltip {
   position: absolute;
-  transform-style: preserve-3d;
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.22);
+  z-index: 2;
+  transform: translate(-50%, -140%);
+  padding: 0.2rem 0.55rem;
+  border-radius: 0.4rem;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #0f172a;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.18);
+  pointer-events: none;
 }
 
-.furnace-water-jacket {
-  left: 10px;
-  width: 255px;
-  height: 15px;
-  transform: translateZ(66px);
-  border-radius: 3px;
-  border: 1px solid rgba(15, 23, 42, 0.20);
-  background:
-    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.20) 0 5px, transparent 5px 28px),
-    linear-gradient(90deg, #93c5fd, #1d4ed8 45%, #0f172a);
+.furnace-viewer-stage-dark .furnace-viewer-tooltip {
+  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.95);
+  border-color: rgba(71, 85, 105, 0.8);
 }
 
-.jacket-upper { top: 14px; }
-.jacket-middle { top: 43px; }
-.jacket-lower { top: 74px; }
-
-.furnace-molten-window {
-  left: 28px;
-  top: 68px;
-  width: 212px;
-  height: 22px;
-  transform: translateZ(68px);
-  border-radius: 999px;
-  background:
-    radial-gradient(circle at 18% 50%, rgba(254, 215, 170, 0.9), transparent 20%),
-    linear-gradient(90deg, #f97316, #b45309 48%, #7c2d12);
-  box-shadow: 0 0 24px rgba(249, 115, 22, 0.32);
-}
-
-.furnace-tuyere-row {
+.furnace-viewer-notice {
   position: absolute;
-  left: 0;
-  top: 0;
-  transform-style: preserve-3d;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #475569;
 }
 
-.furnace-tuyere {
-  width: 34px;
-  height: 11px;
-  top: 50px;
-  border-radius: 999px;
-  transform: translateZ(84px) rotateY(74deg);
-  background: linear-gradient(90deg, #dbeafe, #2563eb 56%, #172554);
-  box-shadow: 0 8px 14px rgba(37, 99, 235, 0.28);
-}
-
-.tuyere-secondary {
-  top: 30px;
-  width: 28px;
-  height: 9px;
-  transform: translateZ(82px) rotateY(72deg);
-  background: linear-gradient(90deg, #e0f2fe, #0284c7 56%, #0c4a6e);
-}
-
-.furnace-tap {
-  border-radius: 999px;
-  background: linear-gradient(135deg, #f97316, #7c2d12);
-  box-shadow: 0 0 22px rgba(249, 115, 22, 0.36);
-}
-
-.furnace-slag-tap {
-  width: 60px;
-  height: 18px;
-  right: -44px;
-  top: 54px;
-  transform: translateZ(35px) rotateZ(5deg);
-}
-
-.furnace-matte-tap {
-  width: 50px;
-  height: 15px;
-  right: -34px;
-  top: 82px;
-  transform: translateZ(18px) rotateZ(-3deg);
-  background: linear-gradient(135deg, #facc15, #92400e);
-}
-
-.furnace-stack-base {
-  width: 78px;
-  height: 46px;
-  left: 178px;
-  top: -18px;
-  border-radius: 10px;
-  transform: translateZ(78px) rotateX(72deg);
-  background: linear-gradient(135deg, #94a3b8, #334155);
-}
-
-.furnace-stack {
-  width: 44px;
-  height: 105px;
-  left: 192px;
-  top: -90px;
-  border-radius: 999px 999px 10px 10px;
-  transform: translateZ(96px) rotateX(84deg);
-  background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.25), transparent 42%),
-    linear-gradient(180deg, #94a3b8, #1e293b);
-}
-
-.furnace-feed-hopper {
-  width: 72px;
-  height: 58px;
-  left: 28px;
-  top: -46px;
-  border-radius: 8px 8px 24px 24px;
-  transform: translateZ(94px) rotateX(76deg);
-  background:
-    linear-gradient(135deg, #e2e8f0, #64748b 58%, #334155);
-}
-
-.furnace-feed-chute {
-  width: 108px;
-  height: 17px;
-  left: 76px;
-  top: 11px;
-  border-radius: 999px;
-  transform: translateZ(92px) rotateZ(-15deg);
-  background: linear-gradient(135deg, #64748b, #1f2937);
-}
-
-.furnace-offgas-duct {
-  width: 144px;
-  height: 26px;
-  left: 230px;
-  top: -50px;
-  border-radius: 999px;
-  transform: translateZ(102px) rotateZ(18deg);
-  background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.20), transparent 40%),
-    linear-gradient(135deg, #64748b, #0f172a);
-}
-
-.furnace-platform {
-  height: 9px;
-  border-radius: 999px;
-  background: repeating-linear-gradient(90deg, #94a3b8 0 8px, #475569 8px 14px);
-}
-
-.platform-top {
-  left: 12px;
-  top: -2px;
-  width: 258px;
-  transform: translateZ(112px);
-}
-
-.platform-side {
-  left: -18px;
-  top: 112px;
-  width: 312px;
-  transform: translateZ(72px);
-}
-
-.furnace-support {
-  width: 22px;
-  height: 74px;
-  top: 100px;
-  border-radius: 4px;
-  background: linear-gradient(180deg, #475569, #111827);
-}
-
-.support-left-front { left: 34px; transform: translateZ(58px) rotateX(8deg); }
-.support-right-front { right: 34px; transform: translateZ(58px) rotateX(8deg); }
-.support-left-back { left: 54px; transform: translateZ(-42px) rotateX(8deg); }
-.support-right-back { right: 54px; transform: translateZ(-42px) rotateX(8deg); }
-
-@keyframes furnace-float {
-  0%, 100% { transform: translateZ(0); }
-  50% { transform: translateZ(10px); }
+.furnace-viewer-stage-dark .furnace-viewer-notice {
+  color: #cbd5e1;
 }
 
 .process-island-stage {
@@ -734,13 +572,14 @@ code {
   box-shadow: 0 16px 32px rgba(15, 23, 42, 0.22);
 }
 
-.vessel-refining {
+/* 视觉顺序：熔炼 → 吹炼 → 精炼（左→右） */
+.vessel-converting {
   left: 540px;
   top: 197px;
   transform: translateZ(92px);
 }
 
-.vessel-converting {
+.vessel-refining {
   left: 662px;
   top: 208px;
   width: 82px;
@@ -808,5 +647,5 @@ code {
 }
 
 .label-smelting { left: 260px; top: 162px; }
-.label-refining { left: 552px; top: 172px; }
-.label-converting { left: 666px; top: 184px; }
+.label-converting { left: 552px; top: 172px; }
+.label-refining { left: 666px; top: 184px; }

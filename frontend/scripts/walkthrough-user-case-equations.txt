@@ -1,6 +1,6 @@
 铜冶炼富氧侧吹 - 四矿案例产出求解方程
-生成时间：2026-07-16T03:02:55.433Z
-方程总数：94
+生成时间：2026-08-06T07:10:22.135Z
+方程总数：93
 
 1. OutputE.熔炼渣.Cu(铜) = 2% × Output.熔炼渣
 2. OutputE.白铜锍.Cu(铜) = 75% × Output.白铜锍
@@ -53,46 +53,45 @@
 49. OutputE.白铜锍.Te(碲) = 90% × Input.混料.Te(碲)
 50. OutputE.熔炼渣.Te(碲) = 10% × Input.混料.Te(碲)
 51. OutputE.烟气含尘.Other(其他) = 0.5% × Input.混料.Other(其他)
-52. OutputE.无组织排放.O(氧) = 0% × Input.混料.O(氧)
-53. Input.煤 / Input.混合铜精矿 = 0.013038157348
-54. Input.加料口漏风 / 4500 = 1
-55. (Input.二次风.O2 / O2) / (((Input.混合铜精矿.CuFeS2.S / 4) + (Input.混合铜精矿.FeS2.S / 2)) / S * 0.7 + (Input.煤.C / 12) * 0.7) = 1.02
-56. ((Input.空气.O2 + Input.氧气.O2) / 32 * 22.4) / (Input.空气 + Input.氧气) = 0.85
-57. Output.熔炼出炉烟气.O2 / (Input.空气.O2 + Input.氧气.O2 + Input.二次风.O2 + Input.加料口漏风.O2) = 0.05
-58. OutputE.熔炼渣.Fe / (OutputE.熔炼渣.Si / Si * SiO2) = 2
-59. Output.熔炼渣.Cu2S / Output.熔炼渣.Cu2O = 2
-60. Output.熔炼渣.Fe3O4 / Output.熔炼渣 = 0.15
-61. Output.烟气含尘.Cu2S / Output.烟气含尘.Cu2O = 4
-62. Output.烟气含尘.Fe3O4.Fe / OutputE.烟气含尘.Fe = 0.015
-63. Output.熔炼出炉烟气.As2O3.As / (Output.熔炼出炉烟气.As2O3.As + Output.烟气含尘.As2O3.As) = 0.6
-64. Σ(OutputE.六产物.Cu(铜)) = Input.总投入.Cu(铜)
-65. Σ(OutputE.六产物.S (硫)) = Input.总投入.S (硫)
-66. Σ(OutputE.六产物.Fe(铁)) = Input.总投入.Fe(铁)
-67. Σ(OutputE.六产物.SiO₂(二氧化硅)) = Input.总投入.SiO₂(二氧化硅)
-68. Σ(OutputE.六产物.CaO(氧化钙)) = Input.总投入.CaO(氧化钙)
-69. Σ(OutputE.六产物.MgO(氧化镁)) = Input.总投入.MgO(氧化镁)
-70. Σ(OutputE.六产物.Ag(银)) = Input.总投入.Ag(银)
-71. Σ(OutputE.六产物.Au(金)) = Input.总投入.Au(金)
-72. Σ(OutputE.六产物.Pb(铅)) = Input.总投入.Pb(铅)
-73. Σ(OutputE.六产物.As(砷)) = Input.总投入.As(砷)
-74. Σ(OutputE.六产物.Zn(锌)) = Input.总投入.Zn(锌)
-75. Σ(OutputE.六产物.Al₂O₃(三氧化二铝)) = Input.总投入.Al₂O₃(三氧化二铝)
-76. Σ(OutputE.六产物.Sb(锑)) = Input.总投入.Sb(锑)
-77. Σ(OutputE.六产物.Ni(镍)) = Input.总投入.Ni(镍)
-78. Σ(OutputE.六产物.Se(硒)) = Input.总投入.Se(硒)
-79. Σ(OutputE.六产物.Bi(铋)) = Input.总投入.Bi(铋)
-80. Σ(OutputE.六产物.Hg(汞)) = Input.总投入.Hg(汞)
-81. Σ(OutputE.六产物.Sn(锡)) = Input.总投入.Sn(锡)
-82. Σ(OutputE.六产物.Te(碲)) = Input.总投入.Te(碲)
-83. Σ(OutputE.六产物.Cd(镉)) = Input.总投入.Cd(镉)
-84. Σ(OutputE.六产物.H(氢)) = Input.总投入.H(氢)
-85. Σ(OutputE.六产物.O(氧)) = Input.总投入.O(氧)
-86. Σ(OutputE.六产物.N(氮)) = Input.总投入.N(氮)
-87. Σ(OutputE.六产物.C (碳)) = Input.总投入.C (碳)
-88. Σ(OutputE.六产物.Other(其他)) = Input.总投入.Other(其他)
-89. Σ(OutputE.熔炼渣.所有元素) = Output.熔炼渣（元素w%合计=100%）
-90. Σ(OutputE.白铜锍.所有元素) = Output.白铜锍（元素w%合计=100%）
-91. Σ(OutputE.熔炼出炉烟气.所有元素) = Output.熔炼出炉烟气（元素w%合计=100%）
-92. Σ(OutputE.烟气含尘.所有元素) = Output.烟气含尘（元素w%合计=100%）
-93. Σ(OutputE.无组织排放.所有元素) = Output.无组织排放（元素w%合计=100%）
-94. Σ(OutputE.损失.所有元素) = Output.损失（元素w%合计=100%）
+52. Input.煤 / Input.混合铜精矿 = 0.013038157348
+53. Input.加料口漏风 / 4500 = 1
+54. (Input.二次风.O2 / O2) / (((Input.混合铜精矿.CuFeS2.S / 4) + (Input.混合铜精矿.FeS2.S / 2)) / S * 0.7 + (Input.煤.C / 12) * 0.7) = 1.02
+55. ((Input.空气.O2 + Input.氧气.O2) / 32 * 22.4) / (Input.空气 + Input.氧气) = 0.85
+56. Output.熔炼出炉烟气.O2 / (Input.空气.O2 + Input.氧气.O2 + Input.二次风.O2 + Input.加料口漏风.O2) = 0.05
+57. OutputE.熔炼渣.Fe / (OutputE.熔炼渣.Si / Si * SiO2) = 2
+58. Output.熔炼渣.Cu2S / Output.熔炼渣.Cu2O = 2
+59. Output.熔炼渣.Fe3O4 / Output.熔炼渣 = 0.15
+60. Output.烟气含尘.Cu2S / Output.烟气含尘.Cu2O = 4
+61. Output.烟气含尘.Fe3O4.Fe / OutputE.烟气含尘.Fe = 0.015
+62. Output.熔炼出炉烟气.As2O3.As / (Output.熔炼出炉烟气.As2O3.As + Output.烟气含尘.As2O3.As) = 0.6
+63. Σ(OutputE.六产物.Cu(铜)) = Input.总投入.Cu(铜)
+64. Σ(OutputE.六产物.S (硫)) = Input.总投入.S (硫)
+65. Σ(OutputE.六产物.Fe(铁)) = Input.总投入.Fe(铁)
+66. Σ(OutputE.六产物.SiO₂(二氧化硅)) = Input.总投入.SiO₂(二氧化硅)
+67. Σ(OutputE.六产物.CaO(氧化钙)) = Input.总投入.CaO(氧化钙)
+68. Σ(OutputE.六产物.MgO(氧化镁)) = Input.总投入.MgO(氧化镁)
+69. Σ(OutputE.六产物.Ag(银)) = Input.总投入.Ag(银)
+70. Σ(OutputE.六产物.Au(金)) = Input.总投入.Au(金)
+71. Σ(OutputE.六产物.Pb(铅)) = Input.总投入.Pb(铅)
+72. Σ(OutputE.六产物.As(砷)) = Input.总投入.As(砷)
+73. Σ(OutputE.六产物.Zn(锌)) = Input.总投入.Zn(锌)
+74. Σ(OutputE.六产物.Al₂O₃(三氧化二铝)) = Input.总投入.Al₂O₃(三氧化二铝)
+75. Σ(OutputE.六产物.Sb(锑)) = Input.总投入.Sb(锑)
+76. Σ(OutputE.六产物.Ni(镍)) = Input.总投入.Ni(镍)
+77. Σ(OutputE.六产物.Se(硒)) = Input.总投入.Se(硒)
+78. Σ(OutputE.六产物.Bi(铋)) = Input.总投入.Bi(铋)
+79. Σ(OutputE.六产物.Hg(汞)) = Input.总投入.Hg(汞)
+80. Σ(OutputE.六产物.Sn(锡)) = Input.总投入.Sn(锡)
+81. Σ(OutputE.六产物.Te(碲)) = Input.总投入.Te(碲)
+82. Σ(OutputE.六产物.Cd(镉)) = Input.总投入.Cd(镉)
+83. Σ(OutputE.六产物.H(氢)) = Input.总投入.H(氢)
+84. Σ(OutputE.六产物.O(氧)) = Input.总投入.O(氧)
+85. Σ(OutputE.六产物.N(氮)) = Input.总投入.N(氮)
+86. Σ(OutputE.六产物.C (碳)) = Input.总投入.C (碳)
+87. Σ(OutputE.六产物.Other(其他)) = Input.总投入.Other(其他)
+88. Σ(OutputE.熔炼渣.所有元素) = Output.熔炼渣（元素w%合计=100%）
+89. Σ(OutputE.白铜锍.所有元素) = Output.白铜锍（元素w%合计=100%）
+90. Σ(OutputE.熔炼出炉烟气.所有元素) = Output.熔炼出炉烟气（元素w%合计=100%）
+91. Σ(OutputE.烟气含尘.所有元素) = Output.烟气含尘（元素w%合计=100%）
+92. Σ(OutputE.无组织排放.所有元素) = Output.无组织排放（元素w%合计=100%）
+93. Σ(OutputE.损失.所有元素) = Output.损失（元素w%合计=100%）

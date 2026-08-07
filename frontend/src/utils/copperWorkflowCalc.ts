@@ -27,6 +27,11 @@ export interface CopperMaterialColumn {
   name: string
   kind: 'raw' | 'solvent' | 'fuel' | 'gas'
   airRole?: 'air' | 'oxygen' | 'secondary' | 'feed_leak'
+  /**
+   * 混料分组：精矿计入「混合铜精矿」；other（渣精矿/吹炼渣等）在混料下单列「其他」，不计入混合铜精矿加权。
+   * 未设置时按精矿处理。
+   */
+  mixGroup?: 'concentrate' | 'other'
   weight: number
   /** 含水质量 t/h；湿基 = weight + waterWeight */
   waterWeight?: number
@@ -34,6 +39,31 @@ export interface CopperMaterialColumn {
   moisture?: number
   ratios: CopperRatios
   unitPrice?: number
+}
+
+/** Flo 导入常见的混料「其他」固体名（无 mixGroup 时按名称回退识别） */
+const MIX_OTHER_MATERIAL_NAME_FALLBACKS = new Set(['渣精矿', '吹炼渣'])
+
+/** 是否为混料「其他」固体（不计入混合铜精矿） */
+export function isMixOtherMaterial(
+  material: Pick<CopperMaterialColumn, 'mixGroup' | 'name'>
+): boolean {
+  if (material.mixGroup === 'other') return true
+  if (material.mixGroup === 'concentrate') return false
+  return MIX_OTHER_MATERIAL_NAME_FALLBACKS.has(material.name?.trim() ?? '')
+}
+
+/** 拆分精矿 vs 混料其他 */
+export function partitionRawMixMaterials<T extends Pick<CopperMaterialColumn, 'mixGroup'>>(
+  materials: T[]
+): { concentrates: T[]; others: T[] } {
+  const concentrates: T[] = []
+  const others: T[] = []
+  for (const material of materials) {
+    if (isMixOtherMaterial(material)) others.push(material)
+    else concentrates.push(material)
+  }
+  return { concentrates, others }
 }
 
 const H2O_ELEMENT_FRACTIONS = COPPER_BUILTIN_PHASE_FRACTIONS.H2O ?? {}
@@ -55,7 +85,15 @@ export function deriveDryBasisMoisturePercent(dryWeight: number, waterWeight: nu
   return (water / dry) * 100
 }
 
-export function materialWaterWeight(material: Pick<CopperMaterialColumn, 'weight' | 'waterWeight' | 'moisture'>): number {
+export function materialWaterWeight(material: Pick<CopperMaterialColumn, 'weight' | 'waterWeight' | 'moisture' | 'kind' | 'airRole'>): number {
+  // 气体列水分必须随干基质量按 moisture% 缩放。
+  // 若沿用固体的绝对 waterWeight，回填改干基气量后 H2O 不跟着变，
+  // 富氧硬投影（按每吨干基摩尔分率）与验收求值会系统性偏离（如 85%→88.3%）。
+  if (material.kind === 'gas' || material.airRole) {
+    const dry = Math.max(0, material.weight)
+    const m = Math.max(0, material.moisture ?? 0)
+    return dry > 0 && m > 0 ? dry * (m / 100) : 0
+  }
   if (material.waterWeight != null && Number.isFinite(material.waterWeight)) {
     return Math.max(0, material.waterWeight)
   }
@@ -64,7 +102,7 @@ export function materialWaterWeight(material: Pick<CopperMaterialColumn, 'weight
   return dry > 0 && m > 0 ? dry * (m / 100) : 0
 }
 
-export function materialWetWeight(material: Pick<CopperMaterialColumn, 'weight' | 'waterWeight' | 'moisture'>): number {
+export function materialWetWeight(material: Pick<CopperMaterialColumn, 'weight' | 'waterWeight' | 'moisture' | 'kind' | 'airRole'>): number {
   return Math.max(0, material.weight) + materialWaterWeight(material)
 }
 
@@ -106,7 +144,7 @@ export function syncMaterialMoistureFromWater(
 export interface CopperLibraryMaterial {
   id: string
   name: string
-  category: 'concentrate' | 'return' | 'flux'
+  category: 'concentrate' | 'return' | 'flux' | 'product'
   ratios: CopperRatios
   unitPrice: number
 }
@@ -451,6 +489,56 @@ export const COPPER_MATERIAL_LIBRARY: CopperLibraryMaterial[] = [
   },
 ]
 
+/** 将默认熔剂转为原料库 flux 条目（石灰显示为石灰石） */
+export function createFluxLibraryMaterialFromSolvent(solvent: CopperSolvent): CopperLibraryMaterial {
+  const displayName = solvent.name === '石灰' ? '石灰石' : solvent.name
+  return {
+    id: `flux-${solvent.id}`,
+    name: displayName,
+    category: 'flux',
+    unitPrice: solvent.unitPrice,
+    ratios: solventOxidesToElements(solvent.composition),
+  }
+}
+
+/** 熔炼原料库：精矿 + 石英石/铁矿石熔剂 */
+export function createSmeltingMaterialLibrary(): CopperLibraryMaterial[] {
+  const silica = DEFAULT_COPPER_SOLVENTS.find((item) => item.id === 'silica')
+  const ironOre = DEFAULT_COPPER_SOLVENTS.find((item) => item.id === 'iron-ore')
+  return [
+    ...COPPER_MATERIAL_LIBRARY.map((item) => ({
+      ...item,
+      ratios: { ...item.ratios },
+    })),
+    ...(silica ? [createFluxLibraryMaterialFromSolvent(silica)] : []),
+    ...(ironOre ? [createFluxLibraryMaterialFromSolvent(ironOre)] : []),
+  ]
+}
+
+export function isLibraryFluxCategory(category: CopperLibraryMaterial['category']): boolean {
+  return category === 'flux'
+}
+
+export function isLibraryRawCategory(category: CopperLibraryMaterial['category']): boolean {
+  return category === 'concentrate' || category === 'return' || category === 'product'
+}
+
+export function libraryCategoryLabel(category: CopperLibraryMaterial['category']): string {
+  if (category === 'flux') return '熔剂'
+  if (category === 'return') return '回流'
+  if (category === 'product') return '产物'
+  return '原料'
+}
+
+export function filterLibraryByGroup(
+  library: CopperLibraryMaterial[],
+  group: 'all' | 'raw' | 'flux'
+): CopperLibraryMaterial[] {
+  if (group === 'flux') return library.filter((item) => isLibraryFluxCategory(item.category))
+  if (group === 'raw') return library.filter((item) => isLibraryRawCategory(item.category))
+  return library
+}
+
 function nearlyEqualRatio(a: number | undefined, b: number, tolerance = 1e-3) {
   return Math.abs((a ?? 0) - b) <= tolerance
 }
@@ -791,9 +879,20 @@ export function dryPercentToWetBasis(dryPercent: number, moisturePercent: number
 
 export const DEFAULT_COPPER_OXYGEN_AIR_SETTINGS = { oxygenPct: 99.65, nitrogenPct: 0.35 } as const
 
+/**
+ * 西南铜 .flo 吹炼气体 V%：空气/漏风 O₂ 20.430、N₂ 76.857、H₂O 2.713；
+ * 氧气 O₂ 99.600、N₂ 0.400（无水，对应干基质量约 O 99.65 / N 0.35）。
+ * weightPct 由体积分数按摩尔质量换算。
+ */
 export const DEFAULT_STANDARD_AIR_PHASE_COMPOSITION = {
-  weightPct: { O2: 22.89, N2: 75.4, H2O: 1.71 },
-  volumePct: { O2: 20.43, N2: 76.86, H2O: 2.71 },
+  weightPct: { O2: 22.902, N2: 75.387, H2O: 1.711 },
+  volumePct: { O2: 20.43, N2: 76.857, H2O: 2.713 },
+} as const
+
+/** 氧气干基质量分数（与 Flo V% 99.6 / 0.4 互算） */
+export const DEFAULT_OXYGEN_AIR_PHASE_COMPOSITION = {
+  weightPct: { O2: 99.65, N2: 0.35, H2O: 0 },
+  volumePct: { O2: 99.6, N2: 0.4, H2O: 0 },
 } as const
 
 const STANDARD_AIR_DRY_WEIGHT_PCT =
@@ -820,10 +919,13 @@ const LEGACY_STANDARD_AIR_RATIOS = [
   { 'H(氢)': 0, 'O(氧)': 21, 'N(氮)': 79, 'C (碳)': 0, 'Other(其他)': 0 },
   { 'H(氢)': 0, 'O(氧)': 24.456, 'N(氮)': 75.544, 'Other(其他)': 0 },
   { 'H(氢)': 0.19, 'O(氧)': 24.41, 'N(氮)': 75.4, 'Other(其他)': 0 },
+  // 旧 weightPct 22.89/75.4 干基
+  { 'H(氢)': 0, 'O(氧)': 23.288844, 'N(氮)': 76.711156, 'Other(其他)': 0 },
 ] as const
 const LEGACY_OXYGEN_RATIOS = [
   { 'H(氢)': 0, 'O(氧)': 100, 'N(氮)': 0, 'C (碳)': 0, 'Other(其他)': 0 },
   { 'H(氢)': 0, 'O(氧)': 70, 'N(氮)': 30, 'C (碳)': 0, 'Other(其他)': 0 },
+  { 'H(氢)': 0, 'O(氧)': 99.6, 'N(氮)': 0.4, 'Other(其他)': 0 },
 ] as const
 
 function ratioValue(ratios: Record<string, number> | undefined, key: string): number {
@@ -902,15 +1004,24 @@ export function createProcessAirColumns(): CopperMaterialColumn[] {
   ]
 }
 
+/** 吹炼气体列：无二次风（热收入通常大于热支出，不配二次风） */
+export function createConvertingProcessAirColumns(): CopperMaterialColumn[] {
+  return createProcessAirColumns().filter((column) => column.airRole !== 'secondary')
+}
+
 const LEGACY_OXYGEN_AIR_IDS = new Set(['oxygen-enriched-air', 'pure-oxygen'])
 
 /** 旧案例迁移：oxygen-enriched-air → pure-oxygen；补全加料口漏风列 */
 export function normalizeProcessAirColumns(
   airColumns?: CopperMaterialColumn[] | null,
-  legacyOxygenAirColumn?: CopperMaterialColumn | null
+  legacyOxygenAirColumn?: CopperMaterialColumn | null,
+  options?: { includeSecondaryAir?: boolean }
 ): CopperMaterialColumn[] {
-  const defaults = createProcessAirColumns()
-  const provided = [...(airColumns ?? [])]
+  const includeSecondaryAir = options?.includeSecondaryAir !== false
+  const defaults = includeSecondaryAir ? createProcessAirColumns() : createConvertingProcessAirColumns()
+  const provided = [...(airColumns ?? [])].filter(
+    (column) => includeSecondaryAir || column.airRole !== 'secondary'
+  )
   if (legacyOxygenAirColumn && !provided.some((c) => LEGACY_OXYGEN_AIR_IDS.has(c.id) || c.airRole === 'oxygen')) {
     provided.push(legacyOxygenAirColumn)
   }

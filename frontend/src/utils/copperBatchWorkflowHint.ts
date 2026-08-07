@@ -61,6 +61,42 @@ export function resolveBatchWorkflowHint(params: {
   }
   if (!hasActiveCase) return null
 
+  const isConverting = activeSheet === 'cu_converting'
+
+  if (isConverting) {
+    if (batchTableView === 'element') {
+      return {
+        anchor: 'parametersTab',
+        message: '吹炼元素表只读：请切换到「投入-物料物相表」编辑投料量与物相%',
+      }
+    }
+    if (batchTableView === 'phase') {
+      const unweighed = rawMaterials.find((material) => material.name.trim() && !(material.weight > 0))
+      if (unweighed) {
+        return {
+          anchor: 'rawWeight',
+          materialId: unweighed.id,
+          message: '投料(物相表)：请填写投料量 (t/h)，物相%已有默认值可直接改',
+        }
+      }
+      const needsPhase = rawMaterials.find(
+        (material) =>
+          material.name.trim() &&
+          material.weight > 0 &&
+          !phaseCompletedMaterials[material.id]
+      )
+      if (needsPhase) {
+        return {
+          anchor: 'rawWeight',
+          materialId: needsPhase.id,
+          message: '投料(物相表)：请确认该原料物相合计为 100% 后再进入产出约束',
+        }
+      }
+      return { anchor: 'parametersTab', message: '产出约束：物相已就绪，可直接进入产出约束并计算产出' }
+    }
+    return null
+  }
+
   const closureHint = firstMaterialNeedingPhaseClosure(rawMaterials)
   if (closureHint) return closureHint
 
@@ -117,5 +153,4 @@ export function resolveBatchWorkflowHint(params: {
   }
 
   return { anchor: 'parametersTab', message: '关键参数输入：确认参数后点击下一步进入产出计算' }
-
 }

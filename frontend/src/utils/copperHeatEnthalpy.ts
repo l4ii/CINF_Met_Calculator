@@ -1,12 +1,33 @@
+import { normalizeMetcalPhaseFormula } from './chemicalFormula.ts'
+
 export type CopperHeatEnthalpyRecord = {
   h25: number
+  h1206?: number
+  h1245?: number
+  h1250?: number
   h1300?: number
   h1350?: number
 }
 
-export type CopperHeatEnthalpyContext = 'smeltingSlag' | 'matte' | 'flueGas' | 'dust' | 'fugitive' | 'loss'
+export type CopperHeatEnthalpyContext =
+  | 'smeltingSlag'
+  | 'matte'
+  | 'flueGas'
+  | 'dust'
+  | 'fugitive'
+  | 'loss'
+  | 'convertingOxideSlagFeed'
+  | 'convertingScrapFeed'
+  | 'convertingLimeFeed'
+  | 'convertingMatteFeed'
+  | 'convertingSlag'
+  | 'convertingCopper'
+  | 'convertingFlueGas'
+  | 'convertingDust'
+  | 'convertingFugitive'
+  | 'convertingLoss'
 
-export const COPPER_HEAT_ENTHALPY_TEMPERATURES_C = [25, 1300, 1350] as const
+export const COPPER_HEAT_ENTHALPY_TEMPERATURES_C = [25, 1206, 1245, 1250, 1300, 1350] as const
 export const COPPER_INPUT_STANDARD_ENTHALPY_KJ_MOL: Record<string, number> = {
   SiO2: -910.879,
   CaO: -634.935,
@@ -39,6 +60,7 @@ export const COPPER_INPUT_STANDARD_ENTHALPY_KJ_MOL: Record<string, number> = {
   Ag: 0,
   CuSO4: -770,
   Cu: 0,
+  Cu3As: -11.7154798005,
   Sn: 0,
   Te: 0,
   H2O: -285.837,
@@ -161,11 +183,147 @@ export const COPPER_PRODUCT_PHASE_ENTHALPY_KJ_MOL: Partial<
     Cu: { h25: 0, h1350: 51.2402623146897 },
     S: { h25: 0, h1350: 45.0895370065435 },
   },
+  // Values transcribed from the converting workbook heat-enthalpy tables.
+  convertingOxideSlagFeed: {
+    Cu2O: { h25: -130.224007388878 },
+    Cu3As: { h25: -11.7154798005 },
+    Fe3O4: { h25: -993.333789019775 },
+    PbO: { h25: -202.248988017654 },
+    ZnO: { h25: -309.541934674072 },
+    NiO: { h25: -178.631864425278 },
+    SeO2: { h25: -225.505391318893 },
+    SnO: { h25: -280.715467401124 },
+    Cd: { h25: 5.60722883566617 },
+    Ag: { h25: 6.39274116257429 },
+    Other: { h25: -572.908288334654 },
+  },
+  convertingScrapFeed: {
+    Cu: { h25: 0 },
+    Cu2O: { h25: -170.604082229 },
+    Cu2S: { h25: -79.4979 },
+    Cu3As: { h25: -11.7154798005 },
+    Fe: { h25: 0 },
+    Pb: { h25: 0 },
+    Zn: { h25: 0 },
+    Ni: { h25: 0 },
+    Bi: { h25: 0 },
+    Sb: { h25: 0 },
+    Sn: { h25: 0 },
+    Se: { h25: 0 },
+    Cd: { h25: 0 },
+    Au: { h25: 0 },
+    Ag: { h25: 0 },
+    Te: { h25: 0 },
+    Other: { h25: -634.935195826723 },
+  },
+  convertingLimeFeed: {
+    SiO2: { h25: -910.879 },
+    CaCO3: { h25: -1206.629 },
+    MgCO3: { h25: -1096.026 },
+    Fe: { h25: 0 },
+    Other: { h25: -634.935195826723 },
+  },
+  convertingMatteFeed: {
+    Cu2S: { h25: -68.099992717552, h1245: 41.2916297002 },
+    FeS: { h25: -64.6311124709127, h1245: 11.6826864555 },
+    Fe3O4: { h25: -993.333789019775, h1245: -732.99908702 },
+    Cu3As: { h25: -11.7154798005, h1245: 124.91393438 },
+    Ni: { h25: 3.36060505344271, h1245: 55.9380066271 },
+    Pb: { h25: 3.87294882187844, h1245: 40.2115493234 },
+    Zn: { h25: 5.7270032351017, h1245: 44.0115182351 },
+    As2S3: { h25: -81.9991759975436, h1245: 143.706215569 },
+    Se: { h25: 0, h1245: 46.4430329275 },
+    Bi: { h25: 9.2714312391758, h1245: 45.0526334687 },
+    Sb: { h25: 17.5308884363652, h1245: 55.8154034364 },
+    Cd: { h25: 5.60722883566616, h1245: 41.8499025489 },
+    Sn: { h25: 0, h1245: 41.7363707748 },
+    Au: { h25: 0, h1245: 47.3752823879 },
+    Ag: { h25: 6.39274116257429, h1245: 47.2295571626 },
+    Te: { h25: 0, h1245: 55.7605390139 },
+    Other: { h25: -572.908288334658, h1245: -496.339258335 },
+  },
+  convertingSlag: {
+    Cu2S: { h25: -68.0999927175524, h1250: 41.7399560216 },
+    Cu2O: { h25: -130.224007388878, h1250: -7.82653439039 },
+    Fe3O4: { h25: -993.333789019775, h1250: -731.93214152 },
+    PbO: { h25: -202.248988017654, h1250: -122.623996762 },
+    ZnO: { h25: -309.541934674072, h1250: -235.221858424 },
+    As2O3: { h25: -643.439192651366, h1250: -456.357621401 },
+    NiO: { h25: -178.631864425278, h1250: -112.000071925 },
+    Bi2O3: { h25: -578.023812817384, h1250: -343.367206691 },
+    Sb2O3: { h25: -675.489924728393, h1250: -483.282830978 },
+    CaFe2O4: { h25: -1479.45590368, h1250: -1149.74119954 },
+    CaSiO3: { h25: -1634.97895686035, h1250: -1488.99065679 },
+    MgSiO3: { h25: -1548.53543553772, h1250: -1403.41065934 },
+    SeO2: { h25: -225.505391318893, h1250: -91.8535086029 },
+    SnO: { h25: -280.715467401124, h1250: -184.18292008 },
+    Cd: { h25: 5.60722883566617, h1250: 41.9984380969 },
+    Au: { h25: 0, h1250: 47.5312381898 },
+    Ag: { h25: 6.39274116257429, h1250: 47.3969211626 },
+    Te: { h25: 0, h1250: 55.9233429049 },
+    Other: { h25: -572.908288334654, h1250: -496.025450835 },
+  },
+  convertingCopper: {
+    Cu: { h25: 0, h1250: 48.100187392 },
+    Cu2S: { h25: -79.4979, h1250: 42.2239695425 },
+    Cu2O: { h25: -170.604082229, h1250: -7.98450810556 },
+    Cu3As: { h25: -11.7154798005, h1250: 124.91393438 },
+    Fe3O4: { h25: -1118.40987892, h1250: -866.379026511 },
+    Pb: { h25: 0, h1250: 40.4231616877 },
+    Zn: { h25: 0, h1250: 44.239182986 },
+    Ni: { h25: 0, h1250: 39.95331303 },
+    Bi: { h25: 0, h1250: 45.1800209861 },
+    Sb: { h25: 0, h1250: 55.9723070957 },
+    Se: { h25: 0, h1250: 46.6209902861 },
+    Sn: { h25: 0, h1250: 41.8781855609 },
+    Cd: { h25: 0, h1250: 42.035897737 },
+    Au: { h25: 0, h1250: 47.5312381898 },
+    Ag: { h25: 0, h1250: 47.379401314 },
+    Te: { h25: 0, h1250: 55.9233429049 },
+    Other: { h25: -634.935195826723, h1250: -573.096961812 },
+  },
+  convertingFlueGas: {
+    SO2: { h25: -296.820064215088, h1206: -234.651004946 },
+    CO2: { h25: -393.51461776886, h1206: -332.977572725 },
+    O2: { h25: 0, h1206: 39.8610776792 },
+    N2: { h25: 0, h1206: 37.6907915306 },
+    H2O: { h25: -241.831783228682, h1206: -194.501311901 },
+    As2O3: { h25: -322.845171322633, h1206: -220.488080392 },
+  },
+  convertingDust: {
+    Cu2S: { h25: -79.4979, h1206: 38.5682837692 },
+    Cu2O: { h25: -170.604082229, h1206: -77.6014215111 },
+    FeO: { h25: -267.276370083618, h1206: -199.070760338 },
+    Fe3O4: { h25: -1118.40987892, h1206: -874.971656675 },
+    NiO: { h25: -239.705736139, h1206: -175.079028336 },
+    PbO: { h25: -218.066923928, h1206: -125.463549719 },
+    ZnO: { h25: -350.50836354, h1206: -290.8370692 },
+    SeO2: { h25: -225.505391318893, h1206: -96.4405903697 },
+    As2O3: { h25: -654.81165, h1206: -463.029263305 },
+    Bi2O3: { h25: -578.023812817384, h1206: -352.191878526 },
+    Sb2O3: { h25: -708.563953235, h1206: -463.014321521 },
+    CaO: { h25: -634.935195826723, h1206: -575.4096824 },
+    SnO: { h25: -280.715467401124, h1206: -186.935103143 },
+    Cd: { h25: 0, h1206: 40.7296715466 },
+    Au: { h25: 0, h1206: 46.1644504622 },
+    Ag: { h25: 0, h1206: 45.9171270047 },
+    Other: { h25: -634.935195826723, h1206: -575.4096824 },
+  },
+  convertingFugitive: {
+    SO2: { h25: -296.820064215088, h1206: -234.651004946 },
+  },
+  convertingLoss: {
+    Cu: { h25: 0, h1206: 46.7284315518 },
+    S: { h25: 0, h1206: 40.491443636 },
+  },
 }
 
 function phaseEnthalpyRecord(phase: string, context?: CopperHeatEnthalpyContext) {
+  const key = normalizeMetcalPhaseFormula(phase) || phase
   return (context ? COPPER_PRODUCT_PHASE_ENTHALPY_KJ_MOL[context]?.[phase] : undefined) ??
-    COPPER_PHASE_ENTHALPY_KJ_MOL[phase]
+    (context ? COPPER_PRODUCT_PHASE_ENTHALPY_KJ_MOL[context]?.[key] : undefined) ??
+    COPPER_PHASE_ENTHALPY_KJ_MOL[phase] ??
+    COPPER_PHASE_ENTHALPY_KJ_MOL[key]
 }
 
 export function copperEnthalpy25KJmol(phase: string, context?: CopperHeatEnthalpyContext) {
@@ -179,22 +337,19 @@ export function copperEnthalpyAtTemperatureKJmol(
 ) {
   const record = phaseEnthalpyRecord(phase, context)
   if (record) {
-    if (temperatureC <= 25) return record.h25
-    const low = record.h1300
-    const high = record.h1350
-    if (low != null && high != null) {
-      if (temperatureC <= 1300) {
-        return record.h25 + ((low - record.h25) * (temperatureC - 25)) / (1300 - 25)
-      }
-      return low + ((high - low) * (temperatureC - 1300)) / (1350 - 1300)
-    }
-    if (high != null) {
-      return record.h25 + ((high - record.h25) * (temperatureC - 25)) / (1350 - 25)
-    }
-    if (low != null) {
-      return record.h25 + ((low - record.h25) * (temperatureC - 25)) / (1300 - 25)
-    }
-    return record.h25
+    const points = [
+      [25, record.h25],
+      [1206, record.h1206],
+      [1245, record.h1245],
+      [1250, record.h1250],
+      [1300, record.h1300],
+      [1350, record.h1350],
+    ].filter((point): point is [number, number] => point[1] != null)
+    if (temperatureC <= points[0]![0] || points.length === 1) return points[0]![1]
+    const upperIndex = points.findIndex(([pointTemperature]) => pointTemperature >= temperatureC)
+    const upper = upperIndex >= 0 ? points[upperIndex]! : points[points.length - 1]!
+    const lower = upperIndex > 0 ? points[upperIndex - 1]! : points[points.length - 2]!
+    return lower[1] + ((upper[1] - lower[1]) * (temperatureC - lower[0])) / (upper[0] - lower[0])
   }
   const h25 = COPPER_INPUT_STANDARD_ENTHALPY_KJ_MOL[phase]
   if (h25 == null) return null

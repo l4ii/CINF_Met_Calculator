@@ -16,9 +16,11 @@ export interface FloStreamBlock {
   offset: number
   flowT: string | null
   flowS: string | null
+  /** 气体体积流量 Nm³/h（若有） */
+  flowNm3: string | null
   flowTOffset: number | null
   flowTLength: number | null
-  compositionKind: 'W%' | 'E%' | null
+  compositionKind: 'W%' | 'E%' | 'V%' | null
   composition: FloCompositionEntry[]
 }
 
@@ -69,6 +71,7 @@ export function parseStreamBlock(data: Uint8Array, start: number): FloStreamBloc
     offset: start,
     flowT: null,
     flowS: null,
+    flowNm3: null,
     flowTOffset: null,
     flowTLength: null,
     compositionKind: null,
@@ -81,7 +84,7 @@ export function parseStreamBlock(data: Uint8Array, start: number): FloStreamBloc
     pos = keyRead.next
     const key = keyRead.text
 
-    if (key === 'W%' || key === 'E%') {
+    if (key === 'W%' || key === 'E%' || key === 'V%') {
       block.compositionKind = key
       break
     }
@@ -97,6 +100,8 @@ export function parseStreamBlock(data: Uint8Array, start: number): FloStreamBloc
       block.flowTLength = valRead.text.length
     } else if (key === 's') {
       block.flowS = valRead.text
+    } else if (key === 'Nm3' || key === 'nm3') {
+      block.flowNm3 = valRead.text
     }
   }
 
@@ -218,6 +223,186 @@ export function patchConstraintTargetByExpr(
     }
   }
   return false
+}
+
+/** MetCal 侧吹熔炼单元标题（只读该单元投入，不含吹炼） */
+export const METCAL_SMELTING_UNIT_NAMES = ['侧吹熔炼炉'] as const
+
+/** 常见后续工序单元：用于截断熔炼单元字节范围 */
+export const METCAL_DOWNSTREAM_UNIT_NAMES = ['顶吹吹炼炉', '吹炼炉', '阳极炉'] as const
+
+/** MetCal 吹炼单元标题 */
+export const METCAL_CONVERTING_UNIT_NAMES = ['顶吹吹炼炉', '吹炼炉'] as const
+
+/**
+ * 吹炼之后的单元：用于截断吹炼投入/产出范围。
+ * 注意：西南铜等案例常写「阳极炉加料升温/氧化期…」，需前缀匹配「阳极炉」。
+ */
+export const METCAL_CONVERTING_DOWNSTREAM_UNIT_NAMES = ['阳极炉', '精炼炉', '回转阳极炉'] as const
+
+/** 熔炼单元产出流：遇到即结束投入流枚举 */
+const METCAL_SMELTING_OUTPUT_STREAM_NAMES = new Set([
+  '熔炼渣',
+  '白铜锍',
+  '熔炼出炉烟气',
+  '烟气含尘',
+  '无组织排放',
+  '损失',
+])
+
+/** 吹炼单元产出流：遇到即结束投入流枚举 */
+const METCAL_CONVERTING_OUTPUT_STREAM_NAMES = new Set([
+  '粗铜',
+  '吹炼渣',
+  '吹炼出炉烟气',
+  '吹炼烟气',
+  '吹炼烟尘',
+  '无组织排放',
+  '损失',
+])
+
+export interface MetcalSmeltingUnitInputs {
+  unitName: string
+  start: number
+  end: number
+  inputNames: string[]
+}
+
+export type MetcalConvertingUnitInputs = MetcalSmeltingUnitInputs
+
+function indexOfUtf8Bytes(data: Uint8Array, text: string, from = 0): number {
+  const needle = new TextEncoder().encode(text)
+  if (needle.length === 0 || from >= data.length) return -1
+  outer: for (let i = Math.max(0, from); i <= data.length - needle.length; i += 1) {
+    for (let j = 0; j < needle.length; j += 1) {
+      if (data[i + j] !== needle[j]) continue outer
+    }
+    return i
+  }
+  return -1
+}
+
+/** 设备单元标题：Pascal 定长串，且附近带「宋体」字体标记（避免命中公式中的 侧吹熔炼炉[7]） */
+function indexOfMetcalEquipmentUnit(data: Uint8Array, unitName: string, from = 0): number {
+  const needle = new TextEncoder().encode(unitName)
+  if (needle.length === 0 || needle.length > 255) return -1
+  let searchFrom = Math.max(0, from)
+  while (searchFrom <= data.length - needle.length) {
+    const hit = indexOfUtf8Bytes(data, unitName, searchFrom)
+    if (hit < 0) return -1
+    const lengthByte = hit > 0 ? data[hit - 1] : -1
+    const fontHit = indexOfUtf8Bytes(data, '宋体', hit + needle.length)
+    const hasFontMarker = fontHit >= 0 && fontHit - (hit + needle.length) < 48
+    // 精确标题：Pascal 长度 == 单元名字节长
+    if (lengthByte === needle.length && hasFontMarker) return hit
+    // 前缀标题：如「阳极炉加料升温」以「阳极炉」开头，Pascal 长度更长但仍带宋体
+    if (
+      hasFontMarker &&
+      lengthByte > needle.length &&
+      lengthByte <= 48 &&
+      hit + lengthByte <= data.length
+    ) {
+      const pascalText = new TextDecoder('utf-8', { fatal: false }).decode(
+        data.subarray(hit, hit + lengthByte)
+      )
+      if (pascalText.startsWith(unitName)) return hit
+    }
+    searchFrom = hit + needle.length
+  }
+  return -1
+}
+
+function isLikelyMetcalFeedStreamName(name: string): boolean {
+  const trimmed = name.trim()
+  if (!trimmed || trimmed.length > 32) return false
+  if (trimmed.includes('\0')) return false
+  if (trimmed === 'D%' || trimmed === 'W%' || trimmed === 'E%' || trimmed === 'V%') return false
+  // 元素分配表误解析出的短符号
+  if (/^[A-Za-z][a-z]?$/.test(trimmed)) return false
+  if (!/[\u4e00-\u9fff]/.test(trimmed)) return false
+  return true
+}
+
+/**
+ * 定位侧吹熔炼炉单元，并枚举其投入流名称（不含顶吹吹炼等后续工序）。
+ * 石灰石等仅出现在吹炼投入中的物料不会进入本列表。
+ */
+export function extractMetcalSmeltingUnitInputs(buffer: ArrayBuffer): MetcalSmeltingUnitInputs | null {
+  const data = new Uint8Array(buffer)
+  let start = -1
+  let unitName = METCAL_SMELTING_UNIT_NAMES[0]
+  for (const name of METCAL_SMELTING_UNIT_NAMES) {
+    const hit = indexOfMetcalEquipmentUnit(data, name, 0)
+    if (hit >= 0 && (start < 0 || hit < start)) {
+      start = hit
+      unitName = name
+    }
+  }
+  if (start < 0) return null
+
+  let end = data.length
+  for (const name of METCAL_DOWNSTREAM_UNIT_NAMES) {
+    const hit = indexOfMetcalEquipmentUnit(data, name, start + unitName.length)
+    if (hit >= 0 && hit < end) end = hit
+  }
+
+  const blocks = findStreamBlocks(buffer)
+    .filter((block) => block.offset >= start && block.offset < end)
+    .sort((a, b) => a.offset - b.offset)
+
+  const inputNames: string[] = []
+  const seen = new Set<string>()
+  for (const block of blocks) {
+    if (METCAL_SMELTING_OUTPUT_STREAM_NAMES.has(block.name)) break
+    if (!isLikelyMetcalFeedStreamName(block.name)) break
+    if (seen.has(block.name)) continue
+    seen.add(block.name)
+    inputNames.push(block.name)
+  }
+
+  if (inputNames.length === 0) return null
+  return { unitName, start, end, inputNames }
+}
+
+/**
+ * 定位顶吹吹炼炉/吹炼炉单元，并枚举其投入流名称（不含阳极炉等后续工序）。
+ * 典型投入：白铜锍、残极、残极三、氧化渣、石灰石、空气/氧气等。
+ */
+export function extractMetcalConvertingUnitInputs(buffer: ArrayBuffer): MetcalConvertingUnitInputs | null {
+  const data = new Uint8Array(buffer)
+  let start = -1
+  let unitName: (typeof METCAL_CONVERTING_UNIT_NAMES)[number] = METCAL_CONVERTING_UNIT_NAMES[0]
+  for (const name of METCAL_CONVERTING_UNIT_NAMES) {
+    const hit = indexOfMetcalEquipmentUnit(data, name, 0)
+    if (hit >= 0 && (start < 0 || hit < start)) {
+      start = hit
+      unitName = name
+    }
+  }
+  if (start < 0) return null
+
+  let end = data.length
+  for (const name of METCAL_CONVERTING_DOWNSTREAM_UNIT_NAMES) {
+    const hit = indexOfMetcalEquipmentUnit(data, name, start + unitName.length)
+    if (hit >= 0 && hit < end) end = hit
+  }
+
+  const blocks = findStreamBlocks(buffer)
+    .filter((block) => block.offset >= start && block.offset < end)
+    .sort((a, b) => a.offset - b.offset)
+
+  const inputNames: string[] = []
+  const seen = new Set<string>()
+  for (const block of blocks) {
+    if (METCAL_CONVERTING_OUTPUT_STREAM_NAMES.has(block.name)) break
+    if (!isLikelyMetcalFeedStreamName(block.name)) continue
+    if (seen.has(block.name)) continue
+    seen.add(block.name)
+    inputNames.push(block.name)
+  }
+
+  if (inputNames.length === 0) return null
+  return { unitName, start, end, inputNames }
 }
 
 /** 读取 Flo 中紧跟某约束表达式后的数值目标（等长 Pascal 数字串） */

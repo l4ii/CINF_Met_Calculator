@@ -70,6 +70,18 @@ const CONSTRAINT_ELEMENT_BINDINGS: Record<ConstraintElementKey, ConstraintElemen
   ),
 }
 
+/** 入炉化验氧化物当量 → 约束表单质键（SiO₂→S(硅)、CaO→Ca(钙)…） */
+const FEED_KEY_TO_CONSTRAINT_ELEMENT: Partial<Record<CopperElementKey, ConstraintElementKey>> =
+  Object.fromEntries(OXIDE_BINDINGS.map((row) => [row.feedKey, row.constraintKey]))
+
+/**
+ * 化验列键 → 元素约束行键。
+ * 投入表用氧化物当量（SiO₂/CaO/MgO/Al₂O₃）；约束/守恒层用单质（S(硅)/Ca/Mg/Al）。
+ */
+export function assayKeyToConstraintElementKey(assayKey: string): ConstraintElementKey {
+  return FEED_KEY_TO_CONSTRAINT_ELEMENT[assayKey as CopperElementKey] ?? assayKey
+}
+
 const OXIDE_EQUIVALENT_OXYGEN_FRACTIONS: Partial<Record<CopperElementKey, number>> = {
   'SiO₂(二氧化硅)': 1 - atomicMass('Si') / COMPOUND_MOLAR_MASS.SiO2,
   'CaO(氧化钙)': 1 - atomicMass('Ca') / COMPOUND_MOLAR_MASS.CaO,
@@ -97,6 +109,8 @@ function oxideEquivalentOxygenMass(key: CopperElementKey, compoundMass: number):
 /**
  * 前端可继续显示 SiO2/CaO/MgO/Al2O3 等氧化物当量；内部元素守恒时，
  * 这些当量中携带的氧需要额外进入 O 池。FeO 输入则拆成 Fe + O。
+ * 石灰石等碳酸盐化验常把「CaO+C+Other」写成 CaCO3，Other 实为碳酸根氧；
+ * 按 CaO/MgO 可承载的碳量补入 O，否则产物 CO2 的氧会凭空出现。
  */
 export function expandAssayDisplayMassForBalance(
   source: Partial<Record<CopperElementKey, number>> | undefined
@@ -112,6 +126,22 @@ export function expandAssayDisplayMassForBalance(
     out['Fe(铁)'] = (out['Fe(铁)'] ?? 0) + feo * (atomicMass('Fe') / COMPOUND_MOLAR_MASS.FeO)
     out['O(氧)'] = (out['O(氧)'] ?? 0) + oxideEquivalentOxygenMass('FeO(氧化亚铁)', feo)
     out['FeO(氧化亚铁)'] = 0
+  }
+
+  const carbon = finitePositive(out['C (碳)'])
+  const cao = finitePositive(out['CaO(氧化钙)'])
+  const mgo = finitePositive(out['MgO(氧化镁)'])
+  if (carbon > 0 && (cao > 0 || mgo > 0)) {
+    const carbonateCarbonCap =
+      (cao * atomicMass('C')) / COMPOUND_MOLAR_MASS.CaO +
+      (mgo * atomicMass('C')) / COMPOUND_MOLAR_MASS.MgO
+    const carbonateCarbon = Math.min(carbon, carbonateCarbonCap)
+    const carbonateOxygen = (carbonateCarbon * 2 * atomicMass('O')) / atomicMass('C')
+    if (carbonateOxygen > 0) {
+      out['O(氧)'] = (out['O(氧)'] ?? 0) + carbonateOxygen
+      const other = finitePositive(out['Other(其他)'])
+      if (other > 0) out['Other(其他)'] = Math.max(0, other - carbonateOxygen)
+    }
   }
 
   return out

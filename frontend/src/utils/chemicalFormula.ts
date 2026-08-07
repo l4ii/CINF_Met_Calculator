@@ -81,6 +81,127 @@ export function formulaToDisplayLabel(formula: string): string {
   return formula.replace(/\d+/g, (digits) => digits.split('').map((d) => DIGIT_TO_SUBSCRIPT[d] ?? d).join(''))
 }
 
+/**
+ * 物相式显示分段：化学计量系数（如 3Al₂O₃·2SiO₂ 中的 3、2）为正体；
+ * 元素下标（Al₂、O₃）为 subscript。
+ */
+export function parsePhaseFormulaDisplayParts(
+  formula: string
+): Array<{ text: string; kind: 'text' | 'sub' }> {
+  const normalized = normalizeFormulaSubscripts(String(formula ?? '').trim())
+  if (!normalized) return []
+
+  const parts: Array<{ text: string; kind: 'text' | 'sub' }> = []
+  const chunks = normalized.split(/([•·*×])/g)
+
+  for (const chunk of chunks) {
+    if (!chunk) continue
+    if (/^[•·*×]$/.test(chunk)) {
+      parts.push({ text: '·', kind: 'text' })
+      continue
+    }
+
+    let index = 0
+    const coef = chunk.slice(index).match(/^(\d+)(?=[A-Z(])/)
+    if (coef) {
+      parts.push({ text: coef[1], kind: 'text' })
+      index += coef[1].length
+    }
+
+    while (index < chunk.length) {
+      const element = chunk.slice(index).match(/^([A-Z][a-z]?)/)
+      if (element) {
+        parts.push({ text: element[1], kind: 'text' })
+        index += element[1].length
+        const count = chunk.slice(index).match(/^(\d+)/)
+        if (count) {
+          parts.push({ text: count[1], kind: 'sub' })
+          index += count[1].length
+        }
+        continue
+      }
+      parts.push({ text: chunk[index], kind: 'text' })
+      index += 1
+    }
+  }
+  return parts
+}
+
+/** 悬停标题：计量系数保持普通数字，原子个数用下标 */
+export function phaseFormulaDisplayTitle(formula: string): string {
+  return parsePhaseFormulaDisplayParts(formula)
+    .map((part) =>
+      part.kind === 'sub'
+        ? part.text
+            .split('')
+            .map((d) => DIGIT_TO_SUBSCRIPT[d] ?? d)
+            .join('')
+        : part.text
+    )
+    .join('')
+}
+
+/**
+ * MetCal 中点号/计量系数分子式 → 化学计量用键（内置表/摩尔质量）。
+ * 例：CaO*Fe2O3 → CaFe2O4；3Al2O3•2SiO2 保留。
+ * 注意：UI/配置物相名应保留 MetCal 的氧化物连写，不要把显示键改成紧凑分子式。
+ */
+export function normalizeMetcalPhaseFormula(raw: string): string {
+  const normalized = normalizeFormulaSubscripts(String(raw ?? '').trim()).replace(/[·×*]/g, '•')
+  if (!normalized) return ''
+  const aliases: Record<string, string> = {
+    'CaO•Fe2O3': 'CaFe2O4',
+    'CaO•SiO2': 'CaSiO3',
+    'MgO•SiO2': 'MgSiO3',
+    '2CaO•SiO2': 'Ca2SiO4',
+    '3Al2O3•2SiO2': '3Al2O3•2SiO2',
+    'Fe2O3•SiO2': 'Fe2SiO4',
+  }
+  if (aliases[normalized]) return aliases[normalized]
+  if (!normalized.includes('•')) return normalized
+
+  // 通用展开：仅用于计量解析；不要写回配置/UI 物相名
+  const atomTotals: Record<string, number> = {}
+  for (const chunk of normalized.split('•')) {
+    if (!chunk) continue
+    let rest = chunk
+    let multiplier = 1
+    const coef = rest.match(/^(\d+)(?=[A-Z(])/)
+    if (coef) {
+      multiplier = Number.parseInt(coef[1], 10)
+      rest = rest.slice(coef[1].length)
+    }
+    const { tokens, unknownTokens } = tokenizeFormula(rest)
+    if (unknownTokens.length > 0 || tokens.length === 0) return normalized
+    for (const { symbol, count } of tokens) {
+      atomTotals[symbol] = (atomTotals[symbol] ?? 0) + count * multiplier
+    }
+  }
+  return Object.entries(atomTotals)
+    .map(([symbol, count]) => (count === 1 ? symbol : `${symbol}${count}`))
+    .join('')
+}
+
+/** 紧凑分子式 → MetCal 表8 常用氧化物连写（*） */
+const METCAL_PHASE_DISPLAY_BY_CANONICAL: Record<string, string> = {
+  CaFe2O4: 'CaO*Fe2O3',
+  CaSiO3: 'CaO*SiO2',
+  MgSiO3: 'MgO*SiO2',
+  Ca2SiO4: '2CaO*SiO2',
+}
+
+/**
+ * 配置/UI 物相显示键：保留 MetCal 的 CaO*Fe2O3、Al2O3*SiO2 写法；
+ * 仅把历史上误写成的 CaFe2O4 等紧凑名还原为连写。
+ */
+export function preferMetcalPhaseDisplayKey(raw: string): string {
+  const trimmed = normalizeFormulaSubscripts(String(raw ?? '').trim())
+  if (!trimmed) return ''
+  if (/[·×*•]/.test(trimmed)) return trimmed.replace(/[·×•]/g, '*')
+  const canonical = normalizeMetcalPhaseFormula(trimmed) || trimmed
+  return METCAL_PHASE_DISPLAY_BY_CANONICAL[canonical] ?? trimmed
+}
+
 function buildCanonicalFormula(tokens: Array<{ symbol: string; count: number }>): string {
   return tokens.map(({ symbol, count }) => (count === 1 ? symbol : `${symbol}${count}`)).join('')
 }
@@ -156,12 +277,35 @@ export const PHASE_FORMULA_ALIASES: Record<string, string> = {
   as2o3: 'As2O3',
   sb2o3: 'Sb2O3',
   zno: 'ZnO',
+  bio: 'BiO',
+  sbo: 'SbO',
   cu2se: 'Cu2Se',
+  cu3as: 'Cu3As',
 }
 
 const METAL_LIKE_SYMBOLS = new Set(['Cu', 'Fe', 'Ag', 'Au', 'Al', 'Ca', 'Pb', 'Zn', 'Sb', 'As', 'Si'])
 
-const SINGLE_ELEMENT_PHASES = new Set(['C', 'S', 'Fe', 'Cu', 'Ag', 'Au', 'Al', 'Si', 'Ca', 'Pb', 'Zn', 'Sb', 'As'])
+const SINGLE_ELEMENT_PHASES = new Set([
+  'C',
+  'S',
+  'Fe',
+  'Cu',
+  'Ag',
+  'Au',
+  'Al',
+  'Si',
+  'Ca',
+  'Pb',
+  'Zn',
+  'Sb',
+  'As',
+  'Ni',
+  'Bi',
+  'Sn',
+  'Se',
+  'Cd',
+  'Te',
+])
 
 function compactFormulaInput(raw: string) {
   return normalizeFormulaSubscripts(raw).replace(/\s+/g, '')

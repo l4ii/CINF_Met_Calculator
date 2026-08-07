@@ -43,16 +43,27 @@ export const METCAL_MIX_FEED_STREAM_NAMES = [
 
 export type MetcalMixFeedStreamName = (typeof METCAL_MIX_FEED_STREAM_NAMES)[number]
 
+/**
+ * 熔炼入炉「其他」固体（渣精矿/吹炼渣等），放在混料下「其他」单列，不计入混合铜精矿。
+ * 不含返尘/WHB 循环尘（易与产出含尘混淆）。
+ */
+export const METCAL_MIX_OTHER_STREAM_NAMES = ['渣精矿', '吹炼渣'] as const
+
+export type MetcalMixOtherStreamName = (typeof METCAL_MIX_OTHER_STREAM_NAMES)[number]
+
 export const METCAL_BLEND_STREAM_NAME = '混合铜精矿'
 export const METCAL_MOISTURE_STREAM_NAME = '含水'
 
-/** 侧吹炉典型熔剂流名（导入读取，不含煤） */
+/**
+ * 侧吹铜流程中可能出现的熔剂流名候选（导入时还需按熔炼单元投入名单过滤）。
+ * 石灰石常只出现在吹炼投入，不应仅因文件中存在流定义就导入到熔炼配料。
+ */
 export const METCAL_SOLVENT_STREAM_NAMES = ['石英石', '石灰石', '石灰'] as const
 
-/** 侧吹炉典型气体流名 */
+/** 侧吹炉典型气体流名（导入时按熔炼单元投入过滤；吹炼「漏风」与熔炼「加料口漏风」区分） */
 export const METCAL_GAS_STREAM_NAMES = ['空气', '氧气', '二次风', '加料口漏风', '漏风'] as const
 
-/** 燃料流名：导入元素组成，不导入干基流量 */
+/** 燃料流名：导入元素组成，不导入干基流量（按熔炼单元投入过滤） */
 export const METCAL_FUEL_STREAM_NAMES = ['煤', '粉煤', '焦粉'] as const
 
 export function mapMetcalElementTable(

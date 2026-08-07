@@ -151,9 +151,9 @@ export const SHEETS: { id: SheetId; name: string }[] = [
 export const COPPER_SHEETS: { id: SheetId; name: string }[] = [
   { id: 'cu_smelting', name: '熔炼' },
   { id: 'cu_smelting_equipment', name: '熔炼设备选型' },
-  { id: 'cu_refining', name: '精炼' },
-  { id: 'cu_refining_equipment', name: '精炼设备选型' },
   { id: 'cu_converting', name: '吹炼' },
   { id: 'cu_converting_equipment', name: '吹炼设备选型' },
+  { id: 'cu_refining', name: '精炼' },
+  { id: 'cu_refining_equipment', name: '精炼设备选型' },
   { id: 'cu_summary', name: '案例汇总' },
 ]

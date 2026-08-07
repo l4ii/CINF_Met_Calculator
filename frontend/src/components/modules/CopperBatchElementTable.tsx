@@ -28,10 +28,12 @@ import { calculateGasMixtureStandardVolumeNm3h, calculateGasVolumePercents } fro
 import {
   calculateKnownTotal,
   materialWaterWeight,
+  partitionRawMixMaterials,
   waterElementRatios,
 } from '../../utils/copperWorkflowCalc'
 import { CopperBatchTableColGroup } from './CopperBatchTableColGroup'
 import { CopperMaterialSelect } from './CopperMaterialSelect'
+import { inputSm } from '../../theme/uiTheme'
 import {
   buildElementTableDisplayKeys,
   calculateElementTableDisplayTotal,
@@ -42,7 +44,7 @@ import {
   type CopperElementDisplayMode,
 } from '../../utils/copperElementDisplay'
 
-export type ElementTableTone = 'raw' | 'concentrate' | 'solvent' | 'fuel' | 'oxygen' | 'total' | 'product'
+export type ElementTableTone = 'raw' | 'concentrate' | 'other' | 'solvent' | 'fuel' | 'oxygen' | 'total' | 'product'
 export type SolveInputStatus = 'none' | 'pending' | 'attention' | 'resolved'
 
 const STICKY_CATEGORY = 'left-0 min-w-[56px]'
@@ -54,6 +56,7 @@ function nameColStyle(width: number): CSSProperties {
 
 function elementTableToneClass(dark: boolean, tone: ElementTableTone) {
   if (tone === 'concentrate') return dark ? 'border-amber-700 bg-amber-950/35 text-amber-50' : 'border-amber-200 bg-amber-100/80 text-amber-950'
+  if (tone === 'other') return dark ? 'border-violet-700 bg-violet-950/35 text-violet-50' : 'border-violet-200 bg-violet-50 text-violet-950'
   if (tone === 'solvent') return dark ? 'border-gray-600 bg-emerald-950/20' : 'border-gray-200 bg-emerald-50/70'
   if (tone === 'fuel') return dark ? 'border-gray-600 bg-amber-950/20' : 'border-gray-200 bg-amber-50/70'
   if (tone === 'oxygen') return dark ? 'border-gray-600 bg-sky-950/20 text-sky-50' : 'border-gray-200 bg-sky-50 text-sky-950'
@@ -78,18 +81,6 @@ function elementDataCellClass(dark: boolean, tone: ElementTableTone) {
 
 function dataCellClass(dark: boolean, tone: ElementTableTone) {
   return `h-9 border-t px-1 py-0 align-middle text-center text-sm ${elementTableToneClass(dark, tone)}`
-}
-
-function gasMassInputClass(dark: boolean, status: SolveInputStatus) {
-  const statusColor =
-    status === 'resolved'
-      ? dark
-        ? '!text-sky-50'
-        : '!text-sky-950'
-      : dark
-        ? '!text-sky-100'
-        : '!text-sky-950'
-  return `!h-6 !rounded-none !border-0 !bg-transparent !px-0.5 !shadow-none !ring-0 ${statusColor} focus:!border-0 focus:!ring-0`
 }
 
 function elementTableColumnCount(elementCount: number) {
@@ -291,6 +282,10 @@ export function CopperBatchElementTable({
   onOpenElementAssist,
   onGasWeightChange,
   onGasWeightBlur,
+  blendCategoryLabel = '混料',
+  blendNameLabel = '混合铜精矿',
+  showFuel = true,
+  compositionReadOnly = false,
 }: {
   darkMode: boolean
   tableWidth: number
@@ -359,6 +354,11 @@ export function CopperBatchElementTable({
   onOpenElementAssist: (materialId: string) => void
   onGasWeightChange: (id: string, value: string) => void
   onGasWeightBlur: (id: string) => void
+  blendCategoryLabel?: string
+  blendNameLabel?: string
+  showFuel?: boolean
+  /** 吹炼：元素表只读展示（由物相表反推），禁止 O/C 物相入口 */
+  compositionReadOnly?: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [viewportWidth, setViewportWidth] = useState(0)
@@ -445,6 +445,15 @@ export function CopperBatchElementTable({
     formatTableNumber,
     ratioInputValue,
   ])
+  const readOnlyValueClass = (extra = '') =>
+    `${inputSm(darkMode)} !flex !h-8 !w-full !rounded items-center justify-center !px-0.5 !py-0 text-center font-mono tabular-nums${
+      extra ? ` ${extra}` : ''
+    }`
+  const inputValueClass = (status: SolveInputStatus, extra = '') =>
+    compositionReadOnly
+      ? readOnlyValueClass(extra)
+      : `${solveInputClass(darkMode, status)}${extra ? ` ${extra}` : ''}`
+  const valueBoxClass = (_status: SolveInputStatus = 'resolved', extra = '') => `text-sm${extra ? ` ${extra}` : ''}`
   const { widths: colWidths, tableWidth: resolvedTableWidth } = batchElementTableColWidths(
     nameColWidth,
     displayElementKeys.length,
@@ -454,11 +463,11 @@ export function CopperBatchElementTable({
 
   const waterWeightInputValue = (
     key: string,
-    material: Pick<CopperMaterialColumn, 'weight' | 'waterWeight' | 'moisture'>
+    material: Pick<CopperMaterialColumn, 'weight' | 'waterWeight' | 'moisture' | 'kind' | 'airRole'>
   ) => {
     if (key in waterWeightDrafts) return waterWeightDrafts[key]
     const water = materialWaterWeight(material)
-    return water > 0 ? formatTableNumber(water) : ''
+    return formatTableNumber(water)
   }
 
   useEffect(() => {
@@ -488,7 +497,11 @@ export function CopperBatchElementTable({
       if (!storageElement || options.kind === 'readonly') {
         return (
           <td key={element} className={cellCls}>
-            <BatchTableNumericReadonly darkMode={darkMode} value={displayedValue} className="text-sm" />
+            <BatchTableNumericReadonly
+              darkMode={darkMode}
+              value={displayedValue}
+              className={valueBoxClass('resolved')}
+            />
           </td>
         )
       }
@@ -499,9 +512,13 @@ export function CopperBatchElementTable({
           <td key={element} className={cellCls}>
             <BatchTableNumericCell
               darkMode={darkMode}
-              editable
-              className={solveInputClass(darkMode, status)}
-              helpTitle="步骤4：气体元素组成，可直接修改 H、O、C、N 等含量。"
+              editable={!compositionReadOnly}
+              className={inputValueClass(status)}
+              helpTitle={
+                compositionReadOnly
+                  ? '吹炼：气体组成请在「投入-物料物相表」中修改'
+                  : '步骤4：气体元素组成，可直接修改 H、O、C、N 等含量。'
+              }
               value={
                 columnId
                   ? elementDisplayMode === 'compound'
@@ -510,10 +527,12 @@ export function CopperBatchElementTable({
                   : ''
               }
               onChange={(next) => {
-                if (columnId) onGasRatioChange(columnId, storageElement, displayDraftToStorageDraft(element, ratios, next))
+                if (compositionReadOnly || !columnId) return
+                onGasRatioChange(columnId, storageElement, displayDraftToStorageDraft(element, ratios, next))
               }}
               onBlur={() => {
-                if (columnId) onGasRatioBlur(columnId, storageElement, ratios[storageElement])
+                if (compositionReadOnly || !columnId) return
+                onGasRatioBlur(columnId, storageElement, ratios[storageElement])
               }}
             />
           </td>
@@ -522,7 +541,9 @@ export function CopperBatchElementTable({
       if (options.kind === 'raw' && options.material && options.id) {
         const material = options.material
         const sulfurStatus = storageElement === 'S (硫)' ? sulfurInputStatus(material.ratios) : null
-        const helpTitle = phaseUnknownElements.has(storageElement)
+        const helpTitle = compositionReadOnly
+          ? '吹炼：元素由物相表反推，只读展示；请在「投入-物料物相表」修改物相或投料量'
+          : phaseUnknownElements.has(storageElement)
           ? phaseCompleted
             ? '步骤2：物相成分。已回填有效物相成分结果；也可直接手动输入。'
             : storageElement === 'O(氧)' || storageElement === 'C (碳)'
@@ -531,11 +552,12 @@ export function CopperBatchElementTable({
           : sulfurStatus === 'missing'
             ? '含 Cu/Fe 的原料须填写 S(硫) 元素含量。'
             : undefined
-        let status = phaseCellStatus(material, storageElement)
-        if (sulfurStatus === 'missing' && material.name.trim()) {
+        let status = compositionReadOnly ? ('resolved' as SolveInputStatus) : phaseCellStatus(material, storageElement)
+        if (!compositionReadOnly && sulfurStatus === 'missing' && material.name.trim()) {
           status = 'attention'
         }
         const phaseEntryCell =
+          !compositionReadOnly &&
           phaseUnknownElements.has(storageElement) &&
           (storageElement === 'O(氧)' || storageElement === 'C (碳)') &&
           status === 'pending'
@@ -544,11 +566,12 @@ export function CopperBatchElementTable({
             <div>
               <BatchTableNumericCell
                 darkMode={darkMode}
-                editable
-                className={`${solveInputClass(darkMode, status)}${phaseEntryCell ? ' cursor-pointer' : ''}`}
+                editable={!compositionReadOnly}
+                className={inputValueClass(status, phaseEntryCell ? 'cursor-pointer' : '')}
                 helpTitle={helpTitle}
                 onClick={(event) => event.stopPropagation()}
                 onDoubleClick={() => {
+                  if (compositionReadOnly) return
                   if (storageElement === 'O(氧)' || storageElement === 'C (碳)') onOpenElementAssist(options.id!)
                 }}
                 value={
@@ -558,10 +581,14 @@ export function CopperBatchElementTable({
                       : displayedValue
                     : ''
                 }
-                onChange={(next) =>
+                onChange={(next) => {
+                  if (compositionReadOnly) return
                   onRawRatioChange(options.id!, storageElement, displayDraftToStorageDraft(element, material.ratios, next))
-                }
-                onBlur={() => onRawRatioBlur(options.id!, storageElement, material.ratios[storageElement])}
+                }}
+                onBlur={() => {
+                  if (compositionReadOnly) return
+                  onRawRatioBlur(options.id!, storageElement, material.ratios[storageElement])
+                }}
               />
             </div>
           </td>
@@ -572,16 +599,26 @@ export function CopperBatchElementTable({
           <td key={element} className={cellCls}>
             <BatchTableNumericCell
               darkMode={darkMode}
-              editable
+              editable={!compositionReadOnly}
+              className={compositionReadOnly ? readOnlyValueClass() : undefined}
+              helpTitle={
+                compositionReadOnly
+                  ? '吹炼：熔剂元素由物相表反推，只读展示'
+                  : undefined
+              }
               value={
                 elementDisplayMode === 'compound'
                   ? ratioInputValue('solvent', options.id, storageElement, ratios[storageElement] ?? 0)
                   : displayedValue
               }
-              onChange={(next) =>
+              onChange={(next) => {
+                if (compositionReadOnly) return
                 onSolventRatioChange(options.id!, storageElement, displayDraftToStorageDraft(element, ratios, next))
-              }
-              onBlur={() => onSolventRatioBlur(options.id!, storageElement, ratios[storageElement])}
+              }}
+              onBlur={() => {
+                if (compositionReadOnly) return
+                onSolventRatioBlur(options.id!, storageElement, ratios[storageElement])
+              }}
             />
           </td>
         )
@@ -630,7 +667,7 @@ export function CopperBatchElementTable({
           darkMode={darkMode}
           value={total}
           helpTitle={overLimit ? '元素合计已超过 100%，请核对各元素含量' : undefined}
-          className={`text-sm font-semibold ${overLimit ? 'text-red-500' : ''}`}
+          className={valueBoxClass('resolved', `font-semibold${overLimit ? ' text-red-500' : ''}`)}
         />
       </td>
     )
@@ -682,7 +719,7 @@ export function CopperBatchElementTable({
                 darkMode={darkMode}
                 value={options.waterWeightDisplay}
                 helpTitle={options.waterWeightHelpTitle}
-                className="text-sm"
+                className={valueBoxClass('resolved')}
               />
             ) : null)}
         </td>
@@ -691,25 +728,32 @@ export function CopperBatchElementTable({
           <BatchTableNumericReadonly
             darkMode={darkMode}
             value={waterTotal}
-            className="text-sm font-semibold"
+            className={valueBoxClass('resolved', 'font-semibold')}
           />
         </td>
       </tr>
     )
   }
   const annualInputFactor = 24 * 330
-  const renderGasUnitToggle = () => (
-    <button
-      type="button"
-      className={`absolute right-0.5 top-0.5 inline-flex h-5 w-5 items-center justify-center rounded text-xs font-semibold transition ${
-        darkMode ? 'text-blue-200 hover:bg-gray-700' : 'text-blue-700 hover:bg-blue-50'
-      }`}
-      title={`切换气体投入显示单位（当前 ${gasInputUnitLabel}）`}
-      aria-label="切换气体投入显示单位"
-      onClick={() => setGasInputUnit((unit) => (unit === 'mass' ? 'volume' : 'mass'))}
-    >
-      ⇆
-    </button>
+  const renderGasCategoryCell = (rowSpan: number) => (
+    <td rowSpan={rowSpan} className={`${stickyCellClass(darkMode, 'oxygen', 'category')} relative`}>
+      <div className="flex flex-col items-center justify-center gap-0.5 py-0.5">
+        <span>气</span>
+        <button
+          type="button"
+          className={`rounded px-1 py-0.5 text-[10px] font-semibold leading-none transition ${
+            darkMode
+              ? 'bg-sky-950/60 text-sky-200 hover:bg-sky-900/80'
+              : 'bg-sky-100 text-sky-800 hover:bg-sky-200'
+          }`}
+          title={`切换气体投入显示单位（当前 ${gasInputUnitLabel}）`}
+          aria-label="切换气体投入显示单位"
+          onClick={() => setGasInputUnit((unit) => (unit === 'mass' ? 'volume' : 'mass'))}
+        >
+          {gasInputUnitLabel}
+        </button>
+      </div>
+    </td>
   )
 
   const gasInputDisplayWeight = (column: CopperMaterialColumn) => {
@@ -756,99 +800,143 @@ export function CopperBatchElementTable({
           </tr>
         </thead>
         <tbody>
-          {rawMaterials.map((material, index) => (
-            <Fragment key={material.id}>
-              <tr>
-                <td rowSpan={2} className={`${categoryRowSpanCellClass(darkMode, 'raw')} relative p-0`}>
-                  {categoryCellWithDelete(
-                    `原料${index + 1}`,
-                    rawMaterials.length > 1 ? () => onRemoveMaterial(material.id) : undefined,
-                    darkMode
-                  )}
-                </td>
-                <td className={`${stickyCellClass(darkMode, 'raw', 'name')}`} style={nameColStyle(nameColWidth)}>
-                  <div>
-                    <CopperMaterialSelect
-                      darkMode={darkMode}
-                      triggerClassName={materialSelectClass(
-                        darkMode,
-                        material.name.trim() ? 'resolved' : 'pending'
+          {(() => {
+            const { concentrates, others } = partitionRawMixMaterials(rawMaterials)
+            const canRemoveRaw = rawMaterials.length > 1
+            const renderRawMaterialRows = (
+              materials: CopperMaterialColumn[],
+              options: { tone: 'raw' | 'other'; categoryLabel: (index: number) => string }
+            ) =>
+              materials.map((material, index) => (
+                <Fragment key={material.id}>
+                  <tr>
+                    <td rowSpan={2} className={`${categoryRowSpanCellClass(darkMode, options.tone)} relative p-0`}>
+                      {categoryCellWithDelete(
+                        options.categoryLabel(index),
+                        canRemoveRaw ? () => onRemoveMaterial(material.id) : undefined,
+                        darkMode
                       )}
-                      title={
-                        material.name.trim()
-                          ? material.name
-                          : '步骤1：请在名称下拉框中选择原料。'
-                      }
-                      value={
-                        materialLibrary.some((item) => item.name === material.name)
-                          ? materialLibrary.find((item) => item.name === material.name)?.id ?? ''
-                          : ''
-                      }
-                      options={materialLibrary.map((item) => ({ id: item.id, label: item.name }))}
-                      onChange={(libraryId) => onApplyLibraryMaterial(material.id, libraryId)}
-                    />
-                  </div>
-                </td>
-                <td className={dataCellClass(darkMode, 'raw')}>
-                  <div>
-                    <BatchTableNumericMassCell
-                      darkMode={darkMode}
-                      editable
-                      className={solveInputClass(darkMode, rawWeightStatus(material.id))}
-                      helpTitle="步骤1：输入投料量。可直接手动输入原料投料量，输入有效数字后标记为绿色。"
-                      value={rawWeightDrafts[material.id] ?? ''}
-                      onChange={(next) => onRawWeightChange(material.id, next)}
-                    />
-                  </div>
-                </td>
-                {renderElementCells('raw', material.ratios, { kind: 'raw', id: material.id, material })}
-                {renderTotalCell(material.ratios, 'raw', { materialId: material.id })}
-              </tr>
-              {renderMaterialWaterRow(`${material.id}-water`, 'raw', {
-                waterWeightInput: (
-                  <BatchTableNumericMassCell
-                    darkMode={darkMode}
-                    editable
-                    className={solveInputClass(
-                      darkMode,
-                      waterWeightStatus('raw', material.id, materialWaterWeight(material))
-                    )}
-                    helpTitle="含水质量 t/h；湿基 = 干料 t/h + 含水 t/h"
-                    value={waterWeightInputValue(`raw:${material.id}`, material)}
-                    onChange={(next) => onMaterialWaterWeightChange('raw', material.id, next)}
-                    onBlur={() => onMaterialWaterWeightBlur('raw', material.id)}
-                  />
-                ),
-              })}
-            </Fragment>
-          ))}
-          <Fragment key="raw-concentrate-summary">
-            <tr>
-              <td rowSpan={2} className={categoryRowSpanCellClass(darkMode, 'concentrate')}>
-                原料汇总
-              </td>
-              <td
-                className={`${stickyCellClass(darkMode, 'concentrate', 'name')} font-semibold`}
-                style={nameColStyle(nameColWidth)}
-              >
-                混合铜精矿
-              </td>
-              <td className={`${dataCellClass(darkMode, 'concentrate')} font-semibold`}>
-                <BatchTableNumericReadonly
-                  darkMode={darkMode}
-                  value={rawConcentrateWeight}
-                  helpTitle="所有原料干基投料量汇总；仅展示，不参与表内重复计算"
-                  className="text-sm font-semibold"
-                />
-              </td>
-              {renderElementCells('concentrate', rawConcentrateRatios, { kind: 'readonly' })}
-              {renderTotalCell(rawConcentrateRatios, 'concentrate')}
-            </tr>
-            {renderMaterialWaterRow('raw-concentrate-water', 'concentrate', {
-              waterWeightDisplay: rawConcentrateWaterWeight,
-              waterWeightHelpTitle: '所有原料含水质量汇总；仅展示，不参与表内重复计算',
-            })}
-          </Fragment>
+                    </td>
+                    <td
+                      className={`${stickyCellClass(darkMode, options.tone, 'name')}`}
+                      style={nameColStyle(nameColWidth)}
+                    >
+                      <div>
+                        {materialLibrary.length === 0 && material.name.trim() ? (
+                          <div
+                            className={materialSelectClass(darkMode, 'resolved')}
+                            title={material.name}
+                          >
+                            {material.name}
+                          </div>
+                        ) : (
+                          <CopperMaterialSelect
+                            darkMode={darkMode}
+                            triggerClassName={materialSelectClass(
+                              darkMode,
+                              material.name.trim() ? 'resolved' : 'pending'
+                            )}
+                            title={
+                              material.name.trim()
+                                ? material.name
+                                : '步骤1：请在名称下拉框中选择原料。'
+                            }
+                            value={
+                              materialLibrary.some((item) => item.name === material.name)
+                                ? materialLibrary.find((item) => item.name === material.name)?.id ?? ''
+                                : ''
+                            }
+                            options={materialLibrary.map((item) => ({ id: item.id, label: item.name }))}
+                            onChange={(libraryId) => onApplyLibraryMaterial(material.id, libraryId)}
+                          />
+                        )}
+                      </div>
+                    </td>
+                    <td className={dataCellClass(darkMode, options.tone)}>
+                      <div>
+                        <BatchTableNumericMassCell
+                          darkMode={darkMode}
+                          editable={!compositionReadOnly}
+                          className={inputValueClass(rawWeightStatus(material.id))}
+                          helpTitle={
+                            compositionReadOnly
+                              ? '吹炼：投料量请在「投入-物料物相表」中修改'
+                              : '步骤1：输入投料量。可直接手动输入原料投料量，输入有效数字后标记为绿色。'
+                          }
+                          value={rawWeightDrafts[material.id] ?? ''}
+                          onChange={(next) => {
+                            if (compositionReadOnly) return
+                            onRawWeightChange(material.id, next)
+                          }}
+                        />
+                      </div>
+                    </td>
+                    {renderElementCells(options.tone, material.ratios, {
+                      kind: 'raw',
+                      id: material.id,
+                      material,
+                    })}
+                    {renderTotalCell(material.ratios, options.tone, { materialId: material.id })}
+                  </tr>
+                  {renderMaterialWaterRow(`${material.id}-water`, options.tone, {
+                    waterWeightInput: (
+                      <BatchTableNumericMassCell
+                        darkMode={darkMode}
+                        editable
+                        className={solveInputClass(
+                          darkMode,
+                          waterWeightStatus('raw', material.id, materialWaterWeight(material))
+                        )}
+                        helpTitle="含水质量 t/h；湿基 = 干料 t/h + 含水 t/h"
+                        value={waterWeightInputValue(`raw:${material.id}`, material)}
+                        onChange={(next) => onMaterialWaterWeightChange('raw', material.id, next)}
+                        onBlur={() => onMaterialWaterWeightBlur('raw', material.id)}
+                      />
+                    ),
+                  })}
+                </Fragment>
+              ))
+
+            return (
+              <>
+                {renderRawMaterialRows(concentrates, {
+                  tone: 'raw',
+                  categoryLabel: (index) => `原料${index + 1}`,
+                })}
+                <Fragment key="raw-concentrate-summary">
+                  <tr>
+                    <td rowSpan={2} className={categoryRowSpanCellClass(darkMode, 'concentrate')}>
+                      {blendCategoryLabel}
+                    </td>
+                    <td
+                      className={`${stickyCellClass(darkMode, 'concentrate', 'name')} font-semibold`}
+                      style={nameColStyle(nameColWidth)}
+                    >
+                      {blendNameLabel}
+                    </td>
+                    <td className={`${dataCellClass(darkMode, 'concentrate')} font-semibold`}>
+                      <BatchTableNumericReadonly
+                        darkMode={darkMode}
+                        value={rawConcentrateWeight}
+                        helpTitle={`${blendNameLabel}干基投料量汇总；仅展示，不参与表内重复计算`}
+                        className={valueBoxClass('resolved', 'font-semibold')}
+                      />
+                    </td>
+                    {renderElementCells('concentrate', rawConcentrateRatios, { kind: 'readonly' })}
+                    {renderTotalCell(rawConcentrateRatios, 'concentrate')}
+                  </tr>
+                  {renderMaterialWaterRow('raw-concentrate-water', 'concentrate', {
+                    waterWeightDisplay: rawConcentrateWaterWeight,
+                    waterWeightHelpTitle: `${blendNameLabel}含水质量汇总；仅展示，不参与表内重复计算`,
+                  })}
+                </Fragment>
+                {renderRawMaterialRows(others, {
+                  tone: 'other',
+                  categoryLabel: () => '其他',
+                })}
+              </>
+            )
+          })()}
           {solventColumns.map((material, index) => (
             <Fragment key={material.id}>
               <tr>
@@ -856,27 +944,50 @@ export function CopperBatchElementTable({
                   {categoryCellWithDelete(`熔剂${index + 1}`, () => onRemoveSolvent(material.id), darkMode)}
                 </td>
                 <td className={`${stickyCellClass(darkMode, 'solvent', 'name')}`} style={nameColStyle(nameColWidth)}>
-                  <input
-                    className={`h-8 w-full rounded border px-2 text-center text-sm outline-none transition ${
-                      darkMode
-                        ? 'border-gray-600 bg-gray-900 text-gray-100 placeholder:text-gray-500 focus:border-blue-500'
-                        : 'border-gray-300 bg-white text-gray-900 placeholder:text-gray-400 focus:border-blue-500'
-                    }`}
-                    value={material.name}
-                    placeholder="请输入熔剂名称"
-                    title="熔剂名称，可自定义输入"
-                    onChange={(event) => onSolventNameChange(material.id, event.target.value)}
-                  />
+                  {compositionReadOnly ? (
+                    <div
+                      className={`h-8 w-full rounded border px-2 text-center text-sm leading-8 ${
+                        darkMode
+                          ? 'border-gray-600 bg-gray-900 text-gray-100'
+                          : 'border-gray-300 bg-white text-gray-900'
+                      }`}
+                      title={material.name}
+                    >
+                      {material.name}
+                    </div>
+                  ) : (
+                    <input
+                      className={`h-8 w-full rounded border px-2 text-center text-sm outline-none transition ${
+                        darkMode
+                          ? 'border-gray-600 bg-gray-900 text-gray-100 placeholder:text-gray-500 focus:border-blue-500'
+                          : 'border-gray-300 bg-white text-gray-900 placeholder:text-gray-400 focus:border-blue-500'
+                      }`}
+                      value={material.name}
+                      placeholder="请输入熔剂名称"
+                      title="熔剂名称，可自定义输入"
+                      onChange={(event) => onSolventNameChange(material.id, event.target.value)}
+                    />
+                  )}
                 </td>
                 <td className={dataCellClass(darkMode, 'solvent')}>
                   <BatchTableNumericMassCell
                     darkMode={darkMode}
-                    editable
-                    className={solveInputClass(darkMode, solventWeightStatus(material.id))}
-                    helpTitle="步骤4：熔剂投料量，可直接手动输入。"
+                    editable={!compositionReadOnly}
+                    className={inputValueClass(solventWeightStatus(material.id))}
+                    helpTitle={
+                      compositionReadOnly
+                        ? '吹炼：投料量请在「投入-物料物相表」中修改'
+                        : '步骤4：熔剂投料量，可直接手动输入。'
+                    }
                     value={ratioDrafts[`solvent-weight:${material.id}`] ?? material.weight}
-                    onChange={(next) => onSolventWeightChange(material.id, next)}
-                    onBlur={() => onSolventWeightBlur(material.id)}
+                    onChange={(next) => {
+                      if (compositionReadOnly) return
+                      onSolventWeightChange(material.id, next)
+                    }}
+                    onBlur={() => {
+                      if (compositionReadOnly) return
+                      onSolventWeightBlur(material.id)
+                    }}
                   />
                 </td>
                 {renderElementCells('solvent', material.ratios, { kind: 'solvent', id: material.id })}
@@ -900,6 +1011,7 @@ export function CopperBatchElementTable({
               })}
             </Fragment>
           ))}
+          {showFuel ? (
           <Fragment key="fuel-group">
             <tr>
               <td rowSpan={2} className={categoryRowSpanCellClass(darkMode, 'fuel')}>
@@ -939,44 +1051,49 @@ export function CopperBatchElementTable({
               ),
             })}
           </Fragment>
+          ) : null}
           {airColumns.map((column, index) => (
             <tr key={column.id}>
-              {index === 0 && (
-                <td rowSpan={airColumns.length} className={stickyCellClass(darkMode, 'oxygen', 'category')}>
-                  气
-                </td>
-              )}
+              {index === 0 ? renderGasCategoryCell(airColumns.length) : null}
               <td
-                className={`${stickyCellClass(darkMode, 'oxygen', 'name')} relative`}
+                className={stickyCellClass(darkMode, 'oxygen', 'name')}
                 style={nameColStyle(nameColWidth)}
               >
                 <span>{column.name}</span>
-                {index === 0 ? renderGasUnitToggle() : null}
               </td>
               <td className={dataCellClass(darkMode, 'oxygen')}>
-                <div className="grid min-h-8 grid-rows-[minmax(1.5rem,1fr)_1rem] items-center">
-                  {gasInputUnit === 'mass' ? (
-                    <BatchTableNumericMassCell
-                      darkMode={darkMode}
-                      editable
-                      className={gasMassInputClass(darkMode, oxygenAirInputStatus)}
-                      helpTitle="步骤4：气体投料量，可直接手动输入（空气 t/h 可为 0）。"
-                      value={ratioDrafts[`gas-weight:${column.id}`] ?? column.weight}
-                      onChange={(next) => onGasWeightChange(column.id, next)}
-                      onBlur={() => onGasWeightBlur(column.id)}
-                    />
-                  ) : (
-                    <BatchTableNumericReadonly
-                      darkMode={darkMode}
-                      value={gasInputDisplayWeight(column)}
-                      helpTitle={`${column.name} 标准体积（由当前质量与 O2/N2/H2O 组成换算）`}
-                      className="text-sm"
-                    />
-                  )}
-                  <span className={`text-[11px] leading-none ${darkMode ? 'text-gray-300' : 'text-gray-500'}`}>
-                    {gasInputUnitLabel}
-                  </span>
-                </div>
+                {gasInputUnit === 'mass' ? (
+                  <BatchTableNumericMassCell
+                    darkMode={darkMode}
+                    editable={!compositionReadOnly}
+                    className={inputValueClass(oxygenAirInputStatus)}
+                    helpTitle={
+                      compositionReadOnly
+                        ? '吹炼：气体投料量请在「投入-物料物相表」中修改（或由产出约束求解）'
+                        : '步骤4：气体投料量，可直接手动输入（空气 t/h 可为 0）。'
+                    }
+                    value={ratioDrafts[`gas-weight:${column.id}`] ?? column.weight}
+                    onChange={(next) => {
+                      if (compositionReadOnly) return
+                      onGasWeightChange(column.id, next)
+                    }}
+                    onBlur={() => {
+                      if (compositionReadOnly) return
+                      onGasWeightBlur(column.id)
+                    }}
+                  />
+                ) : (
+                  <BatchTableNumericReadonly
+                    darkMode={darkMode}
+                    value={gasInputDisplayWeight(column)}
+                    helpTitle={`${column.name} 标准体积（由当前质量与 O2/N2/H2O 组成换算，单位见类型列）`}
+                    className={
+                      compositionReadOnly
+                        ? readOnlyValueClass('flex items-center justify-center')
+                        : `${solveInputClass(darkMode, oxygenAirInputStatus)} flex items-center justify-center`
+                    }
+                  />
+                )}
               </td>
               {renderElementCells('oxygen', column.ratios, { kind: 'gas', id: column.id })}
               {renderTotalCell(column.ratios, 'oxygen')}

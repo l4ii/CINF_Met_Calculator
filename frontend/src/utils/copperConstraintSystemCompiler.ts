@@ -5,6 +5,7 @@ import {
 import {
   OXY_PRODUCT_KEY_TO_CN,
   OXY_SIDE_BLOW_PRODUCT_KEYS,
+  isOxyConvertingConstraintConfig,
   type ConstraintElementKey,
   type OxySideBlowConstraintConfig,
   type OxySideBlowProductKey,
@@ -12,6 +13,8 @@ import {
 import { evaluateConstraintExprString, evaluateOxygenEnrichmentRatio, type ConstraintSymbolTable } from './copperConstraintExpression.ts'
 import {
   DEFAULT_CONSTRAINT_RELATIVE_TOLERANCE,
+  DEFAULT_COPPER_PROCESS_PARAMETERS,
+  isFuelConcentrateRatioExpr,
   isOxygenEnrichmentExpr,
 } from './copperProcessParameters.ts'
 import {
@@ -140,10 +143,16 @@ export function compileOxyConstraintSystem(
 
   for (const [index, constraint] of preparedConfig.customConstraints.entries()) {
     if (constraint.soft && !options.includeSoftCustom) continue
+    // 煤/精矿比：配置 target≤0 时与派生煤量共用同一缺省，避免「按 0.013 加煤、却按目标 0 算残差」造成虚假的 0.013 最大残差
+    const target =
+      isFuelConcentrateRatioExpr(constraint.expr) &&
+      !(typeof constraint.target === 'number' && constraint.target > 0)
+        ? DEFAULT_COPPER_PROCESS_PARAMETERS.fuelConcentrateRatio
+        : constraint.target
     equations.push({
       id: `custom:${index}`,
       kind: 'custom',
-      target: constraint.target,
+      target,
       label: constraint.expr,
       expr: constraint.expr,
       soft: Boolean(constraint.soft),
@@ -152,6 +161,8 @@ export function compileOxyConstraintSystem(
   }
 
   for (const feedKey of COPPER_ELEMENT_KEYS) {
+    // 吹炼 Other 是未分析物相的闭合项，可重分类为造渣组分；不将其固定为最终 Other 相。
+    if (isOxyConvertingConstraintConfig(preparedConfig) && feedKey === 'Other(其他)') continue
     equations.push({
       id: `balance:${feedKey}`,
       kind: 'balance',
@@ -352,7 +363,6 @@ export function equationResidualRow(
     distributionFeedElementWeights,
     balanceFeedElementWeights
   )
-  const compareTarget = equation.kind === 'custom' ? equation.target : 0
   const scale = equationScale(
     equation,
     table,
@@ -360,13 +370,83 @@ export function equationResidualRow(
     distributionFeedElementWeights,
     balanceFeedElementWeights
   )
-  const value = residual + compareTarget
+  const rel = relativeResidual(residual, 0, scale)
+
+  if (equation.kind === 'D%' && equation.constraintElement && equation.productKey) {
+    const targetPercent = resolveConfigNumber(
+      equation.ruleValue ?? 0,
+      config.variables,
+      `${equation.constraintElement} ${OXY_PRODUCT_KEY_TO_CN[equation.productKey]} ${equation.kind}`
+    )
+    const feedMetal = constraintFeedMetalMass(equation.constraintElement, {
+      totalWeight: 0,
+      elementWeights: distributionFeedElementWeights as Record<CopperElementKey, number>,
+      ratios: {} as Record<CopperElementKey, number>,
+    })
+    const inProduct = productElementMass(table, equation.productKey, equation.constraintElement)
+    const actualPercent = feedMetal > 0 ? (inProduct / feedMetal) * 100 : 0
+    return {
+      expr: equation.label,
+      value: actualPercent,
+      target: targetPercent,
+      residual,
+      relativeResidual: rel,
+      applicable: true as const,
+    }
+  }
+
+  if (equation.kind === 'W%' && equation.constraintElement && equation.productKey) {
+    const targetPercent = resolveConfigNumber(
+      equation.ruleValue ?? 0,
+      config.variables,
+      `${equation.constraintElement} ${OXY_PRODUCT_KEY_TO_CN[equation.productKey]} ${equation.kind}`
+    )
+    const inProduct = productElementMass(table, equation.productKey, equation.constraintElement)
+    const productMass = productTotalMass(table, equation.productKey)
+    const actualPercent = productMass > 0 ? (inProduct / productMass) * 100 : 0
+    return {
+      expr: equation.label,
+      value: actualPercent,
+      target: targetPercent,
+      residual,
+      relativeResidual: rel,
+      applicable: true as const,
+    }
+  }
+
+  if (equation.kind === 'balance' && equation.feedKey) {
+    const feedMass = balanceFeedElementWeights[equation.feedKey] ?? 0
+    const allocated = totalProductElementCompoundMass(table, equation.feedKey)
+    return {
+      expr: equation.label,
+      value: allocated,
+      target: feedMass,
+      residual,
+      relativeResidual: rel,
+      applicable: true as const,
+    }
+  }
+
+  if (equation.kind === 'product_element_closure' && equation.productKey) {
+    const elementSum = productElementMassSum(table, equation.productKey)
+    const productMass = productTotalMass(table, equation.productKey)
+    return {
+      expr: equation.label,
+      value: elementSum,
+      target: productMass,
+      residual,
+      relativeResidual: rel,
+      applicable: true as const,
+    }
+  }
+
+  const compareTarget = equation.kind === 'custom' ? equation.target : 0
   return {
     expr: equation.label,
-    value,
+    value: residual + compareTarget,
     target: compareTarget,
     residual,
-    relativeResidual: relativeResidual(residual, 0, scale),
+    relativeResidual: rel,
     applicable: true as const,
   }
 }

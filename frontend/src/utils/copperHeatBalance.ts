@@ -1,4 +1,5 @@
 import { COMPOUND_MOLAR_MASS, atomicMass, compoundMolarMass } from './atomicMass.ts'
+import { normalizeMetcalPhaseFormula } from './chemicalFormula.ts'
 import {
   type CopperHeatEnthalpyContext,
   copperEnthalpy25KJmol,
@@ -51,11 +52,17 @@ export interface CopperHeatBalanceSourceMaterial {
   name: string
   kind: CopperMaterialColumn['kind']
   airRole?: CopperMaterialColumn['airRole']
+  /** Material-specific temperature overrides the common feed temperature. */
+  temperatureC?: number
+  enthalpyContext?: CopperHeatEnthalpyContext
   dryWeight: number
   waterWeight: number
   phases: Record<string, number>
   elementRatios?: CopperMaterialColumn['ratios']
 }
+
+export type CopperChemicalHeatMode = 'hess' | 'reaction'
+export type CopperHeatBalanceProcess = 'smelting' | 'converting'
 
 export interface CopperHeatBalanceInput {
   inputMaterials: CopperHeatBalanceSourceMaterial[]
@@ -67,6 +74,9 @@ export interface CopperHeatBalanceInput {
   excludeFuelFromInput?: boolean
   /** 煤/精矿比参考煤量（t/h），仅用于对照 */
   ratioReferenceFuelWeightTh?: number
+  /** 总表化学热取值：hess=进出流 ΣΔH298，reaction=反应路径净热。 */
+  chemicalHeatMode?: CopperChemicalHeatMode
+  process?: CopperHeatBalanceProcess
   temperatures: CopperHeatBalanceTemperatures
   coolingWaterInletTemperatureC: number
   coolingWaterOutletTemperatureC: number
@@ -133,6 +143,8 @@ export interface HeatComponentRow {
 }
 
 export interface CopperHeatBalanceResult {
+  /** 计算所对应的工艺阶段。 */
+  process?: CopperHeatBalanceProcess
   equations: HeatReactionTerm[]
   chemicalAbsorptionRows: HeatReactionAbsorptionRow[]
   heatIncomeRows: HeatFlowRow[]
@@ -142,12 +154,18 @@ export interface CopperHeatBalanceResult {
   inputPhysicalHeatMJh: number
   outputPhysicalHeatMJh: number
   chemicalHeatMJh: number
-  /** 反应路径放热合计（解释用，总表化学热采用 Hess） */
+  /** Hess：进出物流 ΣΔH298 差（始终计算，便于对照） */
+  chemicalHeatHessMJh?: number
+  /** 反应路径放热合计（解释用） */
   chemicalHeatReleaseMJh: number
   /** 反应路径吸热合计（解释用） */
   chemicalHeatAbsorptionMJh: number
   /** 反应路径净化学热 = 放热 − 吸热 */
   chemicalHeatPathMJh: number
+  /** 本次总表采用的化学热模式 */
+  chemicalHeatMode?: CopperChemicalHeatMode
+  /** 总表化学热计算依据。 */
+  chemicalHeatCalculationBasis?: 'stream298' | 'reactionEquations'
   coolingWaterHeatMJh: number
   coolingWaterRows: HeatComponentRow[]
   coolingWaterInletTemperatureC: number
@@ -163,13 +181,13 @@ export interface CopperHeatBalanceResult {
   fuelEffectiveHeatMJh: number
   balanceAfterFuelMJh: number
   fuelHeatMJt: number
-  balanceClosureMode: 'coolingWater' | 'fuel' | 'error' | 'none'
+  balanceClosureMode: 'coolingWater' | 'otherHeat' | 'fuel' | 'error' | 'none'
   balanceClosureHeatMJh: number
-  /** 热平衡允许误差（占较大侧合计的 %） */
+  /** @deprecated 旧案例中的允许误差参数，当前闭合逻辑不再使用。 */
   heatBalanceTolerancePct?: number
-  /** 热收支残差计入热支出的误差项（MJ/h）；正值=收入>支出，负值=收入<支出（配平） */
+  /** 未闭合热差（MJ/h），不计入热支出配平。 */
   balanceErrorMJh?: number
-  /** 残差是否在允许误差带内 */
+  /** @deprecated 当前由闭合状态直接判断。 */
   balanceErrorWithinTolerance?: boolean
   supplementalFuelWeightTh?: number
   /** 热平衡闭合得出的总煤量（t/h） */
@@ -377,39 +395,42 @@ function formatReactionFormula(reactants: Record<string, number>, products: Reco
 }
 
 function phaseMolarMass(phase: string) {
-  if (phase in COMPOUND_MOLAR_MASS) return COMPOUND_MOLAR_MASS[phase as keyof typeof COMPOUND_MOLAR_MASS]
-  if (phase === 'SO3') return compoundMolarMass({ S: 1, O: 3 })
-  if (phase === 'Fe2SiO4') return compoundMolarMass({ Fe: 2, Si: 1, O: 4 })
-  if (phase === 'CaSiO3') return compoundMolarMass({ Ca: 1, Si: 1, O: 3 })
-  if (phase === 'MgSiO3') return compoundMolarMass({ Mg: 1, Si: 1, O: 3 })
-  if (phase === 'H2O') return compoundMolarMass({ H: 2, O: 1 })
-  if (phase === 'H2O(l)') return compoundMolarMass({ H: 2, O: 1 })
-  if (phase === '3Al2O3•2SiO2') return compoundMolarMass({ Al: 6, Si: 2, O: 13 })
-  if (phase === 'SnO') return compoundMolarMass({ Sn: 1, O: 1 })
-  if (phase === 'NiO') return compoundMolarMass({ Ni: 1, O: 1 })
-  if (phase === 'SeO2') return compoundMolarMass({ Se: 1, O: 2 })
-  if (phase === 'Bi2O3') return compoundMolarMass({ Bi: 2, O: 3 })
-  if (phase === 'NiS') return compoundMolarMass({ Ni: 1, S: 1 })
-  if (phase === 'Hg') return atomicMass('Hg')
-  if (phase === 'Cd') return atomicMass('Cd')
-  if (phase === 'Au') return atomicMass('Au')
-  if (phase === 'Ag') return atomicMass('Ag')
-  if (phase === 'Te') return atomicMass('Te')
-  if (phase === 'Ni') return atomicMass('Ni')
-  if (phase === 'Pb') return atomicMass('Pb')
-  if (phase === 'Zn') return atomicMass('Zn')
-  if (phase === 'Se') return atomicMass('Se')
-  if (phase === 'Bi') return atomicMass('Bi')
-  if (phase === 'Sb') return atomicMass('Sb')
-  if (phase === 'Sn') return atomicMass('Sn')
-  if (phase === 'H') return atomicMass('H')
-  if (phase === 'O') return atomicMass('O')
-  if (phase === 'N') return atomicMass('N')
-  if (phase === 'C') return atomicMass('C')
-  if (phase === 'S') return atomicMass('S')
-  if (phase === 'Fe') return atomicMass('Fe')
-  if (phase === 'Cu') return atomicMass('Cu')
-  if (phase === 'Other') return COMPOUND_MOLAR_MASS.CaO
+  const key = normalizeReactionPhaseKey(phase)
+  if (key in COMPOUND_MOLAR_MASS) return COMPOUND_MOLAR_MASS[key as keyof typeof COMPOUND_MOLAR_MASS]
+  if (key === 'SO3') return compoundMolarMass({ S: 1, O: 3 })
+  if (key === 'Fe2SiO4') return compoundMolarMass({ Fe: 2, Si: 1, O: 4 })
+  if (key === 'CaFe2O4') return compoundMolarMass({ Ca: 1, Fe: 2, O: 4 })
+  if (key === 'CaSiO3') return compoundMolarMass({ Ca: 1, Si: 1, O: 3 })
+  if (key === 'MgSiO3') return compoundMolarMass({ Mg: 1, Si: 1, O: 3 })
+  if (key === 'H2O') return compoundMolarMass({ H: 2, O: 1 })
+  if (key === 'H2O(l)') return compoundMolarMass({ H: 2, O: 1 })
+  if (key === '3Al2O3•2SiO2') return compoundMolarMass({ Al: 6, Si: 2, O: 13 })
+  if (key === 'SnO') return compoundMolarMass({ Sn: 1, O: 1 })
+  if (key === 'NiO') return compoundMolarMass({ Ni: 1, O: 1 })
+  if (key === 'SeO2') return compoundMolarMass({ Se: 1, O: 2 })
+  if (key === 'Bi2O3') return compoundMolarMass({ Bi: 2, O: 3 })
+  if (key === 'NiS') return compoundMolarMass({ Ni: 1, S: 1 })
+  if (key === 'Hg') return atomicMass('Hg')
+  if (key === 'Cd') return atomicMass('Cd')
+  if (key === 'Au') return atomicMass('Au')
+  if (key === 'Ag') return atomicMass('Ag')
+  if (key === 'Te') return atomicMass('Te')
+  if (key === 'Ni') return atomicMass('Ni')
+  if (key === 'Pb') return atomicMass('Pb')
+  if (key === 'Zn') return atomicMass('Zn')
+  if (key === 'Se') return atomicMass('Se')
+  if (key === 'Bi') return atomicMass('Bi')
+  if (key === 'Sb') return atomicMass('Sb')
+  if (key === 'Sn') return atomicMass('Sn')
+  if (key === 'H') return atomicMass('H')
+  if (key === 'O') return atomicMass('O')
+  if (key === 'N') return atomicMass('N')
+  if (key === 'C') return atomicMass('C')
+  if (key === 'S') return atomicMass('S')
+  if (key === 'Fe') return atomicMass('Fe')
+  if (key === 'Cu') return atomicMass('Cu')
+  if (key === 'Cu3As') return compoundMolarMass({ Cu: 3, As: 1 })
+  if (key === 'Other') return COMPOUND_MOLAR_MASS.CaO
   return 0
 }
 
@@ -507,7 +528,7 @@ function emptyMaterialPhaseRows(material: CopperHeatBalanceSourceMaterial): Heat
       component: phase,
       massTh: (Math.max(0, pct) / 100) * Math.max(0, material.dryWeight),
       temperature: null,
-      enthalpy25KJmol: enthalpy25(phase),
+      enthalpy25KJmol: enthalpy25(phase, material.enthalpyContext),
       enthalpyTKJmol: null,
       heatMJh: 0,
     }))
@@ -517,8 +538,8 @@ function materialPhaseRows(material: CopperHeatBalanceSourceMaterial, temperatur
   return emptyMaterialPhaseRows(material).map((row) => ({
     ...row,
     temperature,
-    enthalpyTKJmol: enthalpyAtTemperature(row.component, temperature),
-    heatMJh: heatFromEnthalpyDeltaMJh(row.massTh, row.component, temperature),
+    enthalpyTKJmol: enthalpyAtTemperature(row.component, temperature, material.enthalpyContext),
+    heatMJh: heatFromEnthalpyDeltaMJh(row.massTh, row.component, temperature, material.enthalpyContext),
   }))
 }
 
@@ -537,7 +558,7 @@ function waterRows(material: CopperHeatBalanceSourceMaterial, temperature: numbe
 }
 
 function materialPhysicalRows(material: CopperHeatBalanceSourceMaterial, feedTemperature: number): HeatComponentRow[] {
-  const temperature = material.kind === 'gas' || material.airRole ? 25 : feedTemperature
+  const temperature = material.temperatureC ?? (material.kind === 'gas' || material.airRole ? 25 : feedTemperature)
   const phaseRows = materialPhaseRows(material, temperature)
   return [...phaseRows, ...waterRows(material, temperature)]
 }
@@ -549,13 +570,15 @@ function phaseMassToPercent(phases: Record<string, number>, dryWeight: number) {
 
 export function sourceMaterialFromColumn(
   material: CopperMaterialColumn,
-  phases: Record<string, number>
+  phases: Record<string, number>,
+  options?: Pick<CopperHeatBalanceSourceMaterial, 'temperatureC' | 'enthalpyContext'>
 ): CopperHeatBalanceSourceMaterial {
   return {
     id: material.id,
     name: material.name,
     kind: material.kind,
     airRole: material.airRole,
+    ...options,
     dryWeight: Math.max(0, material.weight),
     waterWeight: materialWaterWeight(material),
     phases,
@@ -571,11 +594,12 @@ const OUTPUT_PHASE_RESIDUAL_EQUIVALENTS: Record<string, Record<string, number>> 
 
 function normalizeReactionPhaseKey(phase: string) {
   if (phase === 'C (碳)') return 'C'
-  return phase
+  // CaO*Fe2O3 / Al2O3*SiO2 等 MetCal 连写 → 计量键，保证热平衡池与摩尔质量可命中
+  return normalizeMetcalPhaseFormula(phase) || phase
 }
 
 function phaseMassThToKmolh(phase: string, massTh: number) {
-  const molarMass = phaseMolarMass(phase)
+  const molarMass = phaseMolarMass(normalizeReactionPhaseKey(phase))
   return molarMass > 0 && massTh > 0 ? (massTh * 1000) / molarMass : 0
 }
 
@@ -738,14 +762,25 @@ function calculateReactionAbsorptionRows(equations: HeatReactionTerm[]): HeatRea
 
 function outputProductRows(
   products: OxyConstraintSolverResult | null,
-  temperatures: CopperHeatBalanceTemperatures
+  temperatures: CopperHeatBalanceTemperatures,
+  process: CopperHeatBalanceProcess
 ): HeatComponentRow[] {
   if (!products?.acceptable) return []
   const rows: HeatComponentRow[] = []
   for (const product of Object.values(products.products)) {
     const temperatureKey = PRODUCT_KEY_TO_TEMPERATURE[product.key]
     const temperature = temperatures[temperatureKey]
-    const enthalpyContext = product.key as CopperHeatEnthalpyContext
+    const enthalpyContext =
+      process === 'converting'
+        ? ({
+            smeltingSlag: 'convertingSlag',
+            matte: 'convertingCopper',
+            flueGas: 'convertingFlueGas',
+            dust: 'convertingDust',
+            fugitive: 'convertingFugitive',
+            loss: 'convertingLoss',
+          } satisfies Record<OxySideBlowProductKey, CopperHeatEnthalpyContext>)[product.key]
+        : product.key as CopperHeatEnthalpyContext
     for (const phase of product.phases) {
       if (phase.mass <= 0) continue
       rows.push({
@@ -917,40 +952,12 @@ export function refreshHeatBalanceSummaryRows(
       temperature: null,
       heatMJh: next.otherHeatMJh,
     },
-    ...(Math.abs(next.balanceErrorMJh ?? 0) > 1e-9
-      ? [
-          {
-            type: 'loss' as const,
-            material: '误差',
-            temperature: null,
-            heatMJh: next.balanceErrorMJh ?? 0,
-            isBalanceError: true,
-            isBalanceErrorOutOfBand: !next.balanceErrorWithinTolerance,
-          },
-        ]
-      : []),
   ]
   const incomeTotal = incomeBaseRows.reduce((sum, row) => sum + Math.max(0, row.heatMJh), 0)
-  const expenditureWithoutError = expenditureBaseRows
-    .filter((row) => !row.isSubtotal && !row.isBalanceError)
+  const expenditureTotal = expenditureBaseRows
+    .filter((row) => !row.isSubtotal)
     .reduce((sum, row) => sum + Math.max(0, row.heatMJh), 0)
-  // 误差 = 收入 − 无误差支出；负值表示收入不足，计入支出侧配平合计
-  const errorForTotal = incomeTotal - expenditureWithoutError
-  const errorRow = expenditureBaseRows.find((row) => row.isBalanceError)
-  if (errorRow) {
-    errorRow.heatMJh = errorForTotal
-  } else if (Math.abs(errorForTotal) > 1e-9) {
-    expenditureBaseRows.push({
-      type: 'loss',
-      material: '误差',
-      temperature: null,
-      heatMJh: errorForTotal,
-      isBalanceError: true,
-      isBalanceErrorOutOfBand: !next.balanceErrorWithinTolerance,
-    })
-  }
-  const expenditureTotal = expenditureWithoutError + errorForTotal
-  next.balanceErrorMJh = errorForTotal
+  next.balanceErrorMJh = incomeTotal - expenditureTotal
   next.heatIncomeRows = percentRows(incomeBaseRows, incomeTotal)
   next.heatExpenditureRows = percentRows(expenditureBaseRows, expenditureTotal)
   return next
@@ -963,9 +970,13 @@ export function calculateCopperHeatBalanceDetailed(input: CopperHeatBalanceInput
   const processInputPhysicalRows = balanceMaterials.flatMap((material) =>
     materialPhysicalRows(material, input.temperatures.feed)
   )
-  const productOutputPhysicalRows = outputProductRows(input.products, input.temperatures)
+  const productOutputPhysicalRows = outputProductRows(input.products, input.temperatures, input.process ?? 'smelting')
   const coupleReactionsToOutput = Boolean(input.products?.acceptable)
-  const equations = calculateReactionTerms(balanceMaterials, input.products, coupleReactionsToOutput)
+  const equations = calculateReactionTerms(
+    balanceMaterials,
+    input.products,
+    coupleReactionsToOutput
+  )
   const chemicalAbsorptionRows = calculateReactionAbsorptionRows(equations)
 
   const inputPhysicalHeatMJh = sumHeat(processInputPhysicalRows)
@@ -979,9 +990,15 @@ export function calculateCopperHeatBalanceDetailed(input: CopperHeatBalanceInput
     0
   )
   const chemicalHeatPathMJh = chemicalHeatReleaseMJh - chemicalHeatAbsorptionMJh
-  const chemicalHeatMJh = coupleReactionsToOutput
+  const chemicalHeatHessMJh = coupleReactionsToOutput
     ? calculateHessChemicalHeatMJh(processInputPhysicalRows, productOutputPhysicalRows)
     : chemicalHeatPathMJh
+  const chemicalHeatMode: CopperChemicalHeatMode =
+    input.chemicalHeatMode === 'reaction' ? 'reaction' : 'hess'
+  const chemicalHeatMJh =
+    chemicalHeatMode === 'hess' || !coupleReactionsToOutput
+      ? chemicalHeatHessMJh
+      : chemicalHeatPathMJh
   const heatLossMJh = Math.max(0, Number.isFinite(input.heatLossMJh) ? input.heatLossMJh : 0)
   const otherHeatMJh = Math.max(0, Number.isFinite(input.otherHeatMJh) ? input.otherHeatMJh : 500)
   const coolingWaterMassTh = Math.max(0, input.coolingWaterMassTh)
@@ -1087,6 +1104,7 @@ export function calculateCopperHeatBalanceDetailed(input: CopperHeatBalanceInput
   })
 
   return {
+    process: input.process ?? 'smelting',
     equations,
     chemicalAbsorptionRows,
     heatIncomeRows: percentRows(incomeBaseRows, incomeTotal),
@@ -1096,9 +1114,14 @@ export function calculateCopperHeatBalanceDetailed(input: CopperHeatBalanceInput
     inputPhysicalHeatMJh,
     outputPhysicalHeatMJh,
     chemicalHeatMJh,
+    chemicalHeatHessMJh,
     chemicalHeatReleaseMJh,
     chemicalHeatAbsorptionMJh,
     chemicalHeatPathMJh,
+    chemicalHeatMode,
+    chemicalHeatCalculationBasis: chemicalHeatMode === 'hess'
+      ? 'stream298'
+      : 'reactionEquations',
     coolingWaterHeatMJh,
     coolingWaterRows,
     coolingWaterInletTemperatureC: input.coolingWaterInletTemperatureC,

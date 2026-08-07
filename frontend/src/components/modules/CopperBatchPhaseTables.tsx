@@ -6,13 +6,20 @@ import {
   type PhasePercentMap,
 } from '../../utils/copperPhaseTableCalc'
 import { calculateGasMixtureStandardVolumeNm3h, PRODUCT_PHASE_ROWS } from '../../utils/copperProductPhaseCalc'
-import { batchPhaseTableColWidths, batchTableDataColWidth } from '../../utils/copperBatchTableLayout'
+import { PhaseFormulaDisplay } from '../PhaseFormulaDisplay.tsx'
+import {
+  batchPhaseTableColWidths,
+  batchTableDataColWidth,
+  BATCH_TABLE_PCT_COL_WIDTH,
+  BATCH_TABLE_PHASE_FORMULA_COL_MAX,
+  phaseFormulaWidthSample,
+} from '../../utils/copperBatchTableLayout'
 import { CopperBatchTableColGroup } from './CopperBatchTableColGroup'
 import { BatchTableNumericCell, BatchTableNumericReadonly } from './BatchTableNumericCell'
 import type { CopperProductKey } from '../../utils/copperProcessCalc'
 import { buildInputPhaseDisplayPlan } from '../../utils/copperInputPhaseTableDisplay'
 
-type ColumnKind = 'raw' | 'concentrate' | 'solvent' | 'fuel' | 'oxygen' | 'blend' | 'product'
+type ColumnKind = 'raw' | 'other' | 'concentrate' | 'solvent' | 'fuel' | 'oxygen' | 'blend' | 'product'
 
 export type PhaseTableColumn = {
   id: string
@@ -54,12 +61,13 @@ function phaseColLabel(key: string) {
   return phaseStorageKeyToDisplayLabel(key)
 }
 
-function phaseFormulaParts(label: string) {
-  return label.split(/(\d+)/).filter(Boolean)
+function renderPhaseFormula(key: string) {
+  return <PhaseFormulaDisplay formula={key} />
 }
 
 function rowToneClass(dark: boolean, kind: ColumnKind) {
   if (kind === 'concentrate') return dark ? 'border-amber-700 bg-amber-950/35 text-amber-50' : 'border-amber-200 bg-amber-100/80 text-amber-950'
+  if (kind === 'other') return dark ? 'border-violet-700 bg-violet-950/35 text-violet-50' : 'border-violet-200 bg-violet-50 text-violet-950'
   if (kind === 'solvent') return dark ? 'border-gray-600 bg-emerald-950/20' : 'border-gray-200 bg-emerald-50/70'
   if (kind === 'fuel') return dark ? 'border-gray-600 bg-amber-950/20' : 'border-gray-200 bg-amber-50/70'
   if (kind === 'oxygen') return dark ? 'border-gray-600 bg-sky-950/20 text-sky-50' : 'border-gray-200 bg-sky-50 text-sky-950'
@@ -86,8 +94,9 @@ function categoryRowSpanCellClass(dark: boolean, kind: ColumnKind) {
   return `sticky ${STICKY_CATEGORY} z-20 h-9 ${spanFrameClass()} px-2 py-0 align-middle text-center text-sm font-semibold ${rowToneClass(dark, kind)}`
 }
 
-function dataCellClass(dark: boolean, kind: ColumnKind) {
-  return `h-9 ${rowFrameClass()} px-0.5 py-0 align-middle text-center text-sm ${rowToneClass(dark, kind)}`
+function dataCellClass(dark: boolean, kind: ColumnKind, options?: { allowWrap?: boolean }) {
+  const height = options?.allowWrap ? 'min-h-9 py-1' : 'h-9 py-0'
+  return `${height} ${rowFrameClass()} px-0.5 align-middle text-center text-sm ${rowToneClass(dark, kind)}`
 }
 
 function phaseTableColumnCount(phaseDataColumnCount: number) {
@@ -104,10 +113,14 @@ function uniquePhaseKeys(keys: string[]) {
   return [...new Set(keys.filter(Boolean))]
 }
 
-function columnDisplayPhaseKeys(column: PhaseTableColumn): string[] {
+function columnDisplayPhaseKeys(column: PhaseTableColumn, alwaysShowGasWater = false): string[] {
   if (column.kind === 'oxygen') {
     const keys = ['O2', 'N2']
-    if ((column.oxygenAir?.weightPct.H2O ?? 0) > 0 || (column.oxygenAir?.volumePct.H2O ?? 0) > 0) {
+    if (
+      alwaysShowGasWater ||
+      (column.oxygenAir?.weightPct.H2O ?? 0) > 0 ||
+      (column.oxygenAir?.volumePct.H2O ?? 0) > 0
+    ) {
       keys.push('H2O')
     }
     return keys
@@ -141,11 +154,11 @@ function isBuiltinInputPhaseRowKey(rowKey: string) {
   return INPUT_PHASE_ROW_KEYS.includes(rowKey as InputPhaseRowKey)
 }
 
-function isInputPhaseRow(column: PhaseTableColumn, rowKey: string) {
+function isInputPhaseRow(column: PhaseTableColumn, rowKey: string, allowUnreadyEdit = false) {
   if (column.kind === 'oxygen') {
     return rowKey === 'O2' || rowKey === 'N2' || rowKey === 'H2O'
   }
-  if (column.phaseReady === false) return false
+  if (column.phaseReady === false && !allowUnreadyEdit) return false
   if (column.kind === 'blend' || column.kind === 'concentrate') {
     if (rowKey === 'O2' || rowKey === 'N2') return false
     const keys = columnPhaseKeys(column)
@@ -171,16 +184,16 @@ function isOutputPhaseRow(column: PhaseTableColumn, rowKey: string) {
   return PRODUCT_PHASE_ROWS[column.productKey as CopperProductKey].includes(rowKey)
 }
 
-function isPhaseRowApplicable(column: PhaseTableColumn, rowKey: string) {
-  return isInputPhaseRow(column, rowKey) || isOutputPhaseRow(column, rowKey)
+function isPhaseRowApplicable(column: PhaseTableColumn, rowKey: string, allowUnreadyEdit = false) {
+  return isInputPhaseRow(column, rowKey, allowUnreadyEdit) || isOutputPhaseRow(column, rowKey)
 }
 
-function getCellValue(column: PhaseTableColumn, rowKey: string): number | null {
+function getCellValue(column: PhaseTableColumn, rowKey: string, allowUnreadyEdit = false): number | null {
   if (column.kind === 'oxygen' || column.kind === 'blend' || column.kind === 'concentrate') {
     if (rowKey === 'O2') return column.oxygenAir?.weightPct.O2 ?? null
     if (rowKey === 'N2') return column.oxygenAir?.weightPct.N2 ?? null
     if (rowKey === 'H2O') return column.oxygenAir?.weightPct.H2O ?? null
-    if ((column.kind === 'blend' || column.kind === 'concentrate') && isInputPhaseRow(column, rowKey)) {
+    if ((column.kind === 'blend' || column.kind === 'concentrate') && isInputPhaseRow(column, rowKey, allowUnreadyEdit)) {
       if (column.phaseContentsByKey) {
         return column.phaseContentsByKey[rowKey] ?? 0
       }
@@ -195,7 +208,7 @@ function getCellValue(column: PhaseTableColumn, rowKey: string): number | null {
     if (!isOutputPhaseRow(column, rowKey)) return null
     return column.productPhases?.[rowKey] ?? 0
   }
-  if (!isInputPhaseRow(column, rowKey)) return null
+  if (!isInputPhaseRow(column, rowKey, allowUnreadyEdit)) return null
   if (column.phaseContentsByKey) {
     return column.phaseContentsByKey[rowKey] ?? 0
   }
@@ -205,26 +218,36 @@ function getCellValue(column: PhaseTableColumn, rowKey: string): number | null {
   return 0
 }
 
-function getDisplayCellValue(column: PhaseTableColumn, rowKey: string): number | null {
+function getDisplayCellValue(
+  column: PhaseTableColumn,
+  rowKey: string,
+  allowUnreadyEdit = false
+): number | null {
   if (column.kind === 'oxygen') {
     if (rowKey === 'O2') return column.oxygenAir?.weightPct.O2 ?? null
     if (rowKey === 'N2') return column.oxygenAir?.weightPct.N2 ?? null
-    if (rowKey === 'H2O') return column.oxygenAir?.weightPct.H2O ?? null
+    if (rowKey === 'H2O') return column.oxygenAir?.weightPct.H2O ?? 0
   }
   if (column.kind === 'product' && column.productGasVolume && rowKey in column.productGasVolume) {
     return column.productGasVolume[rowKey] ?? 0
   }
-  return getCellValue(column, rowKey)
+  return getCellValue(column, rowKey, allowUnreadyEdit)
 }
 
-function isCellEditable(column: PhaseTableColumn, rowKey: string) {
+function isCellEditable(column: PhaseTableColumn, rowKey: string, allowInputEdit = false) {
   if (column.readOnly || column.kind === 'blend' || column.kind === 'concentrate') return false
   if (column.kind === 'product') return isOutputPhaseRow(column, rowKey)
-  return isInputPhaseRow(column, rowKey)
+  if (column.kind === 'oxygen') {
+    if (!allowInputEdit) return false
+    return rowKey === 'O2' || rowKey === 'N2' || rowKey === 'H2O'
+  }
+  return isInputPhaseRow(column, rowKey, allowInputEdit)
 }
 
 export function columnTotal(column: PhaseTableColumn) {
-  if (column.phaseReady === false) return 0
+  if (column.phaseReady === false && !column.phaseContentsByKey && !column.phases && column.kind !== 'oxygen') {
+    return 0
+  }
   if (column.phaseContentsByKey && column.kind !== 'product') {
     let total = Object.values(column.phaseContentsByKey).reduce((sum, value) => sum + (value ?? 0), 0)
     if (column.kind === 'blend') {
@@ -262,11 +285,16 @@ export function columnTotal(column: PhaseTableColumn) {
       0,
     )
   }
-  return INPUT_PHASE_ROW_KEYS.reduce((sum, key) => sum + (column.phases?.[key] ?? 0), 0)
+  if (column.phases) {
+    return INPUT_PHASE_ROW_KEYS.reduce((sum, key) => sum + (column.phases?.[key] ?? 0), 0)
+  }
+  return 0
 }
 
 function isColumnTotalInvalid(column: PhaseTableColumn) {
-  if (column.phaseReady === false) return false
+  if (column.phaseReady === false && !column.phaseContentsByKey && !column.phases && column.kind !== 'oxygen') {
+    return false
+  }
   if (column.kind === 'product' && column.weight <= 0) return false
   return Math.abs(columnTotal(column) - 100) > 0.02
 }
@@ -290,6 +318,16 @@ export function CopperBatchPhaseTables({
   invalidInputColumns,
   invalidOutputColumns,
   expandRawGroupToken = 0,
+  rawSummaryHeader = '混料',
+  rawSummarySubHeader = '混合铜精矿',
+  showFuel = true,
+  weightEditable = false,
+  weightDrafts = {},
+  waterWeightDrafts = {},
+  onWeightChange,
+  onWeightBlur,
+  onWaterWeightChange,
+  onWaterWeightBlur,
   onInputDraftChange,
   onInputDraftCommit,
   onOutputDraftChange,
@@ -310,6 +348,17 @@ export function CopperBatchPhaseTables({
   invalidInputColumns: Record<string, boolean>
   invalidOutputColumns: Record<string, boolean>
   expandRawGroupToken?: number
+  rawSummaryHeader?: string
+  rawSummarySubHeader?: string
+  showFuel?: boolean
+  /** 吹炼：投料量可在物相表编辑 */
+  weightEditable?: boolean
+  weightDrafts?: Record<string, string>
+  waterWeightDrafts?: Record<string, string>
+  onWeightChange?: (columnId: string, value: string) => void
+  onWeightBlur?: (columnId: string) => void
+  onWaterWeightChange?: (columnId: string, value: string) => void
+  onWaterWeightBlur?: (columnId: string) => void
   onInputDraftChange: (columnId: string, key: string, value: string) => void
   onInputDraftCommit: (columnId: string) => void
   onOutputDraftChange: (columnId: string, key: string, value: string) => void
@@ -317,7 +366,8 @@ export function CopperBatchPhaseTables({
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [viewportWidth, setViewportWidth] = useState(0)
-  const [rawExpanded, setRawExpanded] = useState(false)
+  /** 吹炼（可编辑投料量）默认展开「投入」明细，避免折叠后输入投料量才突然变表 */
+  const [rawExpanded, setRawExpanded] = useState(weightEditable)
   const [solventExpanded, setSolventExpanded] = useState(false)
   const [gasInputUnit, setGasInputUnit] = useState<'mass' | 'volume'>('mass')
   const theadCls = darkMode ? 'bg-gray-800 text-gray-300' : 'bg-gray-50 text-gray-600'
@@ -329,8 +379,21 @@ export function CopperBatchPhaseTables({
         phaseRowKeys,
         rawExpanded,
         solventExpanded,
+        rawSummaryHeader,
+        rawSummarySubHeader,
+        showFuel,
+        alwaysShowRawSummary: weightEditable,
       }),
-    [inputColumns, phaseRowKeys, rawExpanded, solventExpanded]
+    [
+      inputColumns,
+      phaseRowKeys,
+      rawExpanded,
+      rawSummaryHeader,
+      rawSummarySubHeader,
+      showFuel,
+      solventExpanded,
+      weightEditable,
+    ]
   )
   const { rawColumns, solventColumns, airColumns, materialRows } = inputDisplayPlan
   const visiblePhaseColumns = useMemo(
@@ -341,31 +404,49 @@ export function CopperBatchPhaseTables({
     ],
     [airColumns, materialRows, outputColumns]
   )
-  const maxPhaseColumnCount = useMemo(
+  const declaredSolidPhaseColumnCount = useMemo(
     () =>
       Math.max(
         1,
-        ...visiblePhaseColumns.map((column) => columnDisplayPhaseKeys(column).length)
+        phaseRowKeys.filter((key) => key !== 'O2' && key !== 'N2' && key !== 'H2O').length
       ),
-    [visiblePhaseColumns]
+    [phaseRowKeys]
   )
-  const phaseDataColumnCount = maxPhaseColumnCount
+  const maxVisiblePhaseColumnCount = useMemo(
+    () =>
+      Math.max(
+        1,
+        ...visiblePhaseColumns.map((column) => columnDisplayPhaseKeys(column, weightEditable).length)
+      ),
+    [visiblePhaseColumns, weightEditable]
+  )
+  // 吹炼投入编辑时按已声明物相预留列槽，不能因某个原料从 0 变为有值而重排。
+  const phaseDataColumnCount = weightEditable
+    ? Math.max(declaredSolidPhaseColumnCount, maxVisiblePhaseColumnCount)
+    : maxVisiblePhaseColumnCount
+  const maxPhaseColumnCount = phaseDataColumnCount
   const colCount = phaseTableColumnCount(phaseDataColumnCount)
   const phaseColumnWidths = useMemo(() => {
+    if (weightEditable) {
+      return Array.from({ length: phaseDataColumnCount }, () => BATCH_TABLE_PCT_COL_WIDTH)
+    }
     return Array.from({ length: phaseDataColumnCount }, (_, index) => {
       const phaseIndex = index
       const samples: Array<string | number> = []
       if (phaseIndex === 0) samples.push('H2O', 100)
       for (const column of visiblePhaseColumns) {
-        const key = columnDisplayPhaseKeys(column)[phaseIndex]
+        const key = columnDisplayPhaseKeys(column, weightEditable)[phaseIndex]
         if (!key) continue
-        samples.push(phaseColLabel(key))
-        const value = getDisplayCellValue(column, key)
+        samples.push(phaseFormulaWidthSample(phaseColLabel(key)))
+        const value = getDisplayCellValue(column, key, weightEditable)
         if (value != null) samples.push(value)
       }
-      return batchTableDataColWidth('', samples, false)
+      return Math.min(
+        BATCH_TABLE_PHASE_FORMULA_COL_MAX,
+        batchTableDataColWidth('', samples, false, { max: BATCH_TABLE_PHASE_FORMULA_COL_MAX })
+      )
     })
-  }, [phaseDataColumnCount, visiblePhaseColumns])
+  }, [phaseDataColumnCount, visiblePhaseColumns, weightEditable])
   const { widths: colWidths, tableWidth: resolvedTableWidth } = batchPhaseTableColWidths(
     nameColWidth,
     phaseDataColumnCount,
@@ -387,6 +468,10 @@ export function CopperBatchPhaseTables({
   useEffect(() => {
     if (expandRawGroupToken > 0) setRawExpanded(true)
   }, [expandRawGroupToken])
+
+  useEffect(() => {
+    if (weightEditable) setRawExpanded(true)
+  }, [weightEditable])
 
   const getDraft = (column: PhaseTableColumn, rowKey: string, fallback: number) => {
     const map = column.kind === 'product' ? outputDrafts : inputDrafts
@@ -428,30 +513,21 @@ export function CopperBatchPhaseTables({
     )
   }
 
-  const renderPhaseFormula = (key: string) => {
-    const label = phaseColLabel(key)
-    return (
-      <span className="inline-flex items-baseline justify-center whitespace-nowrap" title={label}>
-        {phaseFormulaParts(label).map((part, index) =>
-          /^\d+$/.test(part) ? (
-            <sub key={`${part}-${index}`} className="text-[0.72em] leading-none">
-              {part}
-            </sub>
-          ) : (
-            <span key={`${part}-${index}`}>{part}</span>
-          )
-        )}
-      </span>
-    )
-  }
-
   const renderTextCell = (
     kind: ColumnKind,
     value: ReactNode,
-    key?: string
+    key?: string,
+    options?: { allowWrap?: boolean }
   ) => (
-    <td key={key} className={dataCellClass(darkMode, kind)}>
-      <span className="block w-full truncate text-center text-sm" title={typeof value === 'string' ? value : undefined}>
+    <td key={key} className={dataCellClass(darkMode, kind, options)}>
+      <span
+        className={`block w-full text-center text-sm ${
+          options?.allowWrap
+            ? 'whitespace-normal break-words leading-tight'
+            : 'truncate'
+        }`}
+        title={typeof value === 'string' ? value : undefined}
+      >
         {value}
       </span>
     </td>
@@ -479,7 +555,9 @@ export function CopperBatchPhaseTables({
     phaseKeys: string[]
   ) => [
     ...phaseKeys.map((rowKey) =>
-      renderTextCell(column.kind, renderPhaseFormula(rowKey), `${column.id}-label-${rowKey}`)
+      renderTextCell(column.kind, renderPhaseFormula(rowKey), `${column.id}-label-${rowKey}`, {
+        allowWrap: true,
+      })
     ),
     ...renderPaddedBlankCells(column.kind, phaseKeys.length),
   ]
@@ -489,9 +567,9 @@ export function CopperBatchPhaseTables({
     phaseKeys: string[]
   ) => [
     ...phaseKeys.map((rowKey) => {
-      const applicable = isPhaseRowApplicable(column, rowKey)
-      const fallback = getDisplayCellValue(column, rowKey) ?? 0
-      const editable = column.kind !== 'oxygen' && isCellEditable(column, rowKey)
+      const applicable = isPhaseRowApplicable(column, rowKey, weightEditable)
+      const fallback = getDisplayCellValue(column, rowKey, weightEditable) ?? 0
+      const editable = isCellEditable(column, rowKey, weightEditable)
       const invalid = column.kind === 'product' ? invalidOutputColumns[column.id] : invalidInputColumns[column.id]
       const helpTitle =
         column.kind === 'product' && column.productGasVolume && column.productPhaseMasses
@@ -520,7 +598,7 @@ export function CopperBatchPhaseTables({
                       : rowKey === 'H2O'
                         ? column.oxygenAir?.volumePct.H2O
                         : undefined
-                if (weightPct == null && volumePct == null) return undefined
+                if (weightPct == null && volumePct == null && rowKey !== 'H2O') return undefined
                 return `${phaseColLabel(rowKey)}：w% ${weightPct != null ? _formatTableNumber(weightPct) : '0'}，v% ${volumePct != null ? _formatTableNumber(volumePct) : '0'}。`
               })()
           : undefined
@@ -532,7 +610,7 @@ export function CopperBatchPhaseTables({
             editable={editable}
             className={phaseBoxClass(invalid)}
             helpTitle={helpTitle}
-            value={applicable ? (column.kind === 'oxygen' ? fallback : getDraft(column, rowKey, fallback)) : '—'}
+            value={applicable ? getDraft(column, rowKey, fallback) : '—'}
             onChange={(value) => {
               if (column.kind === 'product') onOutputDraftChange(column.id, rowKey, value)
               else onInputDraftChange(column.id, rowKey, value)
@@ -554,7 +632,11 @@ export function CopperBatchPhaseTables({
         isColumnTotalInvalid(column) ? 'text-red-500 ring-1 ring-inset ring-red-400' : ''
       }`}
     >
-      {column.phaseReady === false ? (
+      {column.phaseReady === false &&
+      !weightEditable &&
+      !column.phaseContentsByKey &&
+      !column.phases &&
+      column.kind !== 'oxygen' ? (
         <BatchTableNumericReadonly darkMode={darkMode} value="—" applicable={false} />
       ) : column.kind === 'product' && column.weight <= 0 ? (
         <BatchTableNumericReadonly darkMode={darkMode} value="" applicable={false} />
@@ -569,18 +651,25 @@ export function CopperBatchPhaseTables({
     </td>
   )
 
-  const renderGasUnitToggle = () => (
-    <button
-      type="button"
-      className={`absolute right-0.5 top-0.5 inline-flex h-5 w-5 items-center justify-center rounded text-xs font-semibold transition ${
-        darkMode ? 'text-blue-200 hover:bg-gray-700' : 'text-blue-700 hover:bg-blue-50'
-      }`}
-      title={`切换气体投入显示单位（当前 ${gasInputUnitLabel}）`}
-      aria-label="切换气体投入显示单位"
-      onClick={() => setGasInputUnit((unit) => (unit === 'mass' ? 'volume' : 'mass'))}
-    >
-      ⇆
-    </button>
+  const renderGasCategoryCell = (rowSpan: number) => (
+    <td rowSpan={rowSpan} className={`${categoryRowSpanCellClass(darkMode, 'oxygen')} relative`}>
+      <div className="flex flex-col items-center justify-center gap-0.5 py-0.5">
+        <span>气</span>
+        <button
+          type="button"
+          className={`rounded px-1 py-0.5 text-[10px] font-semibold leading-none transition ${
+            darkMode
+              ? 'bg-sky-950/60 text-sky-200 hover:bg-sky-900/80'
+              : 'bg-sky-100 text-sky-800 hover:bg-sky-200'
+          }`}
+          title={`切换气体投入显示单位（当前 ${gasInputUnitLabel}）`}
+          aria-label="切换气体投入显示单位"
+          onClick={() => setGasInputUnit((unit) => (unit === 'mass' ? 'volume' : 'mass'))}
+        >
+          {gasInputUnitLabel}
+        </button>
+      </div>
+    </td>
   )
 
   const columnDisplayWeight = (column: PhaseTableColumn, weight: number) => {
@@ -591,23 +680,85 @@ export function CopperBatchPhaseTables({
   const renderWeightCell = (
     column: PhaseTableColumn,
     weight: number
-  ) => (
-    <td className={dataCellClass(darkMode, column.kind)}>
-      <BatchTableNumericCell
-        darkMode={darkMode}
-        applicable={column.weight > 0 || column.kind !== 'product'}
-        value={weight > 0 || column.kind !== 'product' ? columnDisplayWeight(column, weight) : '—'}
-        helpTitle={
-          column.kind === 'oxygen' && gasInputUnit === 'volume'
-            ? `${column.subHeader || column.header} 标准体积（由当前质量与 O2/N2/H2O 组成换算）`
-            : undefined
-        }
-      />
-    </td>
-  )
+  ) => {
+    const canEditWeight =
+      weightEditable &&
+      !column.readOnly &&
+      (column.kind === 'raw' ||
+        column.kind === 'other' ||
+        column.kind === 'solvent' ||
+        column.kind === 'oxygen')
+    const draft = weightDrafts[column.id]
+    const displayValue =
+      draft != null
+        ? draft
+        : weight > 0 || column.kind !== 'product'
+          ? columnDisplayWeight(column, weight)
+          : '—'
+    return (
+      <td className={dataCellClass(darkMode, column.kind)}>
+        {canEditWeight ? (
+          <BatchTableNumericCell
+            darkMode={darkMode}
+            editable
+            applicable
+            value={displayValue}
+            helpTitle={
+              column.kind === 'oxygen' && gasInputUnit === 'volume'
+                ? `${column.subHeader || column.header} 标准体积（由当前质量与 O2/N2/H2O 组成换算）`
+                : '投料量（t/h）；改物相组成请编辑右侧物相格'
+            }
+            onChange={(value) => onWeightChange?.(column.id, value)}
+            onBlur={() => onWeightBlur?.(column.id)}
+          />
+        ) : (
+          <BatchTableNumericCell
+            darkMode={darkMode}
+            applicable={column.weight > 0 || column.kind !== 'product'}
+            value={displayValue}
+            helpTitle={
+              column.kind === 'oxygen' && gasInputUnit === 'volume'
+                ? `${column.subHeader || column.header} 标准体积（由当前质量与 O2/N2/H2O 组成换算）`
+                : undefined
+            }
+          />
+        )}
+      </td>
+    )
+  }
+
+  const renderWaterWeightCell = (column: PhaseTableColumn, waterWeight: number) => {
+    const canEditWater =
+      weightEditable &&
+      !column.readOnly &&
+      (column.kind === 'raw' || column.kind === 'other' || column.kind === 'solvent' || column.kind === 'fuel')
+    const draft = waterWeightDrafts[column.id]
+    const displayValue = draft != null ? draft : waterWeight
+    return (
+      <td className={dataCellClass(darkMode, column.kind)}>
+        {canEditWater ? (
+          <BatchTableNumericCell
+            darkMode={darkMode}
+            editable
+            applicable
+            value={displayValue}
+            helpTitle="含水质量 t/h；湿基 = 干料 t/h + 含水 t/h"
+            onChange={(value) => onWaterWeightChange?.(column.id, value)}
+            onBlur={() => onWaterWeightBlur?.(column.id)}
+          />
+        ) : (
+          <BatchTableNumericReadonly
+            darkMode={darkMode}
+            value={waterWeight}
+            className="text-sm"
+          />
+        )}
+      </td>
+    )
+  }
 
   const renderFormulaCell = (kind: ColumnKind, key: string, cellKey?: string) =>
-    renderTextCell(kind, renderPhaseFormula(key), cellKey)
+    renderTextCell(kind, renderPhaseFormula(key), cellKey, { allowWrap: true })
 
   const renderMaterialGroup = (
     column: PhaseTableColumn,
@@ -625,12 +776,12 @@ export function CopperBatchPhaseTables({
           </span>
         </td>
         {renderTextCell(column.kind, columnUnitLabel(column, gasInputUnit), `${column.id}-unit`)}
-        {renderPhaseLabelCells(column, columnDisplayPhaseKeys(column))}
+        {renderPhaseLabelCells(column, columnDisplayPhaseKeys(column, weightEditable))}
         {renderBlankCell(column.kind, `${column.id}-label-total`)}
       </tr>
       <tr>
         {renderWeightCell(column, column.weight)}
-        {renderPhaseValueCells(column, columnDisplayPhaseKeys(column))}
+        {renderPhaseValueCells(column, columnDisplayPhaseKeys(column, weightEditable))}
         {renderTotalCell(column)}
       </tr>
       <tr>
@@ -643,13 +794,7 @@ export function CopperBatchPhaseTables({
         {renderBlankCell(column.kind, `${column.id}-water-label-total`)}
       </tr>
       <tr>
-        <td className={dataCellClass(darkMode, column.kind)}>
-            <BatchTableNumericReadonly
-              darkMode={darkMode}
-              value={waterWeight}
-              className="text-sm"
-            />
-          </td>
+        {renderWaterWeightCell(column, waterWeight)}
         <td className={dataCellClass(darkMode, column.kind)}>
           <BatchTableNumericReadonly
             darkMode={darkMode}
@@ -674,26 +819,28 @@ export function CopperBatchPhaseTables({
     column: PhaseTableColumn,
     categoryLabel: ReactNode | null,
     categoryRowSpan: number,
-    nameExtra?: ReactNode
+    options?: { gasCategory?: boolean }
   ) => {
-    const phaseKeys = columnDisplayPhaseKeys(column)
+    const phaseKeys = columnDisplayPhaseKeys(column, weightEditable)
     return (
       <Fragment key={`group-${column.id}`}>
         <tr>
-          {categoryLabel != null && (
-            <td rowSpan={categoryRowSpan} className={categoryRowSpanCellClass(darkMode, column.kind)}>
-              {categoryLabel}
-            </td>
-          )}
+          {categoryLabel != null &&
+            (options?.gasCategory ? (
+              renderGasCategoryCell(categoryRowSpan)
+            ) : (
+              <td rowSpan={categoryRowSpan} className={categoryRowSpanCellClass(darkMode, column.kind)}>
+                {categoryLabel}
+              </td>
+            ))}
           <td
             rowSpan={2}
-            className={`${stickyCellClass(darkMode, column.kind, 'name')} relative`}
+            className={stickyCellClass(darkMode, column.kind, 'name')}
             style={nameColStyle(resolvedNameColWidth)}
           >
             <span className="block whitespace-nowrap text-center" title={column.subHeader || column.header}>
               {column.subHeader || column.header}
             </span>
-            {nameExtra}
           </td>
           {renderTextCell(column.kind, columnUnitLabel(column, gasInputUnit), `${column.id}-unit`)}
           {renderPhaseLabelCells(column, phaseKeys)}
@@ -716,7 +863,7 @@ export function CopperBatchPhaseTables({
         renderGroupToggle(
           row.expanded ?? false,
           () => setRawExpanded((value) => !value),
-          '混料',
+          rawSummaryHeader,
           row.count ?? rawColumns.length,
           'up'
         ),
@@ -737,7 +884,7 @@ export function CopperBatchPhaseTables({
     }
     return renderMaterialGroup(
       column,
-      row.role === 'fuel' ? '燃料' : column.header,
+      row.role === 'fuel' ? '燃料' : column.kind === 'other' ? '其他' : column.header,
       column.waterWeight ?? 0
     )
   }
@@ -791,7 +938,7 @@ export function CopperBatchPhaseTables({
               column,
               index === 0 ? '气' : null,
               airColumns.length * 2,
-              index === 0 ? renderGasUnitToggle() : null
+              { gasCategory: index === 0 }
             )
           )}
           {renderOutputRows()}

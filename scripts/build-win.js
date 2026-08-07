@@ -3,6 +3,7 @@
  * 1) 打包前最后一次强制释放 release/win-unpacked，避免 app.asar 被占用
  * 2) 调用 electron-builder --win
  */
+require('./electron-mirrors')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')

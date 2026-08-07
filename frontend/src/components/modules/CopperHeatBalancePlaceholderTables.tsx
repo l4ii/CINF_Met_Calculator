@@ -294,13 +294,11 @@ function normalizeComponentHeatSection(section: string, side: ComponentHeatMatri
 }
 
 function inputComponentHeatPriority(section: string) {
-  if (section.includes('铜精矿') || section.includes('精矿')) return 0
   if (section.includes('石英') || section.includes('熔剂') || section.includes('石灰')) return 1
   if (section.includes('煤') || section.includes('燃料')) return 2
-  if (section.includes('含水')) return 3
-  if (section.includes('空气') || section.includes('氧气') || section.includes('风')) return 4
-  if (section.includes('冷却水')) return 5
-  return 6
+  if (section.includes('空气') || section.includes('氧气') || section.includes('风')) return 3
+  if (section.includes('冷却水')) return 4
+  return 0
 }
 
 function componentEnthalpy298MJh(kmolh: number, enthalpy25KJmol: number | null): number {
@@ -316,10 +314,16 @@ function enthalpySummaryValue(group: HeatEnthalpyMatrixGroup, side: ComponentHea
 }
 
 function outputComponentHeatPriority(section: string) {
-  if (section.includes('熔炼渣') || (section.includes('渣') && !section.includes('烟'))) return 0
-  if (section.includes('白铜锍') || section.includes('铜锍')) return 1
-  if (section.includes('熔炼出炉烟气') || (section.includes('烟气') && !section.includes('尘') && !section.includes('无组织'))) return 2
-  if (section.includes('烟气含尘') || (section.includes('尘') && section.includes('烟'))) return 3
+  if (section.includes('熔炼渣') || section.includes('吹炼渣') || (section.includes('渣') && !section.includes('烟'))) return 0
+  if (section.includes('白铜锍') || section.includes('粗铜') || section.includes('铜锍')) return 1
+  if (
+    section.includes('熔炼出炉烟气') ||
+    section.includes('吹炼出炉烟气') ||
+    (section.includes('烟气') && !section.includes('尘') && !section.includes('无组织'))
+  )
+    return 2
+  if (section.includes('烟气含尘') || section.includes('吹炼烟气含尘') || (section.includes('尘') && section.includes('烟')))
+    return 3
   if (section.includes('无组织')) return 4
   if (section.includes('损失')) return 5
   return 6
@@ -469,6 +473,7 @@ function ComponentHeatMatrix({
 type HeatEnthalpyMatrixRow = {
   component: string
   kmolh: number
+  enthalpy298KJmol: number | null
   enthalpy298MJh: number
   enthalpyTMJh: number
   orderIndex: number
@@ -510,11 +515,15 @@ function buildHeatEnthalpyMatrixGroups(
     const current = group.components.get(row.component) ?? {
       component: row.component,
       kmolh: 0,
+      enthalpy298KJmol: row.enthalpy25KJmol,
       enthalpy298MJh: 0,
       enthalpyTMJh: 0,
       orderIndex: rowIndex,
     }
     current.kmolh += kmolh
+    if (current.enthalpy298KJmol == null && row.enthalpy25KJmol != null) {
+      current.enthalpy298KJmol = row.enthalpy25KJmol
+    }
     current.enthalpy298MJh += componentEnthalpy298MJh(kmolh, row.enthalpy25KJmol)
     current.enthalpyTMJh += componentEnthalpyTMJh(kmolh, row.enthalpyTKJmol)
     group.components.set(row.component, current)
@@ -763,7 +772,163 @@ function fuelCoalDetailButtonClass(darkMode: boolean) {
   }`
 }
 
-function ReactionTable({ darkMode, result }: { darkMode: boolean; result: CopperHeatBalanceResult }) {
+function HessStreamChemicalHeatTable({
+  darkMode,
+  result,
+}: {
+  darkMode: boolean
+  result: CopperHeatBalanceResult
+}) {
+  const tone = tableTone(darkMode)
+  const cellBorder = `border ${tone.border}`
+  const inputGroups = buildHeatEnthalpyMatrixGroups(result.inputPhysicalRows, 'input')
+  const outputGroups = buildHeatEnthalpyMatrixGroups(result.outputPhysicalRows, 'output')
+  const inputTotal298 = inputGroups.reduce((sum, group) => sum + group.total298, 0)
+  const outputTotal298 = outputGroups.reduce((sum, group) => sum + group.total298, 0)
+  const hessNetMJh = result.chemicalHeatHessMJh ?? result.chemicalHeatMJh
+  const renderSide = (title: string, groups: HeatEnthalpyMatrixGroup[], total298: number) => {
+    const maxRowCount = Math.max(0, ...groups.map((group) => group.rows.length))
+    const minWidth = Math.max(560, 56 + groups.length * 380)
+    const groupTone = (index: number) =>
+      darkMode
+        ? ['bg-sky-950/35', 'bg-emerald-950/30', 'bg-amber-950/30', 'bg-violet-950/30'][index % 4]
+        : ['bg-sky-50/80', 'bg-emerald-50/80', 'bg-amber-50/80', 'bg-violet-50/80'][index % 4]
+    if (groups.length === 0) {
+      return (
+        <div className={`overflow-auto rounded-lg border ${tone.border}`}>
+          <table className={`w-full table-fixed border-collapse ${HEAT_TABLE_TEXT}`}>
+            <tbody>
+              <tr>
+                <td className={`px-2 py-4 text-center ${cellBorder} ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                  —
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )
+    }
+    return (
+      <div className="space-y-2">
+        <div className={`text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>{title}</div>
+        <div className={`overflow-auto rounded-lg border ${tone.border}`}>
+          <table className={`w-full table-fixed border-collapse ${HEAT_TABLE_TEXT}`} style={{ minWidth }}>
+            <thead className={tone.head}>
+              <tr>
+                <th rowSpan={2} className={`w-12 ${HEAT_TABLE_HEAD} ${cellBorder}`}>
+                  №
+                </th>
+                {groups.map((group, groupIndex) => (
+                  <th key={group.section} colSpan={4} className={`${HEAT_TABLE_HEAD} ${cellBorder} ${groupTone(groupIndex)}`}>
+                    {group.section}
+                  </th>
+                ))}
+              </tr>
+              <tr>
+                {groups.map((group, groupIndex) => (
+                  <Fragment key={`${group.section}-headers`}>
+                    <th className={`${HEAT_TABLE_HEAD} ${cellBorder} ${groupTone(groupIndex)}`}>组分</th>
+                    <th className={`${HEAT_TABLE_HEAD} ${cellBorder} ${groupTone(groupIndex)}`}>kmol/h</th>
+                    <th className={`${HEAT_TABLE_HEAD} ${cellBorder} ${groupTone(groupIndex)}`}>
+                      <EnthalpySymbol kelvin={298} /> (kJ/mol)
+                    </th>
+                    <th className={`${HEAT_TABLE_HEAD} ${cellBorder} ${groupTone(groupIndex)}`}>
+                      n×<EnthalpySymbol kelvin={298} /> (MJ/h)
+                    </th>
+                  </Fragment>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {Array.from({ length: maxRowCount }).map((_, rowIndex) => (
+                <tr key={`${title}-${rowIndex}`}>
+                  <td className={`${HEAT_TABLE_CELL} ${cellBorder}`}>{rowIndex + 1}</td>
+                  {groups.map((group, groupIndex) => {
+                    const row = group.rows[rowIndex]
+                    return (
+                      <Fragment key={`${group.section}-${rowIndex}`}>
+                        <td className={`${HEAT_TABLE_CELL} ${cellBorder} ${groupTone(groupIndex)}`}>
+                          {row ? <PhaseFormula value={row.component} /> : ''}
+                        </td>
+                        <td className={`${HEAT_TABLE_CELL} font-mono ${cellBorder} ${groupTone(groupIndex)}`}>
+                          {row ? numberCell(darkMode, row.kmolh) : ''}
+                        </td>
+                        <td className={`${HEAT_TABLE_CELL} font-mono ${cellBorder} ${groupTone(groupIndex)}`}>
+                          {row && row.enthalpy298KJmol != null ? numberCell(darkMode, row.enthalpy298KJmol) : ''}
+                        </td>
+                        <td className={`${HEAT_TABLE_CELL} font-mono ${cellBorder} ${groupTone(groupIndex)}`}>
+                          {row ? numberCell(darkMode, row.enthalpy298MJh) : ''}
+                        </td>
+                      </Fragment>
+                    )
+                  })}
+                </tr>
+              ))}
+              <tr className={tone.total}>
+                <td className={`${HEAT_TABLE_CELL} font-semibold ${cellBorder}`}>合计</td>
+                {groups.map((group) => (
+                  <Fragment key={`${group.section}-total`}>
+                    <td colSpan={3} className={`${HEAT_TABLE_CELL} font-semibold ${cellBorder}`}>
+                      Σ n×ΔH298
+                    </td>
+                    <td className={`${HEAT_TABLE_CELL} font-mono font-semibold ${cellBorder}`}>
+                      {numberCell(darkMode, group.total298)}
+                    </td>
+                  </Fragment>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div className={`text-right text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>
+          {title} 合计：{numberCell(darkMode, total298)} MJ/h
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {renderSide('投入（常温生成焓）', inputGroups, inputTotal298)}
+      {renderSide('产出（常温生成焓）', outputGroups, outputTotal298)}
+      <div className={`overflow-auto rounded-lg border ${tone.border}`}>
+        <table className={`w-full table-fixed border-collapse ${HEAT_TABLE_TEXT}`}>
+          <tbody>
+            <tr className={tone.total}>
+              <td className={`${HEAT_TABLE_CELL} text-right font-semibold ${cellBorder}`}>
+                Σ入 n×ΔH298
+              </td>
+              <td className={`${HEAT_TABLE_CELL} font-mono font-semibold ${cellBorder}`} style={{ width: 160 }}>
+                {numberCell(darkMode, inputTotal298)}
+              </td>
+            </tr>
+            <tr className={tone.total}>
+              <td className={`${HEAT_TABLE_CELL} text-right font-semibold ${cellBorder}`}>
+                Σ出 n×ΔH298
+              </td>
+              <td className={`${HEAT_TABLE_CELL} font-mono font-semibold ${cellBorder}`}>
+                {numberCell(darkMode, outputTotal298)}
+              </td>
+            </tr>
+            <tr className={tone.total}>
+              <td className={`${HEAT_TABLE_CELL} text-right font-semibold ${cellBorder}`}>
+                总表化学热 = Σ入 − Σ出
+              </td>
+              <td className={`${HEAT_TABLE_CELL} font-mono font-semibold ${cellBorder}`}>
+                {numberCell(darkMode, hessNetMJh)}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className={`text-xs leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+        由投入/产出物相质量换算 kmol/h，再按 Σ(n × ΔH298) 求进出差；
+      </p>
+    </div>
+  )
+}
+
+function ReactionEquationTable({ darkMode, result }: { darkMode: boolean; result: CopperHeatBalanceResult }) {
   const [fuelCoalDetailsOpen, setFuelCoalDetailsOpen] = useState(false)
   const tone = tableTone(darkMode)
   const cellBorder = `border ${tone.border}`
@@ -772,7 +937,17 @@ function ReactionTable({ darkMode, result }: { darkMode: boolean; result: Copper
   const releaseMJh = result.chemicalHeatReleaseMJh
   const absorptionMJh = result.chemicalHeatAbsorptionMJh
   const pathNetMJh = result.chemicalHeatPathMJh ?? releaseMJh - absorptionMJh
-  const hessNetMJh = result.chemicalHeatMJh
+  const hessNetMJh = result.chemicalHeatHessMJh ?? result.chemicalHeatMJh
+  const mode = result.chemicalHeatMode === 'reaction' ? 'reaction' : 'hess'
+  const usesStream298 = result.chemicalHeatCalculationBasis === 'stream298'
+  const primaryNetMJh = usesStream298 ? hessNetMJh : pathNetMJh
+  const primaryLabel = usesStream298
+    ? '总表化学热（进出物流 298 K）'
+    : '总表化学热（化学反应）'
+  const secondaryNetMJh = usesStream298 ? pathNetMJh : hessNetMJh
+  const secondaryLabel = usesStream298
+    ? '反应方程明细净热（不计入总表）'
+    : '对照：Hess'
   const crosscheck = result.fuelCoalCrosscheck
   return (
     <div className="space-y-3">
@@ -833,11 +1008,7 @@ function ReactionTable({ darkMode, result }: { darkMode: boolean; result: Copper
                   {numberCell(darkMode, row.inputExtentKmolh, reactionInputExtentHelpTitle(row))}
                 </td>
                 <td className={`${HEAT_TABLE_CELL} font-mono ${cellBorder}`}>
-                  {numberCell(
-                    darkMode,
-                    row.extentKmolh,
-                    reactionActualExtentHelpTitle(row)
-                  )}
+                  {numberCell(darkMode, row.extentKmolh, reactionActualExtentHelpTitle(row))}
                 </td>
                 <td className={`${HEAT_TABLE_CELL} font-mono ${cellBorder}`}>
                   {numberCell(darkMode, row.reactionHeatKJmol)}
@@ -866,18 +1037,18 @@ function ReactionTable({ darkMode, result }: { darkMode: boolean; result: Copper
           </tr>
           <tr className={tone.total}>
             <td colSpan={6} className={`${HEAT_TABLE_CELL} font-semibold text-right ${cellBorder}`}>
-              路径净化学热
+              {primaryLabel}
             </td>
             <td className={`${HEAT_TABLE_CELL} font-mono font-semibold ${cellBorder}`}>
-              {numberCell(darkMode, pathNetMJh)}
+              {numberCell(darkMode, primaryNetMJh)}
             </td>
           </tr>
           <tr className={tone.total}>
-            <td colSpan={6} className={`${HEAT_TABLE_CELL} font-semibold text-right ${cellBorder}`}>
-              总表化学热（Hess）
+            <td colSpan={6} className={`${HEAT_TABLE_CELL} text-right ${cellBorder} ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+              {secondaryLabel}
             </td>
-            <td className={`${HEAT_TABLE_CELL} font-mono font-semibold ${cellBorder}`}>
-              {numberCell(darkMode, hessNetMJh)}
+            <td className={`${HEAT_TABLE_CELL} font-mono ${cellBorder} ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+              {numberCell(darkMode, secondaryNetMJh)}
             </td>
           </tr>
         </tbody>
@@ -887,13 +1058,25 @@ function ReactionTable({ darkMode, result }: { darkMode: boolean; result: Copper
         <FuelCoalCrosscheckDetails darkMode={darkMode} crosscheck={crosscheck} />
       ) : null}
       <p className={`text-xs leading-relaxed ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-        路径净化学热 = 放热合计 − 吸热合计，仅供反应解释；热量总表与 MetCal 对齐，采用进出物流 ΣΔH298 差（Hess）。
+        {usesStream298
+          ? '上表为反应路径核对明细，不计入当前 Hess 总表化学热。'
+          : mode === 'reaction'
+            ? '当前总表采用反应路径净热（放热合计 − 吸热合计）。Hess 对照行为进出物流 ΣΔH298 差。'
+            : '当前总表采用 Hess（进出物流 ΣΔH298 差）。反应路径净热仅作解释对照。'}
         {Math.abs(pathNetMJh - hessNetMJh) > 1e-3
-          ? ` 路径与 Hess 差额 ${(pathNetMJh - hessNetMJh).toFixed(2)} MJ/h（含水蒸发、Other 等已含于 Hess）。`
+          ? ` 两法差额 ${(pathNetMJh - hessNetMJh).toFixed(2)} MJ/h（含水蒸发、Other 等差异）。`
           : null}
       </p>
     </div>
   )
+}
+
+function ReactionTable({ darkMode, result }: { darkMode: boolean; result: CopperHeatBalanceResult }) {
+  const usesStream298 = result.chemicalHeatCalculationBasis === 'stream298'
+  if (usesStream298) {
+    return <HessStreamChemicalHeatTable darkMode={darkMode} result={result} />
+  }
+  return <ReactionEquationTable darkMode={darkMode} result={result} />
 }
 
 function HeatAuxiliaryMetric({
@@ -941,7 +1124,7 @@ function HeatAuxiliaryMetric({
   )
 }
 
-function HeatAuxiliaryParamsStrip({
+export function HeatAuxiliaryParamsStrip({
   darkMode,
   concentrateMassTh,
   productResult,
@@ -1021,48 +1204,78 @@ export function CopperHeatBalancePlaceholderTables({
   concentrateMassTh = 0,
   productResult,
   airColumns,
+  chemicalHeatMode,
+  onChemicalHeatModeChange,
+  showAuxiliaryParams = true,
 }: {
   darkMode: boolean
   result: CopperHeatBalanceResult
   concentrateMassTh?: number
   productResult?: OxyConstraintSolverResult | null
   airColumns?: CopperMaterialColumn[] | null
+  chemicalHeatMode?: 'hess' | 'reaction'
+  onChemicalHeatModeChange?: (mode: 'hess' | 'reaction') => void
+  /** 案例汇总等只读场景可隐藏顶部辅助参数条 */
+  showAuxiliaryParams?: boolean
 }) {
   const [activeTab, setActiveTab] = useState<HeatBalanceResultTab>('summary')
   const resolvedProductResult = productResult ?? result.finalProductResult
   const resolvedAirColumns = airColumns ?? result.finalAirColumns ?? null
+  const mode = chemicalHeatMode ?? (result.chemicalHeatMode === 'reaction' ? 'reaction' : 'hess')
 
   return (
     <div className="space-y-4">
-      <HeatAuxiliaryParamsStrip
-        darkMode={darkMode}
-        concentrateMassTh={concentrateMassTh}
-        productResult={resolvedProductResult}
-        airColumns={resolvedAirColumns}
-      />
+      {showAuxiliaryParams && (
+        <HeatAuxiliaryParamsStrip
+          darkMode={darkMode}
+          concentrateMassTh={concentrateMassTh}
+          productResult={resolvedProductResult}
+          airColumns={resolvedAirColumns}
+        />
+      )}
 
-      <div className={`flex flex-wrap gap-1 border-b px-1 pt-1 ${darkMode ? 'border-gray-600' : 'border-gray-300'}`}>
-        {HEAT_BALANCE_RESULT_TABS.map((tab) => {
-          const active = tab.id === activeTab
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveTab(tab.id)}
-              className={`min-w-24 rounded-t-md border px-4 py-2 text-sm font-medium transition-colors ${
-                active
-                  ? darkMode
-                    ? 'border-blue-500 border-b-gray-900 bg-gray-900 text-gray-100'
-                    : 'border-blue-500 border-b-white bg-white text-gray-900'
-                  : darkMode
-                    ? 'border-gray-700 border-b-transparent bg-gray-900/40 text-gray-400 hover:text-gray-200'
-                    : 'border-gray-200 border-b-transparent bg-gray-100 text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              {tab.label}
-            </button>
-          )
-        })}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className={`flex flex-wrap gap-1 border-b px-1 pt-1 ${darkMode ? 'border-gray-600' : 'border-gray-300'}`}>
+          {HEAT_BALANCE_RESULT_TABS.map((tab) => {
+            const active = tab.id === activeTab
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={`min-w-24 rounded-t-md border px-4 py-2 text-sm font-medium transition-colors ${
+                  active
+                    ? darkMode
+                      ? 'border-blue-500 border-b-gray-900 bg-gray-900 text-gray-100'
+                      : 'border-blue-500 border-b-white bg-white text-gray-900'
+                    : darkMode
+                      ? 'border-gray-700 border-b-transparent bg-gray-900/40 text-gray-400 hover:text-gray-200'
+                      : 'border-gray-200 border-b-transparent bg-gray-100 text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                {tab.label}
+              </button>
+            )
+          })}
+        </div>
+        {onChemicalHeatModeChange ? (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={mode === 'reaction'}
+            title="切换总表化学热模式（需重新热平衡计算）"
+            onClick={() => onChemicalHeatModeChange(mode === 'hess' ? 'reaction' : 'hess')}
+            className={`mb-[-1px] inline-flex h-8 items-center rounded-full border px-3 text-xs font-medium ${
+              darkMode ? 'border-gray-600 bg-gray-800 text-gray-100' : 'border-gray-300 bg-white text-gray-800'
+            }`}
+          >
+            {mode === 'reaction' ? '模式：化学反应' : '模式：Hess'}
+          </button>
+        ) : (
+          <span className={`mb-[-1px] text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+            {mode === 'reaction' ? '模式：化学反应' : '模式：Hess'}
+          </span>
+        )}
       </div>
 
       {activeTab === 'summary' && (

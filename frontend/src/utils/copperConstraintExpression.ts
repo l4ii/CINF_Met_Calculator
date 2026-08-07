@@ -1,7 +1,7 @@
 import { COPPER_BUILTIN_PHASE_FRACTIONS } from './copperPhaseStoichiometry.ts'
 import { atomicMass, COMPOUND_MOLAR_MASS } from './atomicMass.ts'
 import type { CopperElementKey } from './copperWorkflowCalc.ts'
-import type { OxySideBlowProductKey } from './copperConstraintConfig.ts'
+import { productNamesForSolver, type OxySideBlowProductKey } from './copperConstraintConfig.ts'
 
 export type ExprNode =
   | { type: 'number'; value: number }
@@ -372,11 +372,16 @@ export function buildConstraintSymbolTable(params: {
   const outputPhaseMass: Record<string, Record<string, number>> = {}
   const outputElementMass: Record<string, Partial<Record<CopperElementKey, number>>> = {}
   for (const key of Object.keys(params.products) as OxySideBlowProductKey[]) {
-    const name = params.productNames[key]
     const product = params.products[key]!
-    outputMass[name] = product.mass
-    outputPhaseMass[name] = { ...product.phases }
-    outputElementMass[name] = { ...product.elementMass }
+    const phases = { ...product.phases }
+    const elements = { ...product.elementMass }
+    // 此旧入口默认按熔炼符号；吹炼请走 buildSymbolTableFromUnknowns
+    const names = new Set<string>([params.productNames[key], ...productNamesForSolver(key, 'smelting')])
+    for (const name of names) {
+      outputMass[name] = product.mass
+      outputPhaseMass[name] = phases
+      outputElementMass[name] = elements
+    }
   }
   return {
     variables: params.variables,

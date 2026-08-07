@@ -86,7 +86,13 @@ export function BatchTableNumericReadonly({
 
   if (!applicable || isBatchTableEmptyValue(text)) {
     return (
-      <span className={mergeClass('font-mono tabular-nums', className, darkMode ? 'text-gray-500' : 'text-gray-400')}>
+      <span
+        className={mergeClass(
+          'block w-full font-mono tabular-nums',
+          className,
+          darkMode ? 'text-gray-500' : 'text-gray-400'
+        )}
+      >
         {applicable ? emptyDisplay : '—'}
       </span>
     )

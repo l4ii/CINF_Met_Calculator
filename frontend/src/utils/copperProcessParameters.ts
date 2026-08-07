@@ -70,7 +70,7 @@ function isSlagFeSiO2Expr(expr: string): boolean {
   return normalized.includes('OutputE.熔炼渣.Fe') && normalized.includes('SiO2')
 }
 
-function isFuelConcentrateRatioExpr(expr: string): boolean {
+export function isFuelConcentrateRatioExpr(expr: string): boolean {
   return expr.replace(/\s+/g, '') === FUEL_CONCENTRATE_RATIO_EXPR.replace(/\s+/g, '')
 }
 
@@ -256,7 +256,10 @@ export function applyProcessParameters(
   const slagCu = Math.max(0, Math.min(100, params.slagCopperWPercent))
   const feSiO2 = Math.max(0, params.feSiO2)
   const oxygenFraction = Math.max(0, Math.min(1, params.oxygenEnrichmentPct / 100))
-  const fuelRatio = Math.max(0, params.fuelConcentrateRatio)
+  const fuelRatio =
+    Number.isFinite(params.fuelConcentrateRatio) && params.fuelConcentrateRatio > 0
+      ? params.fuelConcentrateRatio
+      : DEFAULT_COPPER_PROCESS_PARAMETERS.fuelConcentrateRatio
 
   next.variables = { ...(next.variables ?? {}), GMC: gmc }
 

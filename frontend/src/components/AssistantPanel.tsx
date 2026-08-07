@@ -409,7 +409,7 @@ export default function AssistantPanel({ darkMode, language, onSheetSelect }: As
   const roleLabelAssistant = language === 'en' ? 'Assistant' : '助手'
 
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-[60]">
+    <div className="pointer-events-none fixed bottom-5 right-5 z-[60]">
       <div
         ref={dockRef}
         className="pointer-events-auto flex flex-col items-end gap-2"

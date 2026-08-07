@@ -13,6 +13,7 @@ import {
   packUnknowns,
   unpackProjectedUnknowns,
   type OxyConstraintBaseInput,
+  type OxySolverSeed,
 } from './copperConstraintUnknowns.ts'
 
 export interface StrictSolverOptions {
@@ -22,6 +23,10 @@ export interface StrictSolverOptions {
   shouldCancel?: () => boolean
   stagnationIterations?: number
   minRelativeImprovement?: number
+  /** 进容差后继续打磨的残差地板；低于此值停止 */
+  polishFloor?: number
+  /** 用上次产物物相等作为牛顿初值，避免重算从启发式重猜 */
+  seed?: OxySolverSeed | null
 }
 
 export class OxyConstraintCalculationCancelledError extends Error {
@@ -50,6 +55,10 @@ function yieldToMain(): Promise<void> {
 }
 
 const SOLVER_YIELD_INTERVAL_MS = 16
+/** 与验收 strict 对齐；未达此前优先压硬残差 maxRel，而非 soft 目标 */
+const STRICT_RELATIVE_RESIDUAL = 0.001
+/** 未达容差时，maxRel 绝对下降超过该值也算改进 */
+const MAX_REL_ABSOLUTE_IMPROVEMENT = 1e-5
 
 function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -170,7 +179,6 @@ async function numericalJacobian(
 }
 
 function solveNormalEquations(jtj: number[][], jtr: number[], lambda: number): number[] | null {
-  const n = jtj.length
   const a = jtj.map((row, i) => row.map((value, j) => value + (i === j ? lambda : 0)))
   const b = jtr.map((value) => -value)
   return solveLinearSystem(a, b)
@@ -218,47 +226,92 @@ export async function solveOxyConstraintSystemStrict(
   const maxIterations = options.maxIterations ?? config.solverParams?.newtonMaxIterations ?? 120
   const stagnationIterations = Math.max(3, options.stagnationIterations ?? 8)
   const minRelativeImprovement = Math.max(0, options.minRelativeImprovement ?? 0.005)
+  const polishFloor = Math.max(
+    0,
+    options.polishFloor ?? config.solverParams?.polishFloor ?? 1e-8
+  )
   const specs = buildUnknownSpecs(config, baseInput)
   const hardEquations = compileOxyConstraintSystem(config)
   const objectiveEquations = compileOxyConstraintSystem(config, { includeSoftCustom: true })
 
-  let x = projectVector(packUnknowns(createInitialUnpacked(baseInput, config), specs), specs, baseInput, config)
+  let x = projectVector(
+    packUnknowns(createInitialUnpacked(baseInput, config, options.seed), specs),
+    specs,
+    baseInput,
+    config
+  )
   let lambda = options.lmLambda ?? 1e-2
-  let converged = false
   let stoppedByStagnation = false
   let iterations = 0
   let maxRel = Number.POSITIVE_INFINITY
   let bestObjective = Number.POSITIVE_INFINITY
   let bestMaxRel = Number.POSITIVE_INFINITY
+  let bestX = x.slice()
   let stagnantPasses = 0
+  let withinTolerance = false
+  let lastYieldAt = nowMs()
 
   for (let iter = 0; iter < maxIterations; iter += 1) {
     throwIfCancelled(options)
-    await yieldToMain()
+    // 仅在实际占用主线程超过一帧时让出控制权。逐轮等待动画帧会把本可快速完成的
+    // 方程组求解人为拉长数十帧。
+    if (nowMs() - lastYieldAt >= SOLVER_YIELD_INTERVAL_MS) {
+      await yieldToMain()
+      lastYieldAt = nowMs()
+    }
     iterations = iter + 1
-    const residuals = residualVector(x, objectiveEquations, specs, baseInput, config)
-    const objective = residuals.reduce((sum, value) => sum + value * value, 0)
     maxRel = maxRelativeResidualFromSolution(x, hardEquations, specs, baseInput, config)
-    const improved =
-      objective < bestObjective * (1 - minRelativeImprovement) ||
-      maxRel < bestMaxRel * (1 - minRelativeImprovement)
+    // 未达严格验收前：目标函数仅用硬方程，避免 soft 自定义把解拉离 D%/守恒
+    const activeEquations = maxRel > STRICT_RELATIVE_RESIDUAL ? hardEquations : objectiveEquations
+    const residuals = residualVector(x, activeEquations, specs, baseInput, config)
+    const objective = residuals.reduce((sum, value) => sum + value * value, 0)
+    // 进求解容差，或已达严格验收，都进入打磨区（避免 0.5% 相对门槛在 0.0018 附近误判停滞）
+    if (maxRel < tolerance || maxRel <= STRICT_RELATIVE_RESIDUAL) withinTolerance = true
+
+    const previousBestObjective = bestObjective
+    const previousBestMaxRel = bestMaxRel
+    const currentIsStrict = maxRel <= STRICT_RELATIVE_RESIDUAL
+    const bestIsStrict = previousBestMaxRel <= STRICT_RELATIVE_RESIDUAL
+    // Once both candidates satisfy every hard constraint, the soft equations
+    // become the tie-breaker. Otherwise the first strict point can remain the
+    // saved solution forever, even while later iterations restore intended
+    // phase relationships such as the FeS content of smelting matte.
+    const isBetterThanBest = currentIsStrict
+      ? !bestIsStrict ||
+        objective < previousBestObjective ||
+        (objective === previousBestObjective && maxRel < previousBestMaxRel)
+      : !bestIsStrict &&
+        (maxRel < previousBestMaxRel ||
+          (maxRel === previousBestMaxRel && objective < previousBestObjective))
+    if (isBetterThanBest) {
+      bestX = x.slice()
+      bestMaxRel = maxRel
+      bestObjective = objective
+    }
+
+    const improved = withinTolerance
+      ? isBetterThanBest
+      : objective < previousBestObjective * (1 - minRelativeImprovement) ||
+        maxRel < previousBestMaxRel * (1 - minRelativeImprovement) ||
+        maxRel < previousBestMaxRel - MAX_REL_ABSOLUTE_IMPROVEMENT
     if (improved) {
-      bestObjective = Math.min(bestObjective, objective)
-      bestMaxRel = Math.min(bestMaxRel, maxRel)
       stagnantPasses = 0
     } else {
       stagnantPasses += 1
     }
-    if (maxRel < tolerance) {
-      converged = true
+
+    if (maxRel < polishFloor) {
       break
     }
-    if (iter + 1 >= stagnationIterations && stagnantPasses >= stagnationIterations && maxRel > tolerance) {
+    if (withinTolerance && stagnantPasses >= stagnationIterations) {
+      break
+    }
+    if (iter + 1 >= stagnationIterations && stagnantPasses >= stagnationIterations && !withinTolerance) {
       stoppedByStagnation = true
       break
     }
 
-    const jacobian = await numericalJacobian(x, residuals, objectiveEquations, specs, baseInput, config, options)
+    const jacobian = await numericalJacobian(x, residuals, activeEquations, specs, baseInput, config, options)
     const m = residuals.length
     const n = x.length
     const jtj = Array.from({ length: n }, () => new Array<number>(n).fill(0))
@@ -281,10 +334,18 @@ export async function solveOxyConstraintSystemStrict(
     let accepted = false
     for (let attempt = 0; attempt < 8; attempt += 1) {
       throwIfCancelled(options)
-      const candidate = projectVector(x.map((value, index) => value + (dx[index] ?? 0)), specs, baseInput, config)
-      const candidateObjective = residualObjective(candidate, objectiveEquations, specs, baseInput, config)
+      if (!dx) break
+      const step = dx
+      const candidate = projectVector(x.map((value, index) => value + (step[index] ?? 0)), specs, baseInput, config)
+      const candidateObjective = residualObjective(candidate, activeEquations, specs, baseInput, config)
       const candidateMax = maxRelativeResidualFromSolution(candidate, hardEquations, specs, baseInput, config)
-      if (candidateObjective < objective) {
+      // 未进严格区：允许 objective 不降，只要硬残差 maxRel 下降
+      const acceptByObjective = candidateObjective < objective
+      const acceptByHardResidual =
+        maxRel > STRICT_RELATIVE_RESIDUAL &&
+        (candidateMax < maxRel - MAX_REL_ABSOLUTE_IMPROVEMENT ||
+          candidateMax < maxRel * (1 - minRelativeImprovement))
+      if (acceptByObjective || acceptByHardResidual) {
         x = candidate
         maxRel = candidateMax
         lambda = Math.max(lambda * 0.3, 1e-8)
@@ -293,20 +354,20 @@ export async function solveOxyConstraintSystemStrict(
       }
       lambda *= 5
       dx = solveNormalEquations(jtj, jtr, lambda)
-      if (!dx) break
     }
 
-    if (!accepted && maxRel >= Number.POSITIVE_INFINITY * 0) {
+    if (!accepted) {
       lambda = Math.min(lambda * 10, 1e8)
     }
   }
 
+  const converged = bestMaxRel < tolerance
   return {
     converged,
     stoppedByStagnation,
-    x,
+    x: bestX,
     iterations,
-    maxRelativeResidual: maxRel,
+    maxRelativeResidual: bestMaxRel,
     equations: hardEquations,
     objectiveEquationCount: objectiveEquations.length,
   }

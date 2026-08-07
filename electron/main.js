@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, nativeImage, Menu } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, nativeImage, Menu, shell } = require('electron')
 const path = require('path')
 const http = require('http')
 const { spawn, execSync, exec } = require('child_process')
@@ -448,7 +448,30 @@ function findBackendExecutable() {
     console.log('未找到打包的后端可执行文件，将尝试使用系统Python')
   }
 
-  // 先尝试当前进程 PATH 中的 python（开发环境或终端里装的通常能拿到）
+  // 开发模式优先项目内虚拟环境（搬家/多 Python 时避免误用 PATH 里未装依赖的解释器）
+  {
+    const projectRoot = path.join(__dirname, '..')
+    const venvCandidates =
+      process.platform === 'win32'
+        ? [
+            path.join(projectRoot, '.venv', 'Scripts', 'python.exe'),
+            path.join(projectRoot, 'venv', 'Scripts', 'python.exe'),
+            path.join(projectRoot, 'build_env', 'Scripts', 'python.exe'),
+          ]
+        : [
+            path.join(projectRoot, '.venv', 'bin', 'python'),
+            path.join(projectRoot, 'venv', 'bin', 'python'),
+            path.join(projectRoot, 'build_env', 'bin', 'python3'),
+          ]
+    for (const pythonPath of venvCandidates) {
+      if (fs.existsSync(pythonPath)) {
+        console.log('使用项目虚拟环境 Python:', pythonPath)
+        return pythonPath
+      }
+    }
+  }
+
+  // 再尝试当前进程 PATH 中的 python（开发环境或终端里装的通常能拿到）
   const pythonCommands = ['python3', 'python']
   for (const cmd of pythonCommands) {
     try {
@@ -477,6 +500,9 @@ function findBackendExecutable() {
       `${localAppData}\\Programs\\Python\\Python312\\python.exe`,
       `${localAppData}\\Programs\\Python\\Python311\\python.exe`,
       `${localAppData}\\Programs\\Python\\Python310\\python.exe`,
+      `${localAppData}\\miniforge3\\python.exe`,
+      `${localAppData}\\miniconda3\\python.exe`,
+      `${localAppData}\\anaconda3\\python.exe`,
       `C:\\Users\\${u}\\AppData\\Local\\Programs\\Python\\Python311\\python.exe`,
       `C:\\Users\\${u}\\AppData\\Local\\Programs\\Python\\Python312\\python.exe`,
       `C:\\Users\\${u}\\AppData\\Local\\Programs\\Python\\Python310\\python.exe`,
@@ -1093,6 +1119,74 @@ ipcMain.handle('export:open-flo-template', async (event) => {
       filePath,
       buffer: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
     }
+  } catch (error) {
+    return { ok: false, error: error?.message ?? String(error) }
+  }
+})
+
+/** 导出 MicroStation 参数化变量表：供 Variables 对话框或 VARIABLES OVERWRITE key-in 导入 */
+ipcMain.handle('cad:save-variables-csv', async (event, payload) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const rawName = typeof payload?.fileName === 'string' ? payload.fileName : '侧吹炉参数化变量.csv'
+    const baseName = path.basename(rawName).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    const fileName = /\.csv$/i.test(baseName) ? baseName : `${baseName}.csv`
+    const result = await dialog.showSaveDialog(win ?? undefined, {
+      title: '导出 MicroStation 参数化变量表',
+      defaultPath: fileName,
+      filters: [{ name: 'MicroStation 变量表', extensions: ['csv'] }],
+    })
+    if (result.canceled || !result.filePath) {
+      return { ok: false, cancelled: true }
+    }
+    let filePath = result.filePath
+    if (!/\.csv$/i.test(filePath)) {
+      filePath = `${filePath}.csv`
+    }
+    const bytes = payload?.buffer
+    const data = Buffer.from(bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes ?? [])
+    fs.writeFileSync(filePath, data)
+    return { ok: true, filePath }
+  } catch (error) {
+    return { ok: false, error: error?.message ?? String(error) }
+  }
+})
+
+/** 随包炉体 DGN 目录：resources/cad（开发期为仓库根目录 cad/） */
+function findBundledDgnPath() {
+  try {
+    const dir = getResourcePath('cad')
+    if (!fs.existsSync(dir)) return null
+    const hit = fs.readdirSync(dir).find((name) => /\.dgn$/i.test(name))
+    return hit ? path.join(dir, hit) : null
+  } catch (_) {
+    return null
+  }
+}
+
+/**
+ * 打开炉体 DGN：优先随包文件，缺失时让用户选择；交由系统注册的 MicroStation/OpenPlant 打开。
+ */
+ipcMain.handle('cad:open-dgn', async (event) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    let filePath = findBundledDgnPath()
+    if (!filePath) {
+      const result = await dialog.showOpenDialog(win ?? undefined, {
+        title: '选择炉体 DGN 模型',
+        filters: [{ name: 'MicroStation DGN', extensions: ['dgn'] }],
+        properties: ['openFile'],
+      })
+      if (result.canceled || !result.filePaths?.length) {
+        return { ok: false, cancelled: true }
+      }
+      filePath = result.filePaths[0]
+    }
+    const openError = await shell.openPath(filePath)
+    if (openError) {
+      return { ok: false, filePath, error: openError }
+    }
+    return { ok: true, filePath }
   } catch (error) {
     return { ok: false, error: error?.message ?? String(error) }
   }

@@ -38,6 +38,19 @@ export const BATCH_TABLE_SHARE_COL_WIDTH = 72
 export const BATCH_TABLE_MIDDLE_COL_WIDTH = 56
 /** 元素总表元素列默认宽度（与物相表数据列逻辑一致） */
 export const BATCH_TABLE_ELEMENT_COL_WIDTH = BATCH_TABLE_PCT_COL_WIDTH
+/** 物相式列最大宽度：长式名折行，不因式名拉宽 */
+export const BATCH_TABLE_PHASE_FORMULA_COL_MAX = 72
+
+/**
+ * 物相列定宽用样本：长化学式（如 3Al2O3·2SiO2）不参与定宽，避免单列过宽。
+ */
+export function phaseFormulaWidthSample(formulaOrLabel: string): string {
+  const text = String(formulaOrLabel ?? '').trim()
+  if (!text) return ''
+  const compact = text.replace(/[^A-Za-z0-9]/g, '')
+  if (/[A-Za-z]/.test(text) && compact.length > 6) return 'Fe3O4'
+  return text
+}
 /** 合计列（2 位小数，约 100.00） */
 export const BATCH_TABLE_TOTAL_COL_WIDTH = BATCH_TABLE_PCT_COL_WIDTH
 export const BATCH_TABLE_OPS_COL_WIDTH = 64
@@ -55,7 +68,8 @@ export const BATCH_PHASE_ASSIST_MIN_DISPLAY_ELEMENT_ROWS = 5
 
 /** 添加原料弹窗固定列宽 */
 export const LIBRARY_DIALOG_NAME_COL_WIDTH = 160
-export const LIBRARY_DIALOG_LABEL_COL_WIDTH = 56
+export const LIBRARY_DIALOG_CATEGORY_COL_WIDTH = 88
+export const LIBRARY_DIALOG_LABEL_COL_WIDTH = 48
 export const LIBRARY_DIALOG_ADD_COL_WIDTH = 40
 export const LIBRARY_DIALOG_OTHER_COL_WIDTH = 80
 export const LIBRARY_DIALOG_TOTAL_COL_WIDTH = 80
@@ -77,7 +91,8 @@ export type FitColWidthsOptions = {
 export function batchTableDataColWidth(
   header: string,
   samples: Array<string | number>,
-  sparse = false
+  sparse = false,
+  options?: { min?: number; max?: number }
 ): number {
   if (sparse) return BATCH_TABLE_SPARSE_COL_WIDTH
   const texts = [
@@ -87,10 +102,9 @@ export function batchTableDataColWidth(
       .filter((s) => s && s !== '—'),
   ]
   const maxGlyphs = Math.max(2, ...texts.map((t) => Array.from(t).length))
-  return Math.max(
-    BATCH_TABLE_DATA_COL_MIN,
-    Math.min(BATCH_TABLE_DATA_COL_MAX, Math.ceil(maxGlyphs * DATA_COL_GLYPH_PX) + DATA_COL_CHROME_PX)
-  )
+  const min = options?.min ?? BATCH_TABLE_DATA_COL_MIN
+  const max = options?.max ?? BATCH_TABLE_DATA_COL_MAX
+  return Math.max(min, Math.min(max, Math.ceil(maxGlyphs * DATA_COL_GLYPH_PX) + DATA_COL_CHROME_PX))
 }
 
 /** 样本是否可视为无数据（全 0 / 空 / —） */
@@ -559,7 +573,11 @@ export function computeLibraryDialogColWidths(
   elementColumns: LibraryDialogColumnWidthInput[],
   containerWidth = 0
 ): { widths: number[]; tableWidth: number; elementColWidths: number[] } {
-  const leadingFixed = [LIBRARY_DIALOG_NAME_COL_WIDTH, LIBRARY_DIALOG_LABEL_COL_WIDTH]
+  const leadingFixed = [
+    LIBRARY_DIALOG_NAME_COL_WIDTH,
+    LIBRARY_DIALOG_CATEGORY_COL_WIDTH,
+    LIBRARY_DIALOG_LABEL_COL_WIDTH,
+  ]
   const trailingFixed = [
     LIBRARY_DIALOG_ADD_COL_WIDTH,
     LIBRARY_DIALOG_OTHER_COL_WIDTH,
@@ -691,8 +709,15 @@ export function assistValueHighlightClass(dark: boolean, hasValue: boolean): str
 export function computeProductResultTableLayout(params: {
   labelSamples: string[]
   productHeaders: string[]
+  /** 与 productHeaders 对齐的各列样本（物相公式名等），用于按内容定宽 */
+  productSamples?: Array<Array<string | number>>
   containerWidth?: number
   totalSamples?: Array<string | number>
+  /**
+   * fit：按视口伸缩（配料总表）
+   * content：按内容定宽、不压缩（导入预览可横向滚动）
+   */
+  widthMode?: 'fit' | 'content'
 }): BatchTableColLayout {
   const labelWidth = batchTableDataColWidth('项目', params.labelSamples, false)
   const totalWidth = params.totalSamples?.length
@@ -701,9 +726,16 @@ export function computeProductResultTableLayout(params: {
         batchTableDataColWidth('Nm³/h', params.totalSamples, false)
       )
     : BATCH_TABLE_ASSIST_TOTAL_COL_MIN
-  const productColWidths = params.productHeaders.map((header) =>
-    batchTableDataColWidth(header, [], false)
-  )
+  /** 物相列按常规数值列宽，不因 3Al2O3·2SiO2 等长式名拉宽 */
+  const phaseColMax = BATCH_TABLE_PHASE_FORMULA_COL_MAX
+  const productColWidths = params.productHeaders.map((header, index) => {
+    const rawSamples = params.productSamples?.[index] ?? []
+    const samples = rawSamples.map((sample) => phaseFormulaWidthSample(String(sample)))
+    return batchTableDataColWidth(header, samples, false, {
+      min: BATCH_TABLE_PCT_ABS_MIN,
+      max: phaseColMax,
+    })
+  })
   const minWidths = [labelWidth, totalWidth, ...productColWidths]
   const productStart = 2
   const flexIndices = Array.from({ length: productColWidths.length }, (_, index) => productStart + index)
@@ -712,7 +744,9 @@ export function computeProductResultTableLayout(params: {
     totalWidth,
     ...productColWidths.map(() => BATCH_TABLE_PCT_ABS_MIN),
   ]
-  return fitBatchTableToViewport(minWidths, params.containerWidth ?? 0, {
+  const containerWidth =
+    params.widthMode === 'content' ? 0 : (params.containerWidth ?? 0)
+  return fitBatchTableToViewport(minWidths, containerWidth, {
     flexibleIndices: flexIndices,
     absoluteMinWidths: absMins,
   })
