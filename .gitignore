@@ -60,6 +60,12 @@ out/
 dist-electron/
 .electron-builder-cache/
 
+# Required Electron build resources (not generated output)
+!electron/build/
+!electron/build/README.txt
+!electron/build/icon.ico
+!electron/build/installer.nsh
+
 # OS
 Thumbs.db
 

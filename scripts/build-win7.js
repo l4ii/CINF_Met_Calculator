@@ -12,6 +12,21 @@ const root = path.join(__dirname, '..')
 const packagePath = path.join(root, 'package.json')
 const ELECTRON_WIN7 = '22.3.27'
 
+function buildEnvironment(options = {}) {
+  const arch = process.arch === 'ia32' || process.arch === 'arm64' ? process.arch : 'x64'
+  const bundled7zaDir = path.join(root, 'node_modules', '7zip-bin', 'win', arch)
+  const env = {
+    ...process.env,
+    ...options,
+    USE_SYSTEM_7ZA: 'false',
+  }
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'PATH'
+  const currentPath = env[pathKey] || ''
+  env[pathKey] = `${bundled7zaDir}${path.delimiter}${currentPath}`
+  if (pathKey !== 'PATH') delete env.PATH
+  return env
+}
+
 function readPackage() {
   return JSON.parse(fs.readFileSync(packagePath, 'utf8'))
 }
@@ -22,7 +37,9 @@ function writePackage(pkg) {
 
 function run(cmd, opts = {}) {
   console.log('>', cmd)
-  execSync(cmd, { cwd: root, stdio: 'inherit', windowsHide: true, ...opts })
+  // electron-builder ships a compatible 7za binary; keep builds independent of the machine PATH.
+  const env = buildEnvironment(opts.env || {})
+  execSync(cmd, { cwd: root, stdio: 'inherit', windowsHide: true, ...opts, env })
 }
 
 let savedElectron

@@ -48,6 +48,7 @@ win:
   icon: icon.ico
   artifactName: ${productName}-${version}-${arch}.${ext}
   requestedExecutionLevel: asInvoker
+  signAndEditExecutable: false
   sign: null
   verifyUpdateCodeSignature: false
 

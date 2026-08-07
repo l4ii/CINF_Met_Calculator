@@ -12,9 +12,26 @@ const { execSync } = require('child_process')
 
 const root = path.join(__dirname, '..')
 
+function buildEnvironment(options = {}) {
+  const arch = process.arch === 'ia32' || process.arch === 'arm64' ? process.arch : 'x64'
+  const bundled7zaDir = path.join(root, 'node_modules', '7zip-bin', 'win', arch)
+  const env = {
+    ...process.env,
+    ...options,
+    USE_SYSTEM_7ZA: 'false',
+  }
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'PATH'
+  const currentPath = env[pathKey] || ''
+  env[pathKey] = `${bundled7zaDir}${path.delimiter}${currentPath}`
+  if (pathKey !== 'PATH') delete env.PATH
+  return env
+}
+
 function run(cmd, opts = {}) {
   console.log('>', cmd)
-  execSync(cmd, { cwd: root, stdio: 'inherit', windowsHide: true, ...opts })
+  // electron-builder ships a compatible 7za binary; keep builds independent of the machine PATH.
+  const env = buildEnvironment(opts.env || {})
+  execSync(cmd, { cwd: root, stdio: 'inherit', windowsHide: true, ...opts, env })
 }
 
 function sleepMs(ms) {
@@ -85,13 +102,20 @@ if (builderConfig) {
   builderCmd += ` --config "${cfgPath}"`
 }
 
+function buildWindowsOutput(outputDir) {
+  const outputArg = ` --config.directories.output="${outputDir}"`
+  const unpackedDir = path.join(root, outputDir, 'win-unpacked')
+  run(`${builderCmd}${outputArg} --dir`)
+  run(`${builderCmd}${outputArg} --prepackaged "${unpackedDir}"`)
+}
+
 try {
-  run(builderCmd)
+  buildWindowsOutput('release')
 } catch (e) {
   const fallbackOutput = `release-fallback-${Date.now()}`
   console.warn(`[build-win] 默认输出目录打包失败，自动切换到 ${fallbackOutput} 重试...`)
   if (process.platform === 'win32') {
     forceRemoveWinUnpackedOnly(fallbackOutput)
   }
-  run(`npx electron-builder --win --config.directories.output=${fallbackOutput}`)
+  buildWindowsOutput(fallbackOutput)
 }
