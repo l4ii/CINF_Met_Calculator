@@ -238,7 +238,7 @@ import {
   DEFAULT_SMELTING_TUYERE_OXYGEN_NM3H,
   findOxygenAirColumn,
   normalizeScaleWanTpa,
-  sumRawSolventWetThroughputTh,
+  sumRawWetThroughputTh,
   type JacketRemainderDecision,
   type SmeltingFurnaceDesignResult,
 } from '../../../../utils/copperEquipmentSizing'
@@ -4435,7 +4435,7 @@ export default function SmeltingBatchCalcPage({
   const annualHoursValue = toNumber(annualHours, 7200)
   const equipmentUnitThroughput = Math.max(toNumber(equipmentIntensity, 32), 1)
   const smeltingHourlyWetFeedTh = useMemo(
-    () => sumRawSolventWetThroughputTh([...rawMaterials, ...solventColumns]),
+    () => sumRawWetThroughputTh(rawMaterials),
     [rawMaterials, solventColumns]
   )
   const smeltingDefaultDailyFeedTd = useMemo(
@@ -15037,7 +15037,7 @@ function EquipmentBathHeightResultCard({
     : ready
       ? '高度 = 产出量 ÷ (密度 × 面积)'
       : '请先完成产出计算'
-  const formatHeight = (value: number) => (ready ? formatTableDisplayValue(value) : '—')
+  const formatHeight = (value: number) => (ready ? value.toFixed(4) : '—')
   return (
     <div className={`flex ${EQUIP_RESULT_MIN_H} min-w-0 w-full flex-col justify-center rounded-lg border-2 px-3 py-3 shadow-sm ${tone.shell}`}>
       <div className="mb-0.5 flex items-center justify-between gap-2">

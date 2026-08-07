@@ -26,6 +26,10 @@ export const DEFAULT_SMELTING_FURNACE_WIDTH_M = 2.2
 export const DEFAULT_SMELTING_SLAG_DENSITY_TM3 = 3.5
 /** 冰铜（白铜锍）密度默认值 t/m³ */
 export const DEFAULT_SMELTING_MATTE_DENSITY_TM3 = 5.0
+/** 吹炼渣液相密度默认值 t/m³。铜吹炼渣工程估算通常取 3.4-3.8 t/m³。 */
+export const DEFAULT_CONVERTING_SLAG_DENSITY_TM3 = 3.6
+/** 粗铜液相密度默认值 t/m³。熔融铜在吹炼温度下通常约为 8.0 t/m³。 */
+export const DEFAULT_CONVERTING_CRUDE_COPPER_DENSITY_TM3 = 8.0
 
 /** 水套余量处置：增加 1 个间隔，或去掉余量 */
 export type JacketRemainderDecision = 'extend' | 'trim'
@@ -44,7 +48,7 @@ export function calculateDailyFeedTd(hourlyWetTh: number): number {
   return Math.max(0, hourlyWetTh) * 24
 }
 
-/** 年投入量 t/a（含水、不含煤）= 湿基小时量 × 24 × 年处理天数 */
+/** 年投入量 t/a（原料湿基，含水、不含熔剂和燃料煤）= 湿基小时量 × 24 × 年处理天数 */
 export function calculateAnnualFeedWithoutCoalTa(hourlyWetTh: number, processDays: number): number {
   return calculateDailyFeedTd(hourlyWetTh) * Math.max(0, processDays)
 }
@@ -149,12 +153,12 @@ export function calculateCopperEquipmentSizing({
   }
 }
 
-/** 原料+熔剂湿基小时合计（含水分，不含燃料煤、不含气列） */
-export function sumRawSolventWetThroughputTh(
+/** 投入（原料）湿基小时合计（含水分，不含熔剂、燃料煤和气列） */
+export function sumRawWetThroughputTh(
   columns: Array<Pick<CopperMaterialColumn, 'kind' | 'airRole' | 'weight' | 'waterWeight' | 'moisture'>>
 ): number {
   return columns.reduce((sum, column) => {
-    if (column.kind !== 'raw' && column.kind !== 'solvent') return sum
+    if (column.kind !== 'raw') return sum
     return sum + Math.max(0, column.weight ?? 0) + materialWaterWeight(column)
   }, 0)
 }

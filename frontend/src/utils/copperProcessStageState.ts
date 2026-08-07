@@ -153,6 +153,29 @@ export type CopperCaseSharedPersistedFields = {
   smeltingProcessDays?: string
   smeltingJacketCountOneSide?: string
   smeltingAnnualFeedOverridden?: boolean
+  /** 吹炼设备选型：与熔炼页面分别保存的面积、炉体、水套、风口及熔池参数。 */
+  convertingDailyFeedTd?: string
+  convertingFeedMode?: 'daily' | 'annual'
+  convertingAnnualFeedTa?: string
+  convertingProcessDays?: string
+  convertingBedCapacity?: string
+  convertingFurnaceWidthM?: string
+  convertingFurnaceLengthM?: string
+  convertingDimensionDrive?: 'width' | 'length'
+  convertingJacketPitchMm?: string
+  convertingJacketCountTotal?: string
+  convertingJacketCountOneSide?: string
+  convertingOxygenNm3h?: string
+  convertingTuyereOxygenNm3h?: string
+  convertingTuyereCount?: string
+  convertingSlagDensityTm3?: string
+  convertingCrudeCopperDensityTm3?: string
+  convertingDailyFeedOverridden?: boolean
+  convertingAnnualFeedOverridden?: boolean
+  convertingOxygenOverridden?: boolean
+  convertingJacketCountOverridden?: boolean
+  convertingJacketRemainderDecision?: 'extend' | 'trim' | null
+  convertingTuyereCountOverridden?: boolean
 }
 
 const DEFAULT_OXYGEN_AIR_O2_TEXT = String(DEFAULT_COPPER_OXYGEN_AIR_SETTINGS.oxygenPct)
