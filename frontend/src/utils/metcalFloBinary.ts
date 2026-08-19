@@ -20,6 +20,8 @@ export interface FloStreamBlock {
   flowNm3: string | null
   flowTOffset: number | null
   flowTLength: number | null
+  flowNm3Offset: number | null
+  flowNm3Length: number | null
   compositionKind: 'W%' | 'E%' | 'V%' | null
   composition: FloCompositionEntry[]
 }
@@ -74,6 +76,8 @@ export function parseStreamBlock(data: Uint8Array, start: number): FloStreamBloc
     flowNm3: null,
     flowTOffset: null,
     flowTLength: null,
+    flowNm3Offset: null,
+    flowNm3Length: null,
     compositionKind: null,
     composition: [],
   }
@@ -102,6 +106,8 @@ export function parseStreamBlock(data: Uint8Array, start: number): FloStreamBloc
       block.flowS = valRead.text
     } else if (key === 'Nm3' || key === 'nm3') {
       block.flowNm3 = valRead.text
+      block.flowNm3Offset = pos - valRead.text.length - 1
+      block.flowNm3Length = valRead.text.length
     }
   }
 
@@ -152,21 +158,44 @@ export function findStreamBlocks(buffer: ArrayBuffer): FloStreamBlock[] {
 /** 将数值格式化为与原 MetCal 文本等长的字符串（不足补 0） */
 export function formatMetcalNumber(value: number, targetLength: number): string | null {
   if (!Number.isFinite(value) || targetLength <= 0) return null
-  let text = String(value)
-  if (text.length > targetLength) {
-    text = value.toPrecision(targetLength)
-    if (text.length > targetLength) return null
+  if (value === 0 && targetLength === 1) return '0'
+
+  const candidates = new Set<string>([String(value)])
+  for (let digits = Math.max(0, targetLength); digits >= 0; digits -= 1) {
+    candidates.add(value.toFixed(digits))
   }
-  if (text.length < targetLength) {
-    if (text.includes('.')) {
-      text = text.padEnd(targetLength, '0')
-    } else if (targetLength - text.length >= 2) {
-      text = `${text}.${'0'.repeat(targetLength - text.length - 1)}`
-    } else {
-      return null
-    }
+  for (let precision = Math.max(1, targetLength); precision >= 1; precision -= 1) {
+    candidates.add(value.toPrecision(precision))
+    candidates.add(value.toExponential(Math.max(0, precision - 1)))
   }
-  return text.length === targetLength ? text : null
+
+  const fitting = [...candidates]
+    .filter((text) => text.length <= targetLength && Number.isFinite(Number(text)))
+    .sort((a, b) => {
+      const aError = Math.abs(Number(a) - value) / Math.max(1, Math.abs(value))
+      const bError = Math.abs(Number(b) - value) / Math.max(1, Math.abs(value))
+      return aError - bError || Number(a.includes('e')) - Number(b.includes('e')) || b.length - a.length
+    })
+  const best = fitting[0]
+  if (!best) return null
+  if (best.length === targetLength) return best
+
+  const exponentIndex = best.search(/[eE]/)
+  if (exponentIndex >= 0) {
+    const mantissa = best.slice(0, exponentIndex)
+    const exponent = best.slice(exponentIndex)
+    const padding = targetLength - best.length
+    const expanded = mantissa.includes('.')
+      ? `${mantissa}${'0'.repeat(padding)}${exponent}`
+      : padding >= 1
+        ? `${mantissa}.${'0'.repeat(padding - 1)}${exponent}`
+        : best
+    return expanded.length === targetLength ? expanded : null
+  }
+  if (best.includes('.')) return best.padEnd(targetLength, '0')
+  const padding = targetLength - best.length
+  if (padding < 2) return null
+  return `${best}.${'0'.repeat(padding - 1)}`
 }
 
 export function writePascalString(data: Uint8Array, offset: number, text: string): boolean {
@@ -184,6 +213,31 @@ export function patchStreamFlow(data: Uint8Array, block: FloStreamBlock, flow: n
   return writePascalString(data, block.flowTOffset, formatted)
 }
 
+export function patchStreamVolumeFlow(
+  data: Uint8Array,
+  block: FloStreamBlock,
+  flowNm3h: number
+): boolean {
+  if (block.flowNm3Offset == null || block.flowNm3Length == null) return false
+  const formatted = formatMetcalNumber(flowNm3h, block.flowNm3Length)
+  if (!formatted) return false
+  return writePascalString(data, block.flowNm3Offset, formatted)
+}
+
+/** 固体优先写 t/h，气体优先写 Nm3/h。 */
+export function patchStreamPrimaryFlow(
+  data: Uint8Array,
+  block: FloStreamBlock,
+  flow: number
+): boolean {
+  if (block.compositionKind === 'V%' && block.flowNm3Offset != null) {
+    return patchStreamVolumeFlow(data, block, flow)
+  }
+  if (block.flowTOffset != null) return patchStreamFlow(data, block, flow)
+  if (block.flowNm3Offset != null) return patchStreamVolumeFlow(data, block, flow)
+  return false
+}
+
 export function patchCompositionValue(
   data: Uint8Array,
   entry: FloCompositionEntry,
@@ -198,10 +252,13 @@ export function patchCompositionValue(
 export function patchConstraintTargetByExpr(
   data: Uint8Array,
   expr: string,
-  target: number
+  target: number,
+  range?: { start: number; end: number }
 ): boolean {
   const exprBytes = new TextEncoder().encode(expr)
-  for (let i = 0; i <= data.length - exprBytes.length; i += 1) {
+  const start = Math.max(0, range?.start ?? 0)
+  const end = Math.min(data.length, range?.end ?? data.length)
+  for (let i = start; i <= end - exprBytes.length; i += 1) {
     let matched = true
     for (let j = 0; j < exprBytes.length; j += 1) {
       if (data[i + j] !== exprBytes[j]) {
@@ -210,7 +267,7 @@ export function patchConstraintTargetByExpr(
       }
     }
     if (!matched) continue
-    const scanEnd = Math.min(data.length, i + exprBytes.length + 320)
+    const scanEnd = Math.min(end, i + exprBytes.length + 320)
     for (let pos = i + exprBytes.length; pos < scanEnd; pos += 1) {
       const len = data[pos]
       if (len < 4 || len > 48) continue

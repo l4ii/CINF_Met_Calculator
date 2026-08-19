@@ -7,18 +7,10 @@ directories:
   buildResources: electron/build
   output: release
 
-# 更新服务器配置
-# 选项1: 使用 GitHub Releases (推荐)
-# publish:
-#   provider: github
-#   owner: your-username
-#   repo: your-repo-name
-
-# 选项2: 使用通用 HTTP 服务器
-# publish.url 若为占位域名，electron-updater 检查更新将失败——上线前务必替换为可用静态资源地址。
 publish:
-  provider: generic
-  url: https://your-update-server.com/updates
+  provider: github
+  owner: l4ii
+  repo: CINF_Met_Calculator
 
 # 前端不放进 asar，改由 extraResources 放到 resources/frontend-dist。backend 仅在 extraResources，勿再打進 asar 以免与 backend.exe/GGUF 重复体积翻倍。
 files:
@@ -46,7 +38,7 @@ win:
         - x64
   # 新 Logo：将 icon.ico 放入 electron/build/ 目录（buildResources）
   icon: icon.ico
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: ${name}-setup-${version}.${ext}
   requestedExecutionLevel: asInvoker
   signAndEditExecutable: false
   sign: null

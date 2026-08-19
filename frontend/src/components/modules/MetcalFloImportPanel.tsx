@@ -522,6 +522,11 @@ export function MetcalFloImportPanel({
   onConfirm,
   onCancel,
 }: MetcalFloImportPanelProps) {
+  const stages = bundle.stages
+  const initialStageId = stages[0]?.stageId ?? 'smelting'
+  const [caseName, setCaseName] = useState(() => defaultCaseNameFromFile(sourceFileName))
+  const [previewTab, setPreviewTab] = useState(`${initialStageId}:element`)
+  const previewSection = previewTab.split(':')[1] ?? 'element'
   const {
     rawMaterials,
     solventColumns,
@@ -530,29 +535,26 @@ export function MetcalFloImportPanel({
     recomputedBlend,
     extraction,
     constraints,
-    convertingConstraints,
     productResults,
-    convertingProductResults,
-  } = bundle
-  const [caseName, setCaseName] = useState(() => defaultCaseNameFromFile(sourceFileName))
-  const [previewTab, setPreviewTab] = useState<
-    | 'element'
-    | 'phase'
-    | 'elementConstraints'
-    | 'customConstraints'
-    | 'convertingElementConstraints'
-    | 'convertingCustomConstraints'
-    | 'productResults'
-    | 'convertingProductResults'
-  >('element')
-
+    productDisplayStage,
+    stageName,
+  } =
+    stages.find((stage) => stage.stageId === previewTab.split(':')[0]) ??
+    stages[0] ?? {
+      ...bundle,
+      stageId: 'smelting' as const,
+      stageName: '熔炼' as const,
+      productDisplayStage: 'smelting' as const,
+      productResults: bundle.productResults,
+    }
   useEffect(() => {
     setCaseName(defaultCaseNameFromFile(sourceFileName))
-  }, [sourceFileName])
+    setPreviewTab(`${stages[0]?.stageId ?? 'smelting'}:element`)
+  }, [sourceFileName, stages])
 
   const fuelPreview = useMemo(() => {
     if (!extraction.fuels.length) return [] as CopperMaterialColumn[]
-    return [{ ...fuelColumn, weight: 0, waterWeight: 0 } as CopperMaterialColumn]
+    return [{ ...fuelColumn } as CopperMaterialColumn]
   }, [extraction.fuels.length, fuelColumn])
 
   const { concentrates: concentrateMaterials, others: otherMaterials } = useMemo(
@@ -577,26 +579,19 @@ export function MetcalFloImportPanel({
     }
     return recomputedBlend.ratios
   }, [extraction.blend, recomputedBlend.ratios])
-  const blendPhaseOther = useMemo(() => {
-    const phaseRatios = extraction.blend?.phaseRatios
-    if (!phaseRatios) return null
-    for (const [key, value] of Object.entries(phaseRatios)) {
-      if (key.toLowerCase() === 'other' && Number.isFinite(value)) return value
-    }
-    return null
-  }, [extraction.blend?.phaseRatios])
+  const isSmeltingStage = productDisplayStage === 'smelting'
 
   const previewMaterials = useMemo(
     () => [
       ...concentrateMaterials,
-      {
+      ...(isSmeltingStage ? [{
         id: 'metcal-blend-preview',
         name: '混合铜精矿',
         kind: 'raw' as const,
         weight: blendDryWeight,
         waterWeight: blendWater,
         ratios: blendRatios,
-      },
+      }] : []),
       ...otherMaterials,
       ...solventColumns,
       ...fuelPreview,
@@ -609,6 +604,7 @@ export function MetcalFloImportPanel({
       blendWater,
       concentrateMaterials,
       fuelPreview,
+      isSmeltingStage,
       otherMaterials,
       solventColumns,
     ]
@@ -648,7 +644,7 @@ export function MetcalFloImportPanel({
   const tabIdle = darkMode ? 'border-transparent text-gray-400' : 'border-transparent text-gray-500'
 
   const otherRowClass = darkMode ? 'bg-violet-950 text-violet-50' : 'bg-violet-50 text-violet-950'
-  const canConfirm = rawMaterials.length > 0 && caseName.trim().length > 0
+  const canConfirm = stages.some((stage) => stage.stageId === 'smelting') && caseName.trim().length > 0
 
   const categoryRowClass = (category: string) => {
     if (category === '混料') return blendRowClass
@@ -689,6 +685,36 @@ export function MetcalFloImportPanel({
     </tr>
   )
 
+  const tabEntries =
+    bundle.caseMode === 'copper-staged'
+      ? stages.flatMap((stage) =>
+          ([
+            ['element', '投入元素'],
+            ['phase', '投入物相'],
+            ['elementConstraints', '元素约束'],
+            ['customConstraints', '产出约束'],
+            ['productResults', '产出结果'],
+          ] as const).map(
+            ([section, label]) => [`${stage.stageId}:${section}`, `${stage.stageName}-${label}`] as const
+          )
+        )
+      : [
+          ['smelting:element', '投入-元素'],
+          ['smelting:phase', '投入-物相'],
+          ['smelting:elementConstraints', '熔炼-元素约束'],
+          ['smelting:customConstraints', '熔炼-自定义约束'],
+          ...(stages.some((stage) => stage.stageId === 'converting')
+            ? ([
+                ['converting:elementConstraints', '吹炼-元素约束'],
+                ['converting:customConstraints', '吹炼-自定义约束'],
+              ] as const)
+            : []),
+          ['smelting:productResults', '熔炼产出'],
+          ...(stages.some((stage) => stage.stageId === 'converting')
+            ? ([['converting:productResults', '吹炼产出']] as const)
+            : []),
+        ]
+
   const panel = (
     <div className="katex-app-typography fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 p-3 sm:p-5">
       <div
@@ -696,14 +722,10 @@ export function MetcalFloImportPanel({
         style={{ height: 'min(88vh, calc(min(96vw, 1440px) * 9 / 16))' }}
       >
         <div className="shrink-0">
-          <h3 className={`${sectionTitle(darkMode)} !text-sm font-semibold`}>MetCal 混料导入</h3>
+          <h3 className={`${sectionTitle(darkMode)} !text-sm font-semibold`}>MetCal Flo 案例导入</h3>
           <p className={`mt-1.5 leading-relaxed ${mutedClass}`}>
-            来源：{sourceFileName}。读取侧吹熔炼炉投入（元素/物相）、熔炼与吹炼产出约束，以及熔炼/吹炼产出对照；吹炼投入不从
-            Flo 写入（由熔炼同步带入）。混合矿物相 Other
-            {blendPhaseOther != null
-              ? `=${formatCell(blendPhaseOther, 2)}%（Flo 已写明）`
-              : '按 100−其余物相闭合'}
-            。
+            来源：{sourceFileName}。已识别 {stages.map((stage) => stage.stageName).join('、')}工序；各工序产出作为
+            MetCal 只读对照导入。
           </p>
         </div>
 
@@ -720,18 +742,7 @@ export function MetcalFloImportPanel({
         </div>
 
         <div className={`mt-3 flex shrink-0 gap-4 overflow-x-auto border-b ${borderClass}`}>
-          {(
-            [
-              ['element', '投入-元素'],
-              ['phase', '投入-物相'],
-              ['elementConstraints', '熔炼-元素约束'],
-              ['customConstraints', '熔炼-自定义约束'],
-              ['convertingElementConstraints', '吹炼-元素约束'],
-              ['convertingCustomConstraints', '吹炼-自定义约束'],
-              ['productResults', '熔炼产出'],
-              ['convertingProductResults', '吹炼产出'],
-            ] as const
-          ).map(([id, label]) => (
+          {tabEntries.map(([id, label]) => (
             <button
               key={id}
               type="button"
@@ -746,7 +757,7 @@ export function MetcalFloImportPanel({
         </div>
 
         <div className="mt-3 flex min-h-0 flex-1 flex-col">
-          {previewTab === 'element' ? (
+          {previewSection === 'element' ? (
             <div className={`min-h-0 flex-1 overflow-auto rounded-lg border ${borderClass}`}>
               <table
                 className="border-collapse text-sm"
@@ -798,7 +809,7 @@ export function MetcalFloImportPanel({
                     borderClass={borderClass}
                     rowClass={rawRowClass}
                   />
-                  {blendElementRow}
+                  {isSmeltingStage ? blendElementRow : null}
                   <MaterialGroupRows
                     category="其他"
                     materials={otherMaterials}
@@ -832,7 +843,7 @@ export function MetcalFloImportPanel({
             </div>
           ) : null}
 
-          {previewTab === 'phase' ? (
+          {previewSection === 'phase' ? (
             <div className={`min-h-0 flex-1 overflow-auto rounded-lg border ${borderClass}`}>
               <table
                 className="border-collapse text-sm"
@@ -894,74 +905,41 @@ export function MetcalFloImportPanel({
             </div>
           ) : null}
 
-          {previewTab === 'elementConstraints' ? (
+          {previewSection === 'elementConstraints' ? (
             <ImportElementConstraintsTable
               config={constraints.config}
-              title="熔炼-元素约束"
-              productDisplayStage="smelting"
+              title={`${stageName}-元素约束`}
+              productDisplayStage={productDisplayStage}
               darkMode={darkMode}
             />
           ) : null}
 
-          {previewTab === 'customConstraints' ? (
+          {previewSection === 'customConstraints' ? (
             <ImportCustomConstraintsTable
               config={constraints.config}
-              title="熔炼-自定义约束"
+              title={`${stageName}-产出约束`}
               processParameters={constraints.processParameters}
               darkMode={darkMode}
             />
           ) : null}
 
-          {previewTab === 'convertingElementConstraints' ? (
-            <ImportElementConstraintsTable
-              config={convertingConstraints.config}
-              title="吹炼-元素约束"
-              productDisplayStage="converting"
-              darkMode={darkMode}
-            />
-          ) : null}
-
-          {previewTab === 'convertingCustomConstraints' ? (
-            <ImportCustomConstraintsTable
-              config={convertingConstraints.config}
-              title="吹炼-自定义约束"
-              processParameters={convertingConstraints.processParameters}
-              darkMode={darkMode}
-            />
-          ) : null}
-
-          {previewTab === 'productResults' ? (
+          {previewSection === 'productResults' ? (
             <div className={`min-h-0 flex-1 overflow-auto rounded-lg border ${borderClass} p-2`}>
               {productResults.result ? (
                 <CopperProductionResultTable
                   darkMode={darkMode}
                   result={productResults.result}
                   mode="phase"
-                  phaseTitle="MetCal 熔炼产出-产物物相表"
+                  phaseTitle={`MetCal ${stageName}产出-产物物相表`}
                   config={constraints.config}
                   widthMode="content"
+                  productDisplayStage={productDisplayStage}
+                  defaultFlueGasTotalUnit={productDisplayStage === 'converting' ? 'volume' : undefined}
                 />
               ) : (
-                <div className={`px-3 py-8 text-center text-sm ${mutedClass}`}>未能从 Flo 解析熔炼产出结果</div>
-              )}
-            </div>
-          ) : null}
-
-          {previewTab === 'convertingProductResults' ? (
-            <div className={`min-h-0 flex-1 overflow-auto rounded-lg border ${borderClass} p-2`}>
-              {convertingProductResults?.result ? (
-                <CopperProductionResultTable
-                  darkMode={darkMode}
-                  result={convertingProductResults.result}
-                  mode="phase"
-                  phaseTitle="MetCal 吹炼产出-产物物相表"
-                  config={convertingConstraints.config}
-                  widthMode="content"
-                  productDisplayStage="converting"
-                  defaultFlueGasTotalUnit="volume"
-                />
-              ) : (
-                <div className={`px-3 py-8 text-center text-sm ${mutedClass}`}>未能从 Flo 解析吹炼产出结果</div>
+                <div className={`px-3 py-8 text-center text-sm ${mutedClass}`}>
+                  未能从 Flo 解析{stageName}产出结果
+                </div>
               )}
             </div>
           ) : null}

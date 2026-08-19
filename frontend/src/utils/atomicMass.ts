@@ -164,6 +164,7 @@ export const COMPOUND_MOLAR_MASS = {
   ZnS: compoundMolarMass({ Zn: 1, S: 1 }),
   NiS: compoundMolarMass({ Ni: 1, S: 1 }),
   Bi2S3: compoundMolarMass({ Bi: 2, S: 3 }),
+  As2S2: compoundMolarMass({ As: 2, S: 2 }),
   As2S3: compoundMolarMass({ As: 2, S: 3 }),
   Cu2O: compoundMolarMass({ Cu: 2, O: 1 }),
   CuO: compoundMolarMass({ Cu: 1, O: 1 }),

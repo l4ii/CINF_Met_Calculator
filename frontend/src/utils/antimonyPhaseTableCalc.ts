@@ -1,0 +1,340 @@
+import {
+  ANTIMONY_ELEMENT_KEYS,
+  ANTIMONY_PHASE_ASSIGNMENT_KEYS,
+  calculateUnknownsFromPhases,
+  deriveDryBasisMoisturePercent,
+  derivePhaseContentsFromElements,
+  materialWaterWeight,
+  normalizeAntimonyRatios,
+  type AntimonyElementKey,
+  type AntimonyPhaseAssignmentKey,
+  type AntimonyPhaseInput,
+  type AntimonyRatios,
+} from './antimonyWorkflowCalc.ts'
+import { atomicMass, COMPOUND_MOLAR_MASS } from './atomicMass.ts'
+import { formulaToDisplayLabel } from './chemicalFormula.ts'
+import { ANTIMONY_BUILTIN_PHASE_FRACTIONS } from './antimonyPhaseStoichiometry.ts'
+import { buildInputPhaseRowKeys } from './antimonyDisplayOrder.ts'
+import { PRODUCT_PHASE_DISPLAY } from './antimonyProductPhaseCalc.ts'
+
+export const INPUT_PHASE_DISPLAY: Record<AntimonyPhaseAssignmentKey, string> = {
+  Sb2S3: 'Sb₂S₃',
+  FeS: 'FeS',
+  S: 'S',
+  Cu2O: 'Cu₂O',
+  FeO: 'FeO',
+  Fe2O3: 'Fe₂O₃',
+  Fe3O4: 'Fe₃O₄',
+  SiO2: 'SiO₂',
+  CaO: 'CaO',
+  Al2O3: 'Al₂O₃',
+  PbO: 'PbO',
+  As2O3: 'As₂O₃',
+  Sb2O3: 'Sb₂O₃',
+  ZnO: 'ZnO',
+  C: 'C',
+}
+
+export type InputPhaseRowKey = AntimonyPhaseAssignmentKey | 'Other'
+
+export const INPUT_PHASE_EXTRA_DISPLAY: Record<'Other', string> = {
+  Other: 'Other',
+}
+
+/** Storage key -> display label. */
+export function phaseStorageKeyToDisplayLabel(key: string): string {
+  if (key === 'O2') return 'O₂'
+  if (key === 'N2') return 'N₂'
+  if (key === 'H2O') return 'H₂O'
+  const inputDisplay = INPUT_PHASE_DISPLAY[key as AntimonyPhaseAssignmentKey]
+  if (inputDisplay) return inputDisplay
+  const extraDisplay = INPUT_PHASE_EXTRA_DISPLAY[key as 'Other']
+  if (extraDisplay) return extraDisplay
+  const productDisplay = PRODUCT_PHASE_DISPLAY[key]
+  if (productDisplay) return productDisplay
+  return formulaToDisplayLabel(key)
+}
+
+export const INPUT_PHASE_ROW_KEYS = buildInputPhaseRowKeys() as readonly InputPhaseRowKey[]
+
+export type PhasePercentMap = Partial<Record<InputPhaseRowKey, number>>
+export type PhasePercentDraftMap = Partial<Record<InputPhaseRowKey, string>>
+
+export type CustomPhaseRow = {
+  id: string
+  formula: string
+  displayLabel: string
+  fractions: Partial<Record<AntimonyElementKey, number>>
+}
+
+export type CustomPhasePercentMap = Record<string, number>
+
+export const CUSTOM_PHASE_KEY_PREFIX = 'custom:'
+
+export function customPhaseStorageKey(rowId: string) {
+  return `${CUSTOM_PHASE_KEY_PREFIX}${rowId}`
+}
+
+export function isCustomPhaseStorageKey(key: string) {
+  return key.startsWith(CUSTOM_PHASE_KEY_PREFIX)
+}
+
+export function parseCustomPhasePercents(
+  stored: Record<string, string> | undefined,
+  customRows: CustomPhaseRow[] = []
+): CustomPhasePercentMap {
+  if (!stored || customRows.length === 0) return {}
+  return Object.fromEntries(
+    customRows
+      .map((row) => {
+        const text = stored[customPhaseStorageKey(row.id)]?.trim() ?? ''
+        const value = text === '' ? 0 : Number(text)
+        return [row.id, Number.isFinite(value) ? Math.max(0, value) : 0] as const
+      })
+      .filter(([, value]) => value > 0)
+  )
+}
+
+export function customPhasePercentsTotal(customPercents: CustomPhasePercentMap) {
+  return Object.values(customPercents).reduce((sum, value) => sum + Math.max(0, value), 0)
+}
+
+const PHASE_ELEMENT_FRACTIONS = ANTIMONY_BUILTIN_PHASE_FRACTIONS as Record<
+  AntimonyPhaseAssignmentKey,
+  Partial<Record<AntimonyElementKey, number>>
+>
+
+export function getBuiltinPhaseFractions(key: AntimonyPhaseAssignmentKey) {
+  return PHASE_ELEMENT_FRACTIONS[key]
+}
+
+const TRACE_ELEMENTS = ANTIMONY_ELEMENT_KEYS.filter(
+  (key) =>
+    ![
+      'Cu(铜)',
+      'Fe(铁)',
+      'S (硫)',
+      'SiO₂(二氧化硅)',
+      'CaO(氧化钙)',
+      'Al₂O₃(三氧化二铝)',
+      'Pb(铅)',
+      'As(砷)',
+      'Zn(锌)',
+      'Sb(锑)',
+      'C (碳)',
+      'O(氧)',
+      'Other(其他)',
+      'N(氮)',
+    ].includes(key)
+)
+
+export function phaseColumnTotal(phases: PhasePercentMap, customPercents: CustomPhasePercentMap = {}) {
+  const fixed = INPUT_PHASE_ROW_KEYS.reduce((sum, key) => sum + Math.max(0, phases[key] ?? 0), 0)
+  return fixed + customPhasePercentsTotal(customPercents)
+}
+
+export function isPhaseColumnValid(
+  phases: PhasePercentMap,
+  tolerance = 0.02,
+  customPercents: CustomPhasePercentMap = {}
+) {
+  const total = phaseColumnTotal(phases, customPercents)
+  return Math.abs(total - 100) <= tolerance
+}
+
+export function normalizePhasePercents(phases: PhasePercentMap): PhasePercentMap {
+  const assigned = ANTIMONY_PHASE_ASSIGNMENT_KEYS.reduce((sum, key) => sum + Math.max(0, phases[key] ?? 0), 0)
+  const other = Math.max(0, phases.Other ?? Math.max(0, 100 - assigned))
+  const raw = { ...phases, Other: other }
+  const total = phaseColumnTotal(raw)
+  if (total <= 0) return Object.fromEntries(INPUT_PHASE_ROW_KEYS.map((key) => [key, 0])) as PhasePercentMap
+  const scale = 100 / total
+  return Object.fromEntries(
+    INPUT_PHASE_ROW_KEYS.map((key) => [key, Math.max(0, (raw[key] ?? 0) * scale)])
+  ) as PhasePercentMap
+}
+
+export function buildInputPhaseColumn(
+  ratios: AntimonyRatios,
+  phaseInputs: Record<string, AntimonyPhaseInput> = {},
+  overrides?: PhasePercentMap | null
+): PhasePercentMap {
+  if (overrides && Object.keys(overrides).length > 0) {
+    return normalizePhasePercents(overrides)
+  }
+  const derived = derivePhaseContentsFromElements(ratios, phaseInputs)
+  const raw = Object.fromEntries(ANTIMONY_PHASE_ASSIGNMENT_KEYS.map((key) => [key, Math.max(0, derived[key] ?? 0)])) as PhasePercentMap
+  return normalizePhasePercents(raw)
+}
+
+export function buildBlendPhaseColumn(
+  columns: Array<{ weight: number; phases: PhasePercentMap }>
+): PhasePercentMap {
+  const totalWeight = columns.reduce((sum, column) => sum + Math.max(0, column.weight), 0)
+  if (totalWeight <= 0) {
+    return Object.fromEntries(INPUT_PHASE_ROW_KEYS.map((key) => [key, 0])) as PhasePercentMap
+  }
+  const blended = Object.fromEntries(
+    INPUT_PHASE_ROW_KEYS.map((key) => [
+      key,
+      columns.reduce((sum, column) => sum + Math.max(0, column.weight) * Math.max(0, column.phases[key] ?? 0), 0) / totalWeight,
+    ])
+  ) as PhasePercentMap
+  const total = phaseColumnTotal(blended)
+  if (Math.abs(total - 100) <= 0.05) return blended
+  return normalizePhasePercents(blended)
+}
+
+export type FurnaceBlendPhaseColumnInput =
+  | { weight: number; phases: PhasePercentMap; moisture?: number; waterWeight?: number }
+  | { weight: number; oxygenWeightPct: { O2: number; N2: number; H2O?: number } }
+
+/** 入炉混料物相：原料 + 熔剂 + 燃料 + 富氧空气按非水质量加权（含 O₂/N₂ 行） */
+export function buildFurnaceBlendPhaseColumn(columns: FurnaceBlendPhaseColumnInput[]): {
+  phases: PhasePercentMap
+  gasWeightPct: { O2: number; N2: number; H2O: number }
+  moisture: number
+} {
+  const active = columns.filter((column) => column.weight > 0)
+  const solidColumns = active.filter((column): column is Extract<FurnaceBlendPhaseColumnInput, { phases: PhasePercentMap }> => 'phases' in column)
+  const gasColumns = active.filter((column): column is Extract<FurnaceBlendPhaseColumnInput, { oxygenWeightPct: { O2: number; N2: number; H2O?: number } }> => 'oxygenWeightPct' in column)
+  const solidWeight = solidColumns.reduce((sum, column) => sum + Math.max(0, column.weight), 0)
+  const gasWeight = gasColumns.reduce((sum, column) => sum + Math.max(0, column.weight), 0)
+  const nonWaterWeight = solidWeight + gasWeight
+  if (nonWaterWeight <= 0) {
+    return {
+      phases: Object.fromEntries(INPUT_PHASE_ROW_KEYS.map((key) => [key, 0])) as PhasePercentMap,
+      gasWeightPct: { O2: 0, N2: 0, H2O: 0 },
+      moisture: 0,
+    }
+  }
+
+  const phases = Object.fromEntries(
+    INPUT_PHASE_ROW_KEYS.map((key) => [
+      key,
+      solidColumns.reduce(
+        (sum, column) => sum + Math.max(0, column.weight) * Math.max(0, column.phases[key] ?? 0) / 100,
+        0
+      ) / nonWaterWeight * 100,
+    ])
+  ) as PhasePercentMap
+
+  let o2Sum = 0
+  let n2Sum = 0
+  let gasWaterSum = 0
+  let moistureSum = 0
+  for (const column of active) {
+    if ('oxygenWeightPct' in column) {
+      o2Sum += column.weight * Math.max(0, column.oxygenWeightPct.O2)
+      n2Sum += column.weight * Math.max(0, column.oxygenWeightPct.N2)
+      gasWaterSum += column.weight * Math.max(0, column.oxygenWeightPct.H2O ?? 0)
+    } else {
+      const water = materialWaterWeight({
+        weight: column.weight,
+        waterWeight: column.waterWeight,
+        moisture: column.moisture,
+      })
+      moistureSum += deriveDryBasisMoisturePercent(column.weight, water) * column.weight
+    }
+  }
+
+  return {
+    phases,
+    gasWeightPct: { O2: o2Sum / nonWaterWeight, N2: n2Sum / nonWaterWeight, H2O: gasWaterSum / nonWaterWeight },
+    moisture: moistureSum / Math.max(solidWeight, 1e-12),
+  }
+}
+
+export function buildOxygenAirPhaseColumn(ratios: AntimonyRatios, dryWeight = 100, waterWeight = 0) {
+  const dry = Math.max(0, dryWeight)
+  const water = Math.max(0, waterWeight)
+  const o2Mass = dry * Math.max(0, ratios['O(氧)'] ?? 0) / 100
+  const n2Mass = dry * Math.max(0, ratios['N(氮)'] ?? 0) / 100
+  const totalMass = o2Mass + n2Mass + water
+  const o2 = totalMass > 0 ? (o2Mass / totalMass) * 100 : 0
+  const n2 = totalMass > 0 ? (n2Mass / totalMass) * 100 : 0
+  const h2o = totalMass > 0 ? (water / totalMass) * 100 : 0
+  const h2oMolarMass = 2 * atomicMass('H') + atomicMass('O')
+  const oMoles = o2Mass / COMPOUND_MOLAR_MASS.O2
+  const nMoles = n2Mass / COMPOUND_MOLAR_MASS.N2
+  const h2oMoles = water / h2oMolarMass
+  const moleTotal = oMoles + nMoles + h2oMoles
+  return {
+    weightPct: { O2: o2, N2: n2, H2O: h2o },
+    volumePct: {
+      O2: moleTotal > 0 ? (oMoles / moleTotal) * 100 : 0,
+      N2: moleTotal > 0 ? (nMoles / moleTotal) * 100 : 0,
+      H2O: moleTotal > 0 ? (h2oMoles / moleTotal) * 100 : 0,
+    },
+  }
+}
+
+export function deriveElementsFromPhaseContents(
+  phases: PhasePercentMap,
+  currentRatios: AntimonyRatios = {},
+  phaseInputs: Record<string, AntimonyPhaseInput> = {},
+  customPhases: CustomPhaseRow[] = [],
+  customPercents: CustomPhasePercentMap = {}
+): Record<AntimonyElementKey, number> {
+  const normalized = normalizePhasePercents(phases)
+  const elements = Object.fromEntries(ANTIMONY_ELEMENT_KEYS.map((key) => [key, 0])) as Record<AntimonyElementKey, number>
+
+  for (const phaseKey of ANTIMONY_PHASE_ASSIGNMENT_KEYS) {
+    const pct = normalized[phaseKey] ?? 0
+    if (pct <= 0) continue
+    const fractions = PHASE_ELEMENT_FRACTIONS[phaseKey]
+    for (const [element, fraction] of Object.entries(fractions) as [AntimonyElementKey, number][]) {
+      elements[element] = (elements[element] ?? 0) + pct * fraction
+    }
+  }
+
+  for (const row of customPhases) {
+    const pct = customPercents[row.id] ?? 0
+    if (pct <= 0) continue
+    for (const [element, fraction] of Object.entries(row.fractions) as [AntimonyElementKey, number][]) {
+      elements[element] = (elements[element] ?? 0) + pct * fraction
+    }
+  }
+
+  for (const element of TRACE_ELEMENTS) {
+    elements[element] = currentRatios[element] ?? 0
+  }
+
+  const phaseDict = Object.fromEntries(
+    ANTIMONY_PHASE_ASSIGNMENT_KEYS.map((key) => [key, normalized[key] ?? 0])
+  ) as Record<string, AntimonyPhaseInput>
+  phaseDict.Other = normalized.Other ?? 0
+  for (const [key, input] of Object.entries(phaseInputs)) {
+    if (phaseDict[key]) phaseDict[key] = input
+  }
+  const unknowns = calculateUnknownsFromPhases(phaseDict, elements)
+  elements['O(氧)'] = unknowns['O(氧)']
+  elements['C (碳)'] = unknowns['C (碳)']
+  elements['Other(其他)'] = unknowns['Other(其他)']
+
+  return normalizeAntimonyRatios(elements)
+}
+
+export function parsePhaseDraftMap(drafts: PhasePercentDraftMap): PhasePercentMap {
+  const parsed = Object.fromEntries(
+    INPUT_PHASE_ROW_KEYS.map((key) => {
+      const text = drafts[key]?.trim() ?? ''
+      const value = text === '' ? 0 : Number(text)
+      return [key, Number.isFinite(value) ? Math.max(0, value) : 0]
+    })
+  ) as PhasePercentMap
+  return parsed
+}
+
+export function parsePhaseDraftMapWithCustom(
+  drafts: Record<string, string>,
+  customRows: CustomPhaseRow[] = []
+): { fixed: PhasePercentMap; custom: CustomPhasePercentMap } {
+  const fixedDrafts = Object.fromEntries(
+    INPUT_PHASE_ROW_KEYS.map((key) => [key, drafts[key]])
+  ) as PhasePercentDraftMap
+  return {
+    fixed: parsePhaseDraftMap(fixedDrafts),
+    custom: parseCustomPhasePercents(drafts, customRows),
+  }
+}

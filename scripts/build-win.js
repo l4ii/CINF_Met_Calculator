@@ -104,9 +104,33 @@ if (builderConfig) {
 
 function buildWindowsOutput(outputDir) {
   const outputArg = ` --config.directories.output="${outputDir}"`
-  const unpackedDir = path.join(root, outputDir, 'win-unpacked')
-  run(`${builderCmd}${outputArg} --dir`)
-  run(`${builderCmd}${outputArg} --prepackaged "${unpackedDir}"`)
+  run(`${builderCmd}${outputArg}`)
+
+  const updateConfigPath = path.join(root, outputDir, 'win-unpacked', 'resources', 'app-update.yml')
+  if (!fs.existsSync(updateConfigPath)) {
+    throw new Error(`未生成自动更新配置: ${updateConfigPath}`)
+  }
+  const updateConfig = fs.readFileSync(updateConfigPath, 'utf8')
+  if (!/provider:\s*github\b/.test(updateConfig) || !/owner:\s*l4ii\b/.test(updateConfig) || !/repo:\s*CINF_Met_Calculator\b/.test(updateConfig)) {
+    throw new Error(`自动更新配置不是预期的 GitHub Releases 源: ${updateConfigPath}`)
+  }
+
+  const updateInfoPath = path.join(root, outputDir, 'latest.yml')
+  if (!fs.existsSync(updateInfoPath)) {
+    throw new Error(`未生成更新元数据: ${updateInfoPath}`)
+  }
+  const updateInfo = fs.readFileSync(updateInfoPath, 'utf8')
+  const expectedVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version
+  const versionMatch = updateInfo.match(/^version:\s*(.+)$/m)
+  const artifactMatch = updateInfo.match(/^path:\s*(.+)$/m)
+  if (!versionMatch || versionMatch[1].trim() !== expectedVersion || !artifactMatch) {
+    throw new Error(`更新元数据内容不完整或版本不匹配: ${updateInfoPath}`)
+  }
+  const artifactName = artifactMatch[1].trim().replace(/^['"]|['"]$/g, '')
+  if (!fs.existsSync(path.join(root, outputDir, artifactName))) {
+    throw new Error(`更新元数据引用的安装包不存在: ${artifactName}`)
+  }
+  console.log(`[build-win] 已生成自动更新配置与元数据: ${updateConfigPath}`)
 }
 
 try {

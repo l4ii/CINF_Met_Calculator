@@ -40,6 +40,14 @@ function flattenCatalog(language: 'zh' | 'en'): { id: string; name: string; grou
     cu_refining_equipment: 'Refining Equipment',
     cu_summary: 'Case Summary',
     cu_equipment: 'Equipment Selection',
+    sb_smelting: 'Volatilization Smelting',
+    sb_smelting_equipment: 'Smelting Equipment',
+    sb_converting: 'Converting',
+    sb_converting_equipment: 'Converting Equipment',
+    sb_refining: 'Refining',
+    sb_refining_equipment: 'Refining Equipment',
+    sb_summary: 'Case Summary',
+    sb_equipment: 'Equipment Selection',
   }
   const group = language === 'en' ? 'Sheets' : '页签'
   return SHEETS.map((s) => ({

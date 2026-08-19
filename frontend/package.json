@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "node ../scripts/dev-clean-ports.js && concurrently \"vite\" \"wait-on http://localhost:5173 && npx electron ..\"",
     "build": "vite build",
+    "validate:excel-export": "node scripts/validate-reference-batch-workbook.mjs",
     "dist:builder": "npx electron-builder --config ../electron-builder.yml"
   },
   "dependencies": {
+    "docx": "^9.6.1",
     "electron-updater": "^6.7.3",
     "exceljs": "^4.4.0",
     "katex": "^0.16.45",

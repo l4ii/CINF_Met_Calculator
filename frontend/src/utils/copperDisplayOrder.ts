@@ -10,6 +10,7 @@ export const COPPER_ELEMENT_DISPLAY_ORDER = [
   'Cu(铜)',
   'S (硫)',
   'Fe(铁)',
+  'FeO(氧化亚铁)',
   'SiO₂(二氧化硅)',
   'CaO(氧化钙)',
   'MgO(氧化镁)',

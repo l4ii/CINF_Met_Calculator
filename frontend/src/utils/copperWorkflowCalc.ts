@@ -54,7 +54,7 @@ export function isMixOtherMaterial(
 }
 
 /** 拆分精矿 vs 混料其他 */
-export function partitionRawMixMaterials<T extends Pick<CopperMaterialColumn, 'mixGroup'>>(
+export function partitionRawMixMaterials<T extends Pick<CopperMaterialColumn, 'mixGroup' | 'name'>>(
   materials: T[]
 ): { concentrates: T[]; others: T[] } {
   const concentrates: T[] = []
@@ -85,7 +85,10 @@ export function deriveDryBasisMoisturePercent(dryWeight: number, waterWeight: nu
   return (water / dry) * 100
 }
 
-export function materialWaterWeight(material: Pick<CopperMaterialColumn, 'weight' | 'waterWeight' | 'moisture' | 'kind' | 'airRole'>): number {
+export function materialWaterWeight(
+  material: Pick<CopperMaterialColumn, 'weight' | 'waterWeight' | 'moisture'> &
+    Partial<Pick<CopperMaterialColumn, 'kind' | 'airRole'>>
+): number {
   // 气体列水分必须随干基质量按 moisture% 缩放。
   // 若沿用固体的绝对 waterWeight，回填改干基气量后 H2O 不跟着变，
   // 富氧硬投影（按每吨干基摩尔分率）与验收求值会系统性偏离（如 85%→88.3%）。

@@ -1,0 +1,636 @@
+{
+  "version": 10,
+  "method": "sb-oxy-side-blast-converting",
+  "_variableNotes": {
+    "GMC": "粗铜锑品位 (%)，与元素约束中粗铜(锑锍键) Cu W% 联动",
+    "elementDistributions": "与西南铜(吴).flo 吹炼元素分配对齐；默认开闭：粗铜关 Si/Ca/C/Mg/N/H；烟气仅 O/As/S/C/N/H；含尘关 Te/Si/C/Mg/N/H；无组织仅 O(计算)+S=0；损失仅 Cu/S；吹炼渣关 C/N/H。空白 value 表示计算/未知。",
+    "slagPhases": "对齐 MetCal 表8：钙/镁用氧化物连写 CaO*Fe2O3、CaO*SiO2、MgO*SiO2（与熔炼 Al2O3*SiO2 相同写法，求解时按化学计量解析）；吹炼渣无游离 CaO。CaO/Fe=0.4 用 OutputE 当量约束。",
+    "customConstraintsExcelCheck": "对照工作簿1.xlsx 金标准：①漏风/5000→Nm³=1 ✓ ②富氧体积分数0.3 ✓（须专用求值）③渣CaO当量/Fe=0.4 ✓ ④含尘Cu2S/Cu2O=0.1 ✓ ⑤含尘Fe3O4.Fe/Fe=0.015 ✓ ⑥气As/(气+尘As)=0.6 ✓ ⑦供氧系数1.15 ✓。已删除错误的 Output.吹炼渣.CaO/渣=0.02（正版渣无游离CaO、氧化物CaO≈7.08%）。"
+  },
+  "variables": {
+    "GMC": 98.75
+  },
+  "products": {
+    "smeltingSlag": {
+      "name": "吹炼渣",
+      "allowedElements": [
+        "O(氧)",
+        "Fe(铁)",
+        "S(硅)",
+        "Ca(钙)",
+        "Mg(镁)",
+        "Sn(锡)",
+        "Te(碲)",
+        "Na(钠)",
+        "Other(其他)"
+      ],
+      "phases": [
+        "Cu2S",
+        "Cu2O",
+        "Fe3O4",
+        "As2O3",
+        "PbO",
+        "ZnO",
+        "NiO",
+        "SeO2",
+        "Bi2O3",
+        "Sb2O3",
+        "CaO*Fe2O3",
+        "CaO*SiO2",
+        "MgO*SiO2",
+        "SnO",
+        "Cd",
+        "Au",
+        "Ag",
+        "Te",
+        "Other"
+      ]
+    },
+    "matte": {
+      "name": "粗铜",
+      "allowedElements": [
+        "Cu(铜)",
+        "S (硫)",
+        "O(氧)",
+        "Fe(铁)",
+        "Other(其他)"
+      ],
+      "phases": [
+        "Cu",
+        "Cu2S",
+        "Cu2O",
+        "Fe3O4",
+        "Ni",
+        "Pb",
+        "Zn",
+        "Cu3As",
+        "Se",
+        "Bi",
+        "Sb",
+        "Cd",
+        "Sn",
+        "Au",
+        "Ag",
+        "Te",
+        "Other"
+      ]
+    },
+    "flueGas": {
+      "name": "吹炼出炉烟气",
+      "allowedElements": [
+        "S (硫)",
+        "O(氧)",
+        "As(砷)",
+        "C (碳)",
+        "H(氢)",
+        "N(氮)"
+      ],
+      "phases": [
+        "SO2",
+        "SO3",
+        "CO2",
+        "O2",
+        "N2",
+        "H2O",
+        "As2O3"
+      ]
+    },
+    "dust": {
+      "name": "吹炼烟气含尘",
+      "allowedElements": [
+        "O(氧)",
+        "As(砷)",
+        "Pb(铅)",
+        "Zn(锌)",
+        "Ni(镍)",
+        "Se(硒)",
+        "Bi(铋)",
+        "Sb(锑)",
+        "Cd(镉)",
+        "Au(金)",
+        "Ag(银)"
+      ],
+      "phases": [
+        "Cu2S",
+        "Cu2O",
+        "FeO",
+        "Fe3O4",
+        "NiO",
+        "PbO",
+        "ZnO",
+        "CaO",
+        "SiO2",
+        "As2O3",
+        "Bi2O3",
+        "Sb2O3",
+        "SeO2",
+        "SnO",
+        "Cd",
+        "Au",
+        "Ag",
+        "Other"
+      ]
+    },
+    "fugitive": {
+      "name": "无组织排放",
+      "allowedElements": [
+        "S (硫)",
+        "O(氧)"
+      ],
+      "phases": [
+        "SO2"
+      ]
+    },
+    "loss": {
+      "name": "损失",
+      "allowedElements": [
+        "Cu(铜)",
+        "S (硫)"
+      ],
+      "phases": [
+        "Cu",
+        "S"
+      ]
+    }
+  },
+  "elementDistributions": [
+    {
+      "element": "Cu(铜)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "W%",
+          "value": 25
+        },
+        {
+          "product": "matte",
+          "type": "W%",
+          "value": 98.75
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": ""
+        },
+        {
+          "product": "loss",
+          "type": "D%",
+          "value": 0.25
+        }
+      ]
+    },
+    {
+      "element": "O(氧)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": ""
+        },
+        {
+          "product": "matte",
+          "type": "W%",
+          "value": 0.3
+        },
+        {
+          "product": "flueGas",
+          "type": "D%",
+          "value": ""
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": ""
+        },
+        {
+          "product": "fugitive",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "As(砷)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 10
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 20
+        },
+        {
+          "product": "flueGas",
+          "type": "D%",
+          "value": ""
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "Fe(铁)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "W%",
+          "value": ""
+        },
+        {
+          "product": "matte",
+          "type": "W%",
+          "value": 0.04
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": 4
+        }
+      ]
+    },
+    {
+      "element": "Pb(铅)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 60
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 18
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "Zn(锌)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 80
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 5
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "Ni(镍)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 15
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 80
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "Bi(铋)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 20
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 50
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "Sb(锑)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 20
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 30
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "Se(硒)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 10
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 80
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "Sn(锡)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 60
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 30
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "Cd(镉)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 50
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 20
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "Au(金)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 0.2
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 99.3
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "Ag(银)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": 0.4
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 99.1
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "Te(碲)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": ""
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": 75
+        }
+      ]
+    },
+    {
+      "element": "S (硫)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "W%",
+          "value": 0.06
+        },
+        {
+          "product": "matte",
+          "type": "W%",
+          "value": 0.03
+        },
+        {
+          "product": "flueGas",
+          "type": "D%",
+          "value": ""
+        },
+        {
+          "product": "dust",
+          "type": "W%",
+          "value": 0.5
+        },
+        {
+          "product": "fugitive",
+          "type": "D%",
+          "value": 0
+        },
+        {
+          "product": "loss",
+          "type": "D%",
+          "value": 0.05
+        }
+      ]
+    },
+    {
+      "element": "S(硅)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "Ca(钙)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": ""
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": 0.5
+        }
+      ]
+    },
+    {
+      "element": "C (碳)",
+      "rules": [
+        {
+          "product": "flueGas",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "Mg(镁)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "N(氮)",
+      "rules": [
+        {
+          "product": "flueGas",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "H(氢)",
+      "rules": [
+        {
+          "product": "flueGas",
+          "type": "D%",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "element": "Other(其他)",
+      "rules": [
+        {
+          "product": "smeltingSlag",
+          "type": "D%",
+          "value": ""
+        },
+        {
+          "product": "matte",
+          "type": "D%",
+          "value": ""
+        },
+        {
+          "product": "dust",
+          "type": "D%",
+          "value": 1
+        }
+      ]
+    }
+  ],
+  "customConstraints": [
+    {
+      "expr": "Input.加料口漏风 / 5000",
+      "target": 1,
+      "relativeTolerance": 0.005
+    },
+    {
+      "expr": "((Input.空气.O2 + Input.氧气.O2) / 32 * 22.4) / (Input.空气 + Input.氧气)",
+      "target": 0.3,
+      "relativeTolerance": 0.005
+    },
+    {
+      "expr": "(OutputE.吹炼渣.Ca / Ca * CaO) / OutputE.吹炼渣.Fe",
+      "target": 0.4,
+      "relativeTolerance": 0.005
+    },
+    {
+      "expr": "Output.吹炼烟气含尘.Cu2S / Output.吹炼烟气含尘.Cu2O",
+      "target": 0.1,
+      "relativeTolerance": 0.005
+    },
+    {
+      "expr": "Output.吹炼烟气含尘.Fe3O4.Fe / OutputE.吹炼烟气含尘.Fe",
+      "target": 0.015,
+      "relativeTolerance": 0.005
+    },
+    {
+      "expr": "Output.吹炼出炉烟气.As2O3.As / (Output.吹炼出炉烟气.As2O3.As + Output.吹炼烟气含尘.As2O3.As)",
+      "target": 0.6,
+      "relativeTolerance": 0.005
+    },
+    {
+      "expr": "(Input.空气.O2 + Input.氧气.O2 + Input.加料口漏风.O2) / ((Input.空气.O2 + Input.氧气.O2 + Input.加料口漏风.O2) - Output.吹炼出炉烟气.O2)",
+      "target": 1.15,
+      "relativeTolerance": 0.005
+    }
+  ],
+  "solverParams": {
+    "wPercentIterations": 40,
+    "newtonMaxIterations": 100,
+    "tolerance": 0.0001,
+    "constraintRelativeTolerance": 0.005
+  }
+}

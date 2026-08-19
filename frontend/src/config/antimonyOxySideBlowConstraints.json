@@ -1,0 +1,251 @@
+{
+  "version": 1,
+  "method": "sb-oxygen-enriched-side-blown-volatilization-smelting",
+  "_variableNotes": {
+    "GMC": "锑锍中锑质量分数 (%)；沿用铜模块变量名以兼容独立副本内的约束编辑器"
+  },
+  "variables": {
+    "GMC": 6.1
+  },
+  "products": {
+    "smeltingSlag": {
+      "name": "熔炼渣",
+      "allowedElements": ["Sb(锑)", "S (硫)", "Fe(铁)", "Pb(铅)", "As(砷)", "Zn(锌)", "Cu(铜)", "S(硅)", "Ca(钙)", "Al(铝)", "Ag(银)", "Au(金)", "Bi(铋)", "O(氧)", "Other(其他)"],
+      "phases": ["Sb2O3", "S", "FeO", "PbO", "As2O3", "Bi2O3", "ZnO", "Cu2O", "SiO2", "CaO", "Al2O3", "Ag", "Au", "Other"]
+    },
+    "matte": {
+      "name": "锑锍",
+      "allowedElements": ["Sb(锑)", "S (硫)", "Fe(铁)", "Pb(铅)", "As(砷)", "Cu(铜)", "S(硅)", "Ca(钙)", "Ag(银)", "O(氧)", "Other(其他)"],
+      "phases": ["Sb2S3", "FeS", "As", "CaO", "SiO2", "PbS", "Cu2S", "Ag", "Other"]
+    },
+    "flueGas": {
+      "name": "烟气",
+      "allowedElements": ["S (硫)", "O(氧)", "C (碳)", "H(氢)", "N(氮)", "Hg(汞)"],
+      "phases": ["SO2", "CO2", "O2", "N2", "H2O", "Hg"]
+    },
+    "dust": {
+      "name": "锑氧粉",
+      "allowedElements": ["Sb(锑)", "S (硫)", "Fe(铁)", "Pb(铅)", "As(砷)", "Zn(锌)", "Cu(铜)", "S(硅)", "Ca(钙)", "Ag(银)", "Bi(铋)", "O(氧)", "Other(其他)"],
+      "phases": ["Sb2O3", "PbO", "As2O3", "Bi2O3", "CaO", "SiO2", "FeO", "ZnO", "Cu2O", "S", "Ag", "Other"]
+    },
+    "fugitive": {
+      "name": "无组织排放",
+      "allowedElements": ["S (硫)", "O(氧)"],
+      "phases": ["SO2"]
+    },
+    "loss": {
+      "name": "贵锑",
+      "allowedElements": ["Sb(锑)", "S (硫)", "Fe(铁)", "Pb(铅)", "As(砷)", "Cu(铜)", "Ag(银)", "Au(金)", "Other(其他)"],
+      "phases": ["Sb", "As", "S", "Fe", "Pb", "Cu", "Ag", "Au", "Other"]
+    }
+  },
+  "elementDistributions": [
+    { "element": "Sb(锑)", "rules": [
+      { "product": "smeltingSlag", "type": "W%", "value": 17.73 },
+      { "product": "matte", "type": "W%", "value": 6.1 },
+      { "product": "smeltingSlag", "type": "D%", "value": 6.89746344936183 },
+      { "product": "flueGas", "type": "D%", "value": 0 },
+      { "product": "dust", "type": "D%", "value": 88.6310330001009 },
+      { "product": "matte", "type": "D%", "value": 0.76893767683719 },
+      { "product": "loss", "type": "D%", "value": 3.70256587370011 }
+    ]},
+    { "element": "S (硫)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 1.12580167303294 },
+      { "product": "flueGas", "type": "D%", "value": 85.5 },
+      { "product": "dust", "type": "D%", "value": 4.90086796369793 },
+      { "product": "matte", "type": "D%", "value": 8.27522636545134 },
+      { "product": "loss", "type": "D%", "value": 0.19810399781778 },
+      { "product": "fugitive", "type": "D%", "value": 0 }
+    ]},
+    { "element": "Fe(铁)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 52.3147528461926 },
+      { "product": "flueGas", "type": "D%", "value": 0 },
+      { "product": "dust", "type": "D%", "value": 13.9107274543223 },
+      { "product": "matte", "type": "D%", "value": 32.5965517549747 },
+      { "product": "loss", "type": "D%", "value": 1.17796794451034 }
+    ]},
+    { "element": "Pb(铅)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 8.37187893007707 },
+      { "product": "flueGas", "type": "D%", "value": 0 },
+      { "product": "dust", "type": "D%", "value": 82.9825551391649 },
+      { "product": "matte", "type": "D%", "value": 8.4967218419849 },
+      { "product": "loss", "type": "D%", "value": 0.148844088773122 }
+    ]},
+    { "element": "As(砷)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 28.6773572122377 },
+      { "product": "flueGas", "type": "D%", "value": 0 },
+      { "product": "dust", "type": "D%", "value": 60.1809338215091 },
+      { "product": "matte", "type": "D%", "value": 9.03047307549761 },
+      { "product": "loss", "type": "D%", "value": 2.11123589075557 }
+    ]},
+    { "element": "Zn(锌)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 59.201143862688 },
+      { "product": "flueGas", "type": "D%", "value": 0 },
+      { "product": "dust", "type": "D%", "value": 40.798856137312 },
+      { "product": "matte", "type": "D%", "value": 0 },
+      { "product": "loss", "type": "D%", "value": 0 }
+    ]},
+    { "element": "Cu(铜)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 23.022667057712 },
+      { "product": "flueGas", "type": "D%", "value": 0 },
+      { "product": "dust", "type": "D%", "value": 35.108004097339 },
+      { "product": "matte", "type": "D%", "value": 25 },
+      { "product": "loss", "type": "D%", "value": 16.869328844949 }
+    ]},
+    { "element": "S(硅)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 62 },
+      { "product": "flueGas", "type": "D%", "value": 0 },
+      { "product": "dust", "type": "D%", "value": 30 },
+      { "product": "matte", "type": "D%", "value": 8 },
+      { "product": "loss", "type": "D%", "value": 0 }
+    ]},
+    { "element": "Ca(钙)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 62.1230813917397 },
+      { "product": "flueGas", "type": "D%", "value": 0 },
+      { "product": "dust", "type": "D%", "value": 26.3058694243272 },
+      { "product": "matte", "type": "D%", "value": 11.5710491839331 },
+      { "product": "loss", "type": "D%", "value": 0 }
+    ]},
+    { "element": "Al(铝)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 100 },
+      { "product": "flueGas", "type": "D%", "value": 0 },
+      { "product": "dust", "type": "D%", "value": 0 },
+      { "product": "matte", "type": "D%", "value": 0 },
+      { "product": "loss", "type": "D%", "value": 0 }
+    ]},
+    { "element": "Ag(银)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 8.71127942724236 },
+      { "product": "flueGas", "type": "D%", "value": 0 },
+      { "product": "dust", "type": "D%", "value": 64.6135944340121 },
+      { "product": "matte", "type": "D%", "value": 10.0810216471477 },
+      { "product": "loss", "type": "D%", "value": 16.5941044915978 }
+    ]},
+    { "element": "Au(金)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 5 },
+      { "product": "flueGas", "type": "D%", "value": 0 },
+      { "product": "dust", "type": "D%", "value": 0 },
+      { "product": "matte", "type": "D%", "value": 0 },
+      { "product": "loss", "type": "D%", "value": 95 }
+    ]},
+    { "element": "Bi(铋)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 51.8010008798519 },
+      { "product": "flueGas", "type": "D%", "value": 0 },
+      { "product": "dust", "type": "D%", "value": 48.1989991201481 },
+      { "product": "matte", "type": "D%", "value": 0 },
+      { "product": "loss", "type": "D%", "value": 0 }
+    ]},
+    { "element": "C (碳)", "rules": [
+      { "product": "flueGas", "type": "D%", "value": 100 }
+    ]},
+    { "element": "H(氢)", "rules": [
+      { "product": "flueGas", "type": "D%", "value": 100 }
+    ]},
+    { "element": "Other(其他)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 62 },
+      { "product": "flueGas", "type": "D%", "value": 0 },
+      { "product": "dust", "type": "D%", "value": 10 },
+      { "product": "matte", "type": "D%", "value": 25 },
+      { "product": "loss", "type": "D%", "value": 3 }
+    ]},
+    { "element": "Mg(镁)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 100 }
+    ]},
+    { "element": "Hg(汞)", "rules": [
+      { "product": "flueGas", "type": "D%", "value": 100 }
+    ]},
+    { "element": "Ni(镍)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 20 },
+      { "product": "dust", "type": "D%", "value": 35 },
+      { "product": "matte", "type": "D%", "value": 25 },
+      { "product": "loss", "type": "D%", "value": 20 }
+    ]},
+    { "element": "Se(硒)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 10 },
+      { "product": "dust", "type": "D%", "value": 70 },
+      { "product": "matte", "type": "D%", "value": 10 },
+      { "product": "loss", "type": "D%", "value": 10 }
+    ]},
+    { "element": "Cd(镉)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 10 },
+      { "product": "dust", "type": "D%", "value": 85 },
+      { "product": "loss", "type": "D%", "value": 5 }
+    ]},
+    { "element": "Sn(锡)", "rules": [
+      { "product": "smeltingSlag", "type": "D%", "value": 60 },
+      { "product": "dust", "type": "D%", "value": 30 },
+      { "product": "matte", "type": "D%", "value": 10 }
+    ]},
+    { "element": "Te(碲)", "rules": [
+      { "product": "dust", "type": "D%", "value": 20 },
+      { "product": "matte", "type": "D%", "value": 20 },
+      { "product": "loss", "type": "D%", "value": 60 }
+    ]}
+  ],
+  "customConstraints": [
+    {
+      "expr": "Input.煤 / Input.混合锑精矿",
+      "target": 0.0330474820760344,
+      "relativeTolerance": 0.005,
+      "note": "由 Excel 工况反推：无烟煤 0.1652374104 t/h ÷ 锑精矿湿基 5 t/h。"
+    },
+    {
+      "expr": "((Input.空气.O2 + Input.氧气.O2) / 32 * 22.4) / (Input.空气 + Input.氧气)",
+      "target": 0.3,
+      "relativeTolerance": 0.005,
+      "note": "Excel 富氧空气为 O2/N2=30/70 vol%。"
+    },
+    {
+      "expr": "Output.烟气.O2 / Output.烟气",
+      "target": 0.046413906109439,
+      "relativeTolerance": 0.01,
+      "note": "Excel 烟气 O2=4.64139061 wt%（对应 5 vol%）。"
+    },
+    {
+      "expr": "OutputE.熔炼渣.Fe / (OutputE.熔炼渣.Si / Si * SiO2)",
+      "target": 1.010461956,
+      "relativeTolerance": 0.01,
+      "note": "由 Excel 熔炼渣 Fe=21.79256952 wt%、SiO2=21.56603229 wt% 反推。"
+    },
+    {
+      "expr": "(OutputE.熔炼渣.Ca / Ca * CaO) / (OutputE.熔炼渣.Si / Si * SiO2)",
+      "target": 0.5,
+      "relativeTolerance": 0.01,
+      "note": "由 Excel 熔炼渣 CaO=10.78301614 wt%、SiO2=21.56603229 wt% 反推。"
+    },
+    {
+      "expr": "OutputE.锑锍.S / (0.265413629241361 * Output.锑锍)",
+      "target": 1,
+      "soft": true,
+      "relativeTolerance": 0.02,
+      "note": "Excel 锑锍 S=26.54136292 wt%。"
+    },
+    {
+      "expr": "OutputE.锑锍.Fe / (0.419059112179791 * Output.锑锍)",
+      "target": 1,
+      "soft": true,
+      "relativeTolerance": 0.02,
+      "note": "Excel 锑锍 Fe=41.90591122 wt%。"
+    },
+    {
+      "expr": "Output.锑氧粉.Sb2O3 / Output.锑氧粉",
+      "target": 0.894255351209323,
+      "soft": true,
+      "relativeTolerance": 0.02,
+      "note": "Excel 锑氧粉 Sb2O3=89.42553512 wt%。"
+    },
+    {
+      "expr": "OutputE.贵锑.Sb / Output.贵锑",
+      "target": 0.8922,
+      "soft": true,
+      "relativeTolerance": 0.02,
+      "note": "Excel 贵锑 Sb=89.22 wt%。"
+    }
+  ],
+  "solverParams": {
+    "wPercentIterations": 80,
+    "newtonMaxIterations": 160,
+    "tolerance": 0.000001,
+    "polishFloor": 1e-8,
+    "constraintRelativeTolerance": 0.005
+  }
+}

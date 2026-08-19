@@ -507,7 +507,20 @@ export function extractMetcalFloConvertingProductResults(buffer: ArrayBuffer): M
 
   for (const pk of ['matte', 'smeltingSlag'] as const) {
     const streamName = CONVERTING_PRODUCT_STREAM_BY_KEY[pk]!
-    const block = pickBestSolidBlock(candidateBlocks(streamName))
+    const roughCopperHandoff =
+      pk === 'matte' && convertingUnit
+        ? streamBlocks
+            .filter(
+              (item) =>
+                item.name === streamName &&
+                item.offset >= productSearchEnd &&
+                item.offset < productSearchEnd + 20000
+            )
+            .sort((a, b) => a.offset - b.offset)
+        : []
+    const block = pickBestSolidBlock(
+      roughCopperHandoff.length > 0 ? [roughCopperHandoff[0]!] : candidateBlocks(streamName)
+    )
     if (!block) {
       warnings.push(
         pk === 'matte'

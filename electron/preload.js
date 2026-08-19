@@ -54,6 +54,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exportWorkbookToFile: (fileName, content, format) =>
     ipcRenderer.invoke('export:save-workbook', { fileName, content, format }),
   exportBinaryToFile: (fileName, buffer) => ipcRenderer.invoke('export:save-binary', { fileName, buffer }),
+  exportBundleToDirectory: (folderName, files) =>
+    ipcRenderer.invoke('export:save-bundle', { folderName, files }),
   openFloTemplateFile: () => ipcRenderer.invoke('export:open-flo-template'),
   // 三维/CAD 桥接：导出 MicroStation 参数化变量表，或用 MicroStation 打开炉体 DGN
   cad: {

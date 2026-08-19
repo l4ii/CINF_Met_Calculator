@@ -6,6 +6,17 @@ export interface CopperBatchExportColumn {
 export interface CopperBatchExportRow {
   label: string
   values: Array<string | number | null | undefined>
+  role?: 'data' | 'section' | 'total'
+  boldValueIndexes?: number[]
+  productKey?: string
+  phaseRowKeys?: string[]
+}
+
+export interface CopperBatchReportSection {
+  title: string
+  columns: CopperBatchExportColumn[]
+  rows: CopperBatchExportRow[]
+  tone?: 'income' | 'expenditure'
 }
 
 export interface CopperBatchExportHtmlInput {
@@ -18,6 +29,12 @@ export interface CopperBatchWorkbookSheet {
   title: string
   columns: CopperBatchExportColumn[]
   rows: CopperBatchExportRow[]
+  unitNote?: string
+  rowHeaderLabel?: string
+  columnWidthWeights?: number[]
+  reportDensity?: 'normal' | 'compact'
+  reportLayout?: 'elementBalance' | 'inputMaterialElement' | 'heatBalanceSummary'
+  reportSections?: CopperBatchReportSection[]
 }
 
 /** 导出仅支持标准 Excel 工作簿（.xlsx） */
@@ -40,6 +57,23 @@ export function sanitizeExcelFilePart(value: string) {
   return value.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '').trim()
 }
 
+export function buildCopperBatchExportBaseName({
+  stageName,
+  caseName,
+  date = new Date(),
+}: {
+  stageName: string
+  caseName?: string
+  date?: Date
+}) {
+  const safeStageName = sanitizeExcelFilePart(getCopperStageExportName(stageName))
+  const safeCaseName = caseName ? sanitizeExcelFilePart(caseName) : ''
+  const parts = safeCaseName
+    ? [safeCaseName, safeStageName, formatExportDate(date)]
+    : [safeStageName, formatExportDate(date)]
+  return parts.join('_')
+}
+
 export function buildCopperBatchExportFilename({
   stageName,
   caseName,
@@ -51,12 +85,7 @@ export function buildCopperBatchExportFilename({
   format?: CopperBatchExportFormat
   date?: Date
 }) {
-  const safeStageName = sanitizeExcelFilePart(getCopperStageExportName(stageName))
-  const safeCaseName = caseName ? sanitizeExcelFilePart(caseName) : ''
-  const parts = safeCaseName
-    ? [safeCaseName, safeStageName, formatExportDate(date)]
-    : [safeStageName, formatExportDate(date)]
-  return `${parts.join('_')}.${format}`
+  return `${buildCopperBatchExportBaseName({ stageName, caseName, date })}.${format}`
 }
 
 /** 为导出表添加「表N」前缀编号 */

@@ -121,7 +121,7 @@ export function resolveBatchWorkflowHint(params: {
         (material.weight > 0 && phaseCompletedMaterials[material.id])
     )
     if (batchTableView === 'phase' && allPhaseReady) {
-      return { anchor: 'parametersTab', message: '关键参数输入：物相已就绪，可填写关键参数后进入产出计算' }
+      return { anchor: 'parametersTab', message: '产出计算：物相已就绪，可进入产出计算并填写关键参数' }
     }
     return null
   }
@@ -152,5 +152,5 @@ export function resolveBatchWorkflowHint(params: {
     }
   }
 
-  return { anchor: 'parametersTab', message: '关键参数输入：确认参数后点击下一步进入产出计算' }
+  return { anchor: 'parametersTab', message: '产出计算：请进入产出计算并确认关键参数' }
 }

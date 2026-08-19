@@ -20,6 +20,7 @@ import type { OxyConstraintSolverResult } from '../../utils/copperConstraintSolv
 import type { CopperMaterialColumn } from '../../utils/copperWorkflowCalc.ts'
 import { useAssistantContext } from '../../context/AssistantContext'
 import { BatchTableNumericReadonly } from './BatchTableNumericCell'
+import { shouldDisplayHeatComponentRow } from '../../utils/heatBalanceDisplay.ts'
 
 type HeatBalanceResultTab =
   | 'summary'
@@ -339,7 +340,7 @@ function buildComponentHeatMatrixGroups(rows: HeatComponentRow[], side: Componen
   >()
 
   rows.forEach((row, rowIndex) => {
-    if (row.massTh <= 0 && Math.abs(row.heatMJh) <= COMPONENT_HEAT_EPSILON) return
+    if (!shouldDisplayHeatComponentRow(row, side, COMPONENT_HEAT_EPSILON)) return
     const section = normalizeComponentHeatSection(row.section, side)
     const group = groups.get(section) ?? { components: new Map(), orderIndex: rowIndex }
     const current = group.components.get(row.component) ?? {
@@ -502,7 +503,7 @@ function buildHeatEnthalpyMatrixGroups(
   >()
 
   rows.forEach((row, rowIndex) => {
-    if (row.massTh <= 0 && Math.abs(row.heatMJh) <= COMPONENT_HEAT_EPSILON) return
+    if (!shouldDisplayHeatComponentRow(row, side, COMPONENT_HEAT_EPSILON)) return
     const section = normalizeComponentHeatSection(row.section, side)
     const group = groups.get(section) ?? {
       components: new Map<string, HeatEnthalpyMatrixRow>(),

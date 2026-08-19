@@ -14,6 +14,14 @@ export type SheetId =
   | 'cu_refining_equipment'
   | 'cu_summary'
   | 'cu_equipment'
+  | 'sb_smelting'
+  | 'sb_smelting_equipment'
+  | 'sb_converting'
+  | 'sb_converting_equipment'
+  | 'sb_refining'
+  | 'sb_refining_equipment'
+  | 'sb_summary'
+  | 'sb_equipment'
 
 /** 冶炼方法 */
 export interface SmeltMethod {
@@ -156,4 +164,11 @@ export const COPPER_SHEETS: { id: SheetId; name: string }[] = [
   { id: 'cu_refining', name: '精炼' },
   { id: 'cu_refining_equipment', name: '精炼设备选型' },
   { id: 'cu_summary', name: '案例汇总' },
+]
+
+/** 当前锑侧吹炉工作流只开放本 Excel 对应的熔炼段。 */
+export const ANTIMONY_SHEETS: { id: SheetId; name: string }[] = [
+  { id: 'sb_smelting', name: '熔炼' },
+  { id: 'sb_smelting_equipment', name: '熔炼设备选型' },
+  { id: 'sb_summary', name: '案例汇总' },
 ]

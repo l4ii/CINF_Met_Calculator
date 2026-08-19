@@ -734,7 +734,6 @@ export function CopperBatchElementTable({
       </tr>
     )
   }
-  const annualInputFactor = 24 * 330
   const renderGasCategoryCell = (rowSpan: number) => (
     <td rowSpan={rowSpan} className={`${stickyCellClass(darkMode, 'oxygen', 'category')} relative`}>
       <div className="flex flex-col items-center justify-center gap-0.5 py-0.5">
@@ -1102,16 +1101,16 @@ export function CopperBatchElementTable({
           <Fragment key="blend-group">
             <tr>
               <td rowSpan={2} className={categoryRowSpanCellClass(darkMode, 'total')}>
-                投入（年）
+                投入
               </td>
               <td className={stickyCellClass(darkMode, 'total', 'name')} style={nameColStyle(nameColWidth)}>
-                投入（年）
+                投入
               </td>
               <td className={`${dataCellClass(darkMode, 'total')} font-semibold`}>
                 <BatchTableNumericReadonly
                   darkMode={darkMode}
-                  value={feedTotalWeight * annualInputFactor}
-                  helpTitle={`投入（年） = 当前干基投料量 ${formatTableNumber(feedTotalWeight)} t/h × 24 × 330`}
+                  value={feedTotalWeight}
+                  helpTitle={`投入总计（干基） ${formatTableNumber(feedTotalWeight)} t/h`}
                   className="text-sm font-semibold"
                 />
               </td>
@@ -1140,8 +1139,8 @@ export function CopperBatchElementTable({
               </td>
             </tr>
             {renderMaterialWaterRow('blend-water', 'total', {
-              waterWeightDisplay: furnaceBlendWaterWeight * annualInputFactor,
-              waterWeightHelpTitle: `投入（年）含水 = 当前含水 ${formatTableNumber(furnaceBlendWaterWeight)} t/h × 24 × 330`,
+              waterWeightDisplay: furnaceBlendWaterWeight,
+              waterWeightHelpTitle: `投入总计含水 ${formatTableNumber(furnaceBlendWaterWeight)} t/h`,
             })}
           </Fragment>
           {showProductRows &&

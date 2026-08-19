@@ -47,6 +47,7 @@ import {
   extractMetcalFloConvertingProductResults,
   extractMetcalFloProductResults,
   enrichMetcalProductLossFromDistributions,
+  gasVolumePercentToPhaseMass,
   type MetcalFloProductExtraction,
 } from './metcalFloResultExtract.ts'
 
@@ -59,6 +60,7 @@ export {
 export interface MetcalFloFeedStream {
   name: string
   dryFlowTH: number | null
+  volumeFlowNm3H: number | null
   /** MetCal 湿基水分 %：含水/(干料+含水)×100；导入时再换算为含水 t/h 与本软件干基水分% */
   moisturePercent: number | null
   compositionKind: 'W%' | 'E%' | 'V%' | null
@@ -109,12 +111,32 @@ export interface MetcalFloImportComparison {
   delta: number | null
 }
 
-export interface MetcalFloImportBundle {
+export type MetcalFloStageId = 'smelting' | 'converting'
+
+export interface MetcalFloStageBundle {
+  stageId: MetcalFloStageId
+  stageName: '熔炼' | '吹炼'
+  productDisplayStage: 'smelting' | 'converting'
   extraction: MetcalFloMixExtraction
   rawMaterials: CopperMaterialColumn[]
   solventColumns: CopperMaterialColumn[]
   airColumns: CopperMaterialColumn[]
-  /** 煤等燃料：保留元素组成，干基流量为 0 */
+  fuelColumn: CopperFuelMaterial
+  recomputedBlend: WeightedComposition
+  comparison: MetcalFloImportComparison[]
+  constraints: MetcalConstraintImportResult | MetcalConvertingConstraintImportResult
+  productResults: MetcalFloProductExtraction
+}
+
+export interface MetcalFloImportBundle {
+  caseMode: 'legacy' | 'copper-staged'
+  /** 按熔炼、吹炼顺序排列；只有存在有效产出结果的工序才会出现。 */
+  stages: MetcalFloStageBundle[]
+  extraction: MetcalFloMixExtraction
+  rawMaterials: CopperMaterialColumn[]
+  solventColumns: CopperMaterialColumn[]
+  airColumns: CopperMaterialColumn[]
+  /** 煤等燃料：保留 Flo 数值流量；变量 x 保持未定（weight=0）。 */
   fuelColumn: CopperFuelMaterial
   recomputedBlend: WeightedComposition
   comparison: MetcalFloImportComparison[]
@@ -252,12 +274,13 @@ function buildFeedStream(
   return {
     name,
     dryFlowTH: isNumericFlow(block.flowT) ? Number.parseFloat(block.flowT) : null,
+    volumeFlowNm3H: isNumericFlow(block.flowNm3) ? Number.parseFloat(block.flowNm3) : null,
     moisturePercent: moistureMap.get(name) ?? null,
     compositionKind: block.compositionKind,
     elementRatios,
     phaseRatios,
     sourceOffset: block.offset,
-    isVariableFlow: block.flowT === 'x',
+    isVariableFlow: block.flowT === 'x' || block.flowNm3 === 'x',
     feedGroup,
   }
 }
@@ -311,7 +334,17 @@ export function extractMetcalFloMix(buffer: ArrayBuffer): MetcalFloMixExtraction
               item.offset >= convertingUnit.start &&
               item.offset < convertingUnit.end
           )
-          .sort((a, b) => a.offset - b.offset)[0] ?? primary.get(name)
+          .sort((a, b) => {
+            const positive = (item: FloStreamBlock) => {
+              const flow = isNumericFlow(item.flowT)
+                ? Number.parseFloat(item.flowT)
+                : isNumericFlow(item.flowNm3)
+                  ? Number.parseFloat(item.flowNm3)
+                  : 0
+              return flow > 1e-12 ? 1 : 0
+            }
+            return positive(b) - positive(a) || b.composition.length - a.composition.length || a.offset - b.offset
+          })[0] ?? primary.get(name)
       if (!block) continue
       if (convertingGasOrUtility.has(name)) {
         if (name === '空气' || name === '氧气' || name === '漏风' || name === '二次风') {
@@ -384,7 +417,18 @@ export function extractMetcalFloMix(buffer: ArrayBuffer): MetcalFloMixExtraction
 
   const solvents: MetcalFloFeedStream[] = []
   for (const name of solventNames) {
-    const block = primary.get(name)
+    const scoped = streamBlocks
+      .filter(
+        (block) =>
+          block.name === name &&
+          (!smeltingUnit || (block.offset >= smeltingUnit.start && block.offset < smeltingUnit.end))
+      )
+      .sort((a, b) => {
+        const aPositive = isNumericFlow(a.flowT) && Number.parseFloat(a.flowT) > 1e-12 ? 1 : 0
+        const bPositive = isNumericFlow(b.flowT) && Number.parseFloat(b.flowT) > 1e-12 ? 1 : 0
+        return bPositive - aPositive || b.composition.length - a.composition.length || a.offset - b.offset
+      })
+    const block = scoped[0] ?? primary.get(name)
     if (!block) continue
     solvents.push(buildFeedStream(name, block, moistureMap, elementTemplates))
   }
@@ -470,18 +514,27 @@ function pickGasBlock(
   }
 
   const volumeBlocks = candidates.filter(isGasVolumeComp)
-  const scoped = volumeBlocks.filter(inUnit)
-  const pool = scoped.length ? scoped : volumeBlocks
+  const pool = smeltingUnit
+    ? volumeBlocks.filter((block) => block.offset < smeltingUnit.end)
+    : volumeBlocks
   if (!pool.length) return null
 
   return pool.sort((a, b) => {
     const aVol = a.compositionKind === 'V%' ? 1 : 0
     const bVol = b.compositionKind === 'V%' ? 1 : 0
-    const aNum = isNumericFlow(a.flowNm3) || isNumericFlow(a.flowT) ? 1 : 0
-    const bNum = isNumericFlow(b.flowNm3) || isNumericFlow(b.flowT) ? 1 : 0
+    const aNum =
+      (isNumericFlow(a.flowNm3) && Number.parseFloat(a.flowNm3) > 1e-12) ||
+      (isNumericFlow(a.flowT) && Number.parseFloat(a.flowT) > 1e-12)
+        ? 1
+        : 0
+    const bNum =
+      (isNumericFlow(b.flowNm3) && Number.parseFloat(b.flowNm3) > 1e-12) ||
+      (isNumericFlow(b.flowT) && Number.parseFloat(b.flowT) > 1e-12)
+        ? 1
+        : 0
     const aUnit = inUnit(a) ? 1 : 0
     const bUnit = inUnit(b) ? 1 : 0
-    return bUnit - aUnit || bVol - aVol || bNum - aNum || b.composition.length - a.composition.length
+    return bNum - aNum || bUnit - aUnit || bVol - aVol || b.composition.length - a.composition.length
   })[0]
 }
 
@@ -490,7 +543,7 @@ export function metcalFeedsToRawMaterials(
   idPrefix = 'metcal'
 ): CopperMaterialColumn[] {
   return feeds
-    .filter((feed) => feed.dryFlowTH != null && feed.dryFlowTH > 0)
+    .filter((feed) => feed.isVariableFlow || (feed.dryFlowTH != null && feed.dryFlowTH > 0))
     .map((feed, index) => {
       const weight = feed.dryFlowTH ?? 0
       const wetMoisturePercent = feed.moisturePercent ?? 0
@@ -578,16 +631,27 @@ export function deriveElementRatiosFromPhaseRatios(
   return out
 }
 
-/** 只导入熔剂元素组成；投料量由产出计算回填，干基/水分固定为 0 */
+/** 导入熔剂元素组成及 Flo 数值流量；变量 x 以 weight=0 保持未定。 */
 export function metcalFeedsToSolventColumns(feeds: MetcalFloFeedStream[]): CopperMaterialColumn[] {
   return feeds.map((feed, index) => {
+    const weight = Math.max(
+      0,
+      feed.volumeFlowNm3H != null && feed.volumeFlowNm3H > 0
+        ? gasVolumePercentToPhaseMass(feed.volumeFlowNm3H, {
+            ...feed.phaseRatios,
+            H2O: 0,
+          }).massTh
+        : (feed.dryFlowTH ?? 0)
+    )
+    const wetMoisturePercent = feed.moisturePercent ?? 0
+    const waterWeight = waterWeightFromMetcalWetMoisturePercent(weight, wetMoisturePercent)
     return {
       id: `metcal-solvent-${index + 1}`,
       name: feed.name === '石灰' ? '石灰' : feed.name,
       kind: 'solvent' as const,
-      weight: 0,
-      waterWeight: 0,
-      moisture: 0,
+      weight,
+      waterWeight,
+      moisture: deriveDryBasisMoisturePercent(weight, waterWeight),
       ratios: finalizeMetcalAssayRatios(feed.elementRatios, feed.phaseRatios),
     }
   })
@@ -647,17 +711,25 @@ export function metcalFeedsToAirColumns(
             (o2 * COMPOUND_MOLAR_MASS.O2 + n2 * COMPOUND_MOLAR_MASS.N2)) *
           100
         : column.moisture ?? 0
-    // Flo 气体流量多为 Nm³/h；质量列仍写入 dryFlowTH（兼容旧导入），求解时由约束覆盖
-    const weight = Math.max(0, feed.dryFlowTH ?? 0)
+    // Flo 气体按 Nm³/h + V% 存储；换算为本软件使用的干气质量 t/h。
+    const weight = Math.max(
+      0,
+      feed.volumeFlowNm3H != null && feed.volumeFlowNm3H > 0
+        ? gasVolumePercentToPhaseMass(feed.volumeFlowNm3H, {
+            ...feed.phaseRatios,
+            H2O: 0,
+          }).massTh
+        : (feed.dryFlowTH ?? 0)
+    )
     const waterWeight = moisture > 0 ? (weight * moisture) / 100 : 0
     const keepFeedLeakName =
       column.airRole === 'feed_leak' && options?.includeSecondaryAir === false
     return {
       ...column,
       name: keepFeedLeakName ? column.name : feed.name || column.name,
-      weight: options?.includeSecondaryAir === false ? 0 : weight,
+      weight,
       moisture,
-      waterWeight: options?.includeSecondaryAir === false ? 0 : waterWeight,
+      waterWeight,
       ratios,
     }
   })
@@ -684,7 +756,7 @@ function estimateFuelAshPercent(feed: MetcalFloFeedStream, ratios: CopperRatios)
   return DEFAULT_COPPER_FUEL.ash
 }
 
-/** 优先取「煤」，其次粉煤/焦粉；只导入元素组成，干基流量固定为 0 */
+/** 优先取「煤」，其次粉煤/焦粉；保留 Flo 数值流量，变量 x 以 0 表示未定。 */
 export function metcalFuelsToFuelColumn(fuels: MetcalFloFeedStream[]): CopperFuelMaterial {
   const preferred =
     METCAL_FUEL_STREAM_NAMES.map((name) => fuels.find((item) => item.name === name)).find(Boolean) ??
@@ -700,13 +772,15 @@ export function metcalFuelsToFuelColumn(fuels: MetcalFloFeedStream[]): CopperFue
   }
   const ratios = fuelRatiosFromMetcalFeed(preferred)
   const moisture = preferred.moisturePercent ?? DEFAULT_COPPER_FUEL.moisture
+  const weight = Math.max(0, preferred.dryFlowTH ?? 0)
+  const waterWeight = waterWeightFromMetcalWetMoisturePercent(weight, moisture)
   return {
     ...DEFAULT_COPPER_FUEL,
     id: 'fuel-coal',
     name: preferred.name === '粉煤' || preferred.name === '焦粉' ? preferred.name : '煤',
     kind: 'fuel',
-    weight: 0,
-    waterWeight: 0,
+    weight,
+    waterWeight,
     moisture,
     ash: estimateFuelAshPercent(preferred, ratios),
     ratios,
@@ -756,12 +830,120 @@ function sumFeedElementMasses(feeds: MetcalFloFeedStream[]): Partial<Record<stri
   return out
 }
 
-export function buildMetcalFloImportBundle(buffer: ArrayBuffer): MetcalFloImportBundle {
+export type BuildMetcalFloImportBundleOptions = {
+  /** 内置铜模板用于识别旧导出文件中完全未修改的后续工序残值。 */
+  referenceTemplateBuffer?: ArrayBuffer | null
+}
+
+function byteRangeEquals(
+  buffer: ArrayBuffer,
+  reference: ArrayBuffer | null | undefined,
+  range: { start: number; end: number } | null
+): boolean {
+  if (!reference || !range || buffer.byteLength !== reference.byteLength) return false
+  const end = Math.min(range.end, buffer.byteLength)
+  if (range.start < 0 || end <= range.start) return false
+  const source = new Uint8Array(buffer, range.start, end - range.start)
+  const template = new Uint8Array(reference, range.start, end - range.start)
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] !== template[index]) return false
+  }
+  return true
+}
+
+function hasEffectiveProductResults(extraction: MetcalFloProductExtraction): boolean {
+  return Boolean(
+    extraction.result?.acceptable &&
+      extraction.streams.some(
+        (stream) =>
+          (Number.isFinite(stream.massTh) && stream.massTh > 1e-12) ||
+          (stream.volumeNm3h != null && Number.isFinite(stream.volumeNm3h) && stream.volumeNm3h > 1e-12)
+      )
+  )
+}
+
+function visibleInputFeeds(feeds: MetcalFloFeedStream[]): MetcalFloFeedStream[] {
+  return feeds.filter(
+    (feed) =>
+      feed.isVariableFlow ||
+      (feed.dryFlowTH != null && Number.isFinite(feed.dryFlowTH) && feed.dryFlowTH > 1e-12) ||
+      (feed.volumeFlowNm3H != null &&
+        Number.isFinite(feed.volumeFlowNm3H) &&
+        feed.volumeFlowNm3H > 1e-12)
+  )
+}
+
+function sameStreamBlockValue(
+  block: FloStreamBlock | undefined,
+  referenceBlock: FloStreamBlock | undefined
+): boolean {
+  if (!block || !referenceBlock) return false
+  if (
+    block.name !== referenceBlock.name ||
+    block.flowT !== referenceBlock.flowT ||
+    block.flowNm3 !== referenceBlock.flowNm3 ||
+    block.compositionKind !== referenceBlock.compositionKind ||
+    block.composition.length !== referenceBlock.composition.length
+  ) {
+    return false
+  }
+  return block.composition.every((entry, index) => {
+    const referenceEntry = referenceBlock.composition[index]
+    return referenceEntry?.name === entry.name && referenceEntry.value === entry.value
+  })
+}
+
+export function buildMetcalFloImportBundle(
+  buffer: ArrayBuffer,
+  options: BuildMetcalFloImportBundleOptions = {}
+): MetcalFloImportBundle {
   const extraction = extractMetcalFloMix(buffer)
-  const rawMaterials = metcalFeedsToRawMaterials(extraction.feeds)
-  const solventColumns = metcalFeedsToSolventColumns(extraction.solvents)
-  const airColumns = metcalFeedsToAirColumns(extraction.gases)
-  const fuelColumn = metcalFuelsToFuelColumn(extraction.fuels)
+  const copperStagedMode = Boolean(options.referenceTemplateBuffer)
+  const legacyConvertingSegmentUnchanged = byteRangeEquals(
+    buffer,
+    options.referenceTemplateBuffer,
+    extraction.convertingUnit
+      ? { start: extraction.convertingUnit.start, end: extraction.convertingUnit.end }
+      : null
+  )
+  const sourceBlocksByOffset = new Map(extraction.streamBlocks.map((block) => [block.offset, block]))
+  const referenceBlocksByOffset = new Map(
+    options.referenceTemplateBuffer
+      ? findStreamBlocks(options.referenceTemplateBuffer).map((block) => [block.offset, block])
+      : []
+  )
+  const withoutTemplateResidue = (feeds: MetcalFloFeedStream[]) =>
+    visibleInputFeeds(feeds).filter(
+      (feed) =>
+        !sameStreamBlockValue(
+          sourceBlocksByOffset.get(feed.sourceOffset),
+          referenceBlocksByOffset.get(feed.sourceOffset)
+        )
+    )
+  // 旧版仅写混合矿而未逐股写精矿，四路精矿仍需保留；渣精矿/吹炼渣等“其他”
+  // 若整块与模板一致，则可确定是未清理的模板残值。
+  const smeltingFeeds = visibleInputFeeds(extraction.feeds).filter(
+    (feed) =>
+      feed.feedGroup !== 'other' ||
+      !legacyConvertingSegmentUnchanged ||
+      withoutTemplateResidue([feed]).length > 0
+  )
+  const smeltingSolvents = visibleInputFeeds(extraction.solvents)
+  const smeltingGases = visibleInputFeeds(extraction.gases)
+  const smeltingFuels = visibleInputFeeds(extraction.fuels)
+  const rawMaterials = metcalFeedsToRawMaterials(smeltingFeeds)
+  const parsedSolventColumns = metcalFeedsToSolventColumns(smeltingSolvents)
+  const parsedAirColumns = metcalFeedsToAirColumns(smeltingGases)
+  const parsedFuelColumn = metcalFuelsToFuelColumn(smeltingFuels)
+  const solventColumns = copperStagedMode
+    ? parsedSolventColumns
+    : parsedSolventColumns.map((column) => ({ ...column, weight: 0, waterWeight: 0, moisture: 0 }))
+  const airColumns = copperStagedMode
+    ? parsedAirColumns
+    : parsedAirColumns.map((column) => ({ ...column, weight: 0, waterWeight: 0 }))
+  const fuelColumn = copperStagedMode
+    ? parsedFuelColumn
+    : { ...parsedFuelColumn, weight: 0, waterWeight: 0 }
   const { concentrates } = partitionRawMixMaterials(rawMaterials)
   // 混合铜精矿仅由精矿加权；渣精矿/吹炼渣等属混料「其他」
   const recomputedBlend = calculateWeightedComposition(concentrates)
@@ -814,7 +996,90 @@ export function buildMetcalFloImportBundle(buffer: ArrayBuffer): MetcalFloImport
     comparisonKeys
   )
 
+  const smeltingExtraction: MetcalFloMixExtraction = {
+    ...extraction,
+    feeds: smeltingFeeds,
+    solvents: smeltingSolvents,
+    gases: smeltingGases,
+    fuels: smeltingFuels,
+  }
+  const convertingAllFeeds = visibleInputFeeds(extraction.convertingFeeds ?? [])
+  const convertingSolventFeeds = convertingAllFeeds.filter((feed) =>
+    ['石灰石', '石灰'].includes(feed.name)
+  )
+  const convertingRawFeeds = convertingAllFeeds.filter(
+    (feed) => !convertingSolventFeeds.includes(feed)
+  )
+  const convertingGases = visibleInputFeeds(extraction.convertingGases ?? [])
+  const convertingRawMaterials = metcalFeedsToRawMaterials(
+    convertingRawFeeds,
+    'metcal-converting'
+  )
+  const convertingSolventColumns = metcalFeedsToSolventColumns(convertingSolventFeeds)
+  const convertingAirColumns = metcalFeedsToAirColumns(convertingGases, {
+    includeSecondaryAir: false,
+  })
+  const convertingFuelColumn = metcalFuelsToFuelColumn([])
+  const convertingBlend = calculateWeightedComposition(convertingRawMaterials)
+  const convertingExtraction: MetcalFloMixExtraction = {
+    ...extraction,
+    feeds: convertingRawFeeds,
+    solvents: convertingSolventFeeds,
+    gases: convertingGases,
+    fuels: [],
+    blend: null,
+  }
+
+  const smeltingRange = extraction.smeltingUnit
+    ? { start: extraction.smeltingUnit.start, end: extraction.smeltingUnit.end }
+    : null
+  const convertingRange = extraction.convertingUnit
+    ? { start: extraction.convertingUnit.start, end: extraction.convertingUnit.end }
+    : null
+  const stages: MetcalFloStageBundle[] = []
+  if (
+    hasEffectiveProductResults(productResults) &&
+    !byteRangeEquals(buffer, options.referenceTemplateBuffer, smeltingRange)
+  ) {
+    stages.push({
+      stageId: 'smelting',
+      stageName: '熔炼',
+      productDisplayStage: 'smelting',
+      extraction: smeltingExtraction,
+      rawMaterials,
+      solventColumns,
+      airColumns,
+      fuelColumn,
+      recomputedBlend,
+      comparison,
+      constraints,
+      productResults,
+    })
+  }
+  if (
+    stages[0]?.stageId === 'smelting' &&
+    hasEffectiveProductResults(convertingProductResults) &&
+    !byteRangeEquals(buffer, options.referenceTemplateBuffer, convertingRange)
+  ) {
+    stages.push({
+      stageId: 'converting',
+      stageName: '吹炼',
+      productDisplayStage: 'converting',
+      extraction: convertingExtraction,
+      rawMaterials: convertingRawMaterials,
+      solventColumns: convertingSolventColumns,
+      airColumns: convertingAirColumns,
+      fuelColumn: convertingFuelColumn,
+      recomputedBlend: convertingBlend,
+      comparison: [],
+      constraints: convertingConstraints,
+      productResults: convertingProductResults,
+    })
+  }
+
   return {
+    caseMode: copperStagedMode ? 'copper-staged' : 'legacy',
+    stages,
     extraction,
     rawMaterials,
     solventColumns,
@@ -969,7 +1234,6 @@ const METCAL_PHASE_KEY_PREFERRED_ORDER = [
   'Fe2O3',
   'C',
   'H',
-  'Other',
 ] as const
 
 /** 单物料可见物相键（仅非零），按约定顺序排列 */

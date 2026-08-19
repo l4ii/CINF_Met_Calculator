@@ -1,6 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { getSelectedSmeltAlgorithm, SHEETS, type SelectedMethod, type SheetId } from '../types'
-import ElementDistributionFab from './ElementDistributionFab'
+import { getSelectedSmeltAlgorithm, type SelectedMethod, type SheetId } from '../types'
 import ErrorBoundary from './ErrorBoundary'
 import BackIconButton from './BackIconButton'
 import { cardBase, descText } from '../theme/uiTheme'
@@ -8,8 +7,7 @@ import { useAssistantSnapshotOptional } from '../context/AssistantContext'
 import { useCalcOptional } from '../context/CalcContext'
 
 const CopperWorkflow = lazy(() => import('./modules/CopperWorkflow'))
-const RawMaterialPhaseOxygen = lazy(() => import('./modules/RawMaterialPhaseOxygen'))
-const ProductDisplay = lazy(() => import('./modules/ProductDisplay'))
+const AntimonyWorkflow = lazy(() => import('./modules/antimony/AntimonyWorkflowShell'))
 const AboutPage = lazy(() => import('./shell/AboutPage'))
 const SettingsPage = lazy(() => import('./shell/SettingsPage'))
 
@@ -73,9 +71,10 @@ export default function MainContent({
     }
     setCopperCaseTitleDraft(nextName)
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('metcal:copper-rename-active-case', { detail: { name: nextName } }))
+      const process = selectedMethod?.smeltTypeId === 'sb' ? 'antimony' : 'copper'
+      window.dispatchEvent(new CustomEvent(`metcal:${process}-rename-active-case`, { detail: { name: nextName } }))
     }
-  }, [copperCaseTitleDraft])
+  }, [copperCaseTitleDraft, selectedMethod?.smeltTypeId])
   const cancelCopperCaseTitleEdit = useCallback(() => {
     setCopperCaseTitleDraft(committedCopperCaseTitleRef.current)
   }, [])
@@ -154,21 +153,6 @@ export default function MainContent({
     )
   }
 
-  const sheetDescriptions: Record<SheetId, string> = {
-    raw_material: isEn ? 'Raw feed, solvent, target slag type, phase analysis, oxygen-enriched air' : '原料参数、熔剂、目标渣型、物相分析、富氧空气',
-    product: isEn ? 'Element distribution, slag, matte, noble antimony, Sb2O3 powder, flue gas' : '元素分配系数、熔炼渣、锑锍、贵锑、锑氧粉、烟气组分',
-    heat_balance: isEn ? 'Heat balance (Coming soon)' : '热平衡计算（待实现）',
-    furnace: isEn ? 'Furnace design (Coming soon)' : '炉型计算（待实现）',
-    cu_smelting: isEn ? 'Copper smelting' : '铜熔炼',
-    cu_smelting_equipment: isEn ? 'Smelting equipment selection' : '熔炼设备选型',
-    cu_converting: isEn ? 'Copper converting' : '铜吹炼',
-    cu_converting_equipment: isEn ? 'Converting equipment selection' : '吹炼设备选型',
-    cu_refining: isEn ? 'Copper refining' : '铜精炼',
-    cu_refining_equipment: isEn ? 'Refining equipment selection' : '精炼设备选型',
-    cu_summary: isEn ? 'Copper case summary' : '案例汇总',
-    cu_equipment: isEn ? 'Copper equipment selection' : '铜设备选型',
-  }
-
   const selectedMethodDisplayName = selectedMethod.smeltMethodName
   const selectedPathLabel = selectedMethod.sectionName
     ? `${selectedMethod.smeltTypeName} / ${selectedMethod.sectionName} / ${selectedMethodDisplayName}`
@@ -177,34 +161,22 @@ export default function MainContent({
   const isCopperSideBlown = selectedAlgorithm === 'copper-side-blown'
   const isAntimonySideBlown = selectedAlgorithm === 'antimony-side-blown'
   const copperWorkflowMethodId = selectedMethod.smeltMethodId === 'side-blown' ? 'oxy-side-blast' : selectedMethod.smeltMethodId
+  const antimonyWorkflowMethodId = selectedMethod.smeltMethodId === 'side-blown' ? 'oxy-side-blast' : selectedMethod.smeltMethodId
   const placeholderMessage = isEn
     ? `${selectedPathLabel} calculation module is under development.`
     : `${selectedPathLabel}计算模块开发中，敬请期待。`
-  const sheetNameEn: Record<SheetId, string> = {
-    raw_material: 'Batching Calculation',
-    product: 'Product Calculation',
-    heat_balance: 'Heat Balance',
-    furnace: 'Furnace Design',
-    cu_smelting: 'Smelting',
-    cu_smelting_equipment: 'Smelting Equipment',
-    cu_converting: 'Converting',
-    cu_converting_equipment: 'Converting Equipment',
-    cu_refining: 'Refining',
-    cu_refining_equipment: 'Refining Equipment',
-    cu_summary: 'Case Summary',
-    cu_equipment: 'Equipment Selection',
-  }
-  const requestCopperWorkspaceBack = () => {
+  const requestWorkspaceBack = () => {
     if (typeof window === 'undefined') {
       onSheetSelect?.('raw_material')
       return
     }
-    window.dispatchEvent(new CustomEvent('metcal:copper-back-workspace'))
+    const process = isAntimonySideBlown ? 'antimony' : 'copper'
+    window.dispatchEvent(new CustomEvent(`metcal:${process}-back-workspace`))
   }
   const handleHeaderBack = () => {
     if (activeSheet !== 'raw_material') {
-      if (isCopperSideBlown) {
-        requestCopperWorkspaceBack()
+      if (isCopperSideBlown || isAntimonySideBlown) {
+        requestWorkspaceBack()
       } else {
         onSheetSelect?.('raw_material')
       }
@@ -221,7 +193,7 @@ export default function MainContent({
       <div className="flex-shrink-0 px-3 pt-3 pb-1 sm:px-4 2xl:px-6">
         <div className="mb-1 flex flex-wrap items-center gap-2">
           <BackIconButton label={headerBackLabel} darkMode={darkMode} onClick={handleHeaderBack} />
-          {isCopperSideBlown && activeSheet !== 'raw_material' && hasActiveCopperCase ? (
+          {(isCopperSideBlown || isAntimonySideBlown) && activeSheet !== 'raw_material' && hasActiveCopperCase ? (
             <input
               aria-label="案例名"
               className={`ml-2 w-full max-w-xl rounded border bg-transparent px-2 py-1 text-lg font-semibold outline-none transition-colors ${
@@ -265,34 +237,6 @@ export default function MainContent({
 
       <div ref={mainScrollRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <div className="flex w-full max-w-none flex-1 flex-col px-3 pt-3 pb-0 xl:px-4 2xl:px-6">
-          {isAntimonySideBlown && (
-            <div
-              className={`mb-3 flex flex-wrap gap-2 rounded-lg border p-2 ${
-                darkMode ? 'border-gray-700 bg-gray-900/40' : 'border-gray-200 bg-white'
-              }`}
-            >
-              {SHEETS.map((sheet) => {
-                const sheetActive = activeSheet === sheet.id
-                const label = isEn ? (sheetNameEn[sheet.id] ?? sheet.name) : sheet.name
-                return (
-                  <button
-                    key={sheet.id}
-                    type="button"
-                    onClick={() => onSheetSelect?.(sheet.id)}
-                    className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                      sheetActive
-                        ? darkMode ? 'bg-blue-700 text-white' : 'bg-blue-600 text-white'
-                        : darkMode
-                        ? 'text-gray-300 hover:bg-gray-800'
-                        : 'text-gray-700 hover:bg-gray-100'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                )
-              })}
-            </div>
-          )}
           {isCopperSideBlown && (
             <ErrorBoundary>
               <Suspense fallback={<ModuleLoadingFallback darkMode={darkMode} />}>
@@ -309,43 +253,21 @@ export default function MainContent({
               </Suspense>
             </ErrorBoundary>
           )}
-          {isAntimonySideBlown && activeSheet === 'raw_material' && (
+          {isAntimonySideBlown && (
             <ErrorBoundary>
               <Suspense fallback={<ModuleLoadingFallback darkMode={darkMode} />}>
-                <div className="flex flex-col gap-6">
-                  <RawMaterialPhaseOxygen darkMode={darkMode} language={language} />
-                </div>
+                <AntimonyWorkflow
+                  darkMode={darkMode}
+                  language={language}
+                  activeSheet={activeSheet}
+                  onStageSelect={onSheetSelect ?? (() => undefined)}
+                  smeltMethodId={antimonyWorkflowMethodId}
+                  smeltMethodName={selectedMethod.smeltMethodName}
+                  caseTitleDraft={copperCaseTitleDraft}
+                  onActiveCaseNameChange={handleActiveCopperCaseNameChange}
+                />
               </Suspense>
             </ErrorBoundary>
-          )}
-          {isAntimonySideBlown && activeSheet === 'product' && (
-            <ErrorBoundary>
-              <Suspense fallback={<ModuleLoadingFallback darkMode={darkMode} />}>
-                <ProductDisplay darkMode={darkMode} language={language} />
-              </Suspense>
-            </ErrorBoundary>
-          )}
-          {isAntimonySideBlown && activeSheet === 'heat_balance' && (
-            <>
-              <div className={`${cardBase(darkMode)} mb-6`}>
-                <p className={descText(darkMode)}>{sheetDescriptions.heat_balance}</p>
-                <div className={`p-6 rounded-lg border-2 border-dashed ${darkMode ? 'border-gray-600 bg-gray-800/40 text-gray-400' : 'border-gray-300 bg-gray-50 text-gray-500'}`}>
-                  {isEn ? 'Feature under development, coming soon.' : '功能开发中，敬请期待'}
-                </div>
-              </div>
-              <ElementDistributionFab darkMode={darkMode} />
-            </>
-          )}
-          {isAntimonySideBlown && activeSheet === 'furnace' && (
-            <>
-              <div className={`${cardBase(darkMode)} mb-6`}>
-                <p className={descText(darkMode)}>{sheetDescriptions.furnace}</p>
-                <div className={`p-6 rounded-lg border-2 border-dashed ${darkMode ? 'border-gray-600 bg-gray-800/40 text-gray-400' : 'border-gray-300 bg-gray-50 text-gray-500'}`}>
-                  {isEn ? 'Feature under development, coming soon.' : '功能开发中，敬请期待'}
-                </div>
-              </div>
-              <ElementDistributionFab darkMode={darkMode} />
-            </>
           )}
           {selectedAlgorithm === 'none' && (
             <div className={`${cardBase(darkMode)} mb-6`}>

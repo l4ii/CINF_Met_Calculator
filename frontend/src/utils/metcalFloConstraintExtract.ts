@@ -26,6 +26,8 @@ import { METCAL_TO_COPPER_ELEMENT } from './metcalElementMap.ts'
 import {
   extractMetcalConvertingUnitInputs,
   extractMetcalSmeltingUnitInputs,
+  formatMetcalNumber,
+  writePascalString,
   type MetcalConvertingUnitInputs,
   type MetcalSmeltingUnitInputs,
 } from './metcalFloBinary.ts'
@@ -136,6 +138,28 @@ function collectPascalTokens(data: Uint8Array, start: number, end: number): stri
   return tokens
 }
 
+type PositionedPascalToken = { text: string; offset: number; length: number }
+
+function collectPositionedPascalTokens(
+  data: Uint8Array,
+  start: number,
+  end: number
+): PositionedPascalToken[] {
+  const tokens: PositionedPascalToken[] = []
+  let pos = Math.max(0, start)
+  const limit = Math.min(data.length, end)
+  while (pos < limit) {
+    const token = readPascal(data, pos)
+    if (!token) {
+      pos += 1
+      continue
+    }
+    tokens.push({ text: token.text, offset: pos, length: data[pos] ?? 0 })
+    pos = token.next
+  }
+  return tokens
+}
+
 function isConstraintType(token: string | undefined): token is 'W%' | 'D%' {
   return token === 'W%' || token === 'D%' || token === 'V%'
 }
@@ -147,6 +171,179 @@ function normalizeDistributionRuleType(token: 'W%' | 'D%' | 'V%'): 'W%' | 'D%' {
 
 function isDistElementToken(token: string | undefined): boolean {
   return Boolean(token && DIST_ELEMENT_TOKENS.has(token))
+}
+
+export type MetcalDistributionPatchResult = {
+  patched: string[]
+  errors: string[]
+}
+
+/**
+ * 按解析时相同的表达式规范化规则回写自定义约束目标。
+ * 这样可处理 Flo 原式 `/32`、`CMG`、方括号等与界面规范式不同的情况。
+ */
+export function patchMetcalCustomConstraintsInRange(
+  data: Uint8Array,
+  range: { start: number; end: number },
+  stageId: 'smelting' | 'converting',
+  config: OxySideBlowConstraintConfig
+): MetcalDistributionPatchResult {
+  const tokens = collectPositionedPascalTokens(data, range.start, range.end)
+  const byCanonical = new Map(
+    config.customConstraints
+      .filter((entry) => entry.expr?.trim() && Number.isFinite(entry.target))
+      .map((entry) => [compactExpr(entry.expr), entry])
+  )
+  const patched: string[] = []
+  const errors: string[] = []
+  const seen = new Set<string>()
+
+  const writeTarget = (targetToken: PositionedPascalToken, target: CustomConstraintEntry) => {
+    const commaIndex = targetToken.text.indexOf(',')
+    const numericLength = commaIndex >= 0 ? commaIndex : targetToken.length
+    const suffix = commaIndex >= 0 ? targetToken.text.slice(commaIndex) : ''
+    const formatted = formatMetcalNumber(target.target, numericLength)
+    if (!formatted || !writePascalString(data, targetToken.offset, `${formatted}${suffix}`)) {
+      errors.push(`约束目标字段长度不兼容：${target.expr}`)
+      return false
+    }
+    patched.push(target.expr)
+    return true
+  }
+
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    const exprToken = tokens[index]!
+    if (!exprToken.text.includes('/') || exprToken.text.length < 8) continue
+    if (!(exprToken.text.startsWith('Input.') || exprToken.text.startsWith('Output') || exprToken.text.startsWith('['))) {
+      continue
+    }
+    const targetToken = tokens[index + 1]!
+    if (parseNumericTarget(targetToken.text) == null) continue
+    const canonical =
+      stageId === 'converting'
+        ? mapConvertingFloExprToCanonical(exprToken.text)
+        : mapFloExprToCanonical(exprToken.text)
+    const key = compactExpr(canonical)
+    const target = byCanonical.get(key)
+    if (!target || seen.has(key)) continue
+    seen.add(key)
+
+    writeTarget(targetToken, target)
+  }
+
+  const convertingOxygenKey = compactExpr(CONVERTING_OXYGEN_SUPPLY_EXPR)
+  const convertingOxygenTarget = byCanonical.get(convertingOxygenKey)
+  if (stageId === 'converting' && convertingOxygenTarget && !seen.has(convertingOxygenKey)) {
+    for (let index = 0; index < tokens.length - 3; index += 1) {
+      const left = tokens[index]?.text ?? ''
+      const operator = tokens[index + 1]?.text ?? ''
+      const right = tokens[index + 2]?.text ?? ''
+      if (operator !== '/') continue
+      if (!/空气\.O2\+Input\.氧气\.O2\+Input\.漏风\.O2/.test(left.replace(/\s+/g, ''))) continue
+      if (!/Output\.吹炼出炉烟气\.O2/.test(right.replace(/\s+/g, ''))) continue
+      const targetToken = tokens
+        .slice(index + 3, Math.min(tokens.length, index + 9))
+        .find((token) => parseNumericTarget(token.text) != null)
+      if (!targetToken) continue
+      seen.add(convertingOxygenKey)
+      writeTarget(targetToken, convertingOxygenTarget)
+      break
+    }
+  }
+
+  for (const [key, constraint] of byCanonical) {
+    if (seen.has(key)) continue
+    errors.push(`模板中未找到产出约束：${constraint.expr}`)
+  }
+  return { patched, errors }
+}
+
+/** 按指定炉段原位改写元素 W%/D% 表；表结构不兼容时返回错误，禁止静默保留模板值。 */
+export function patchMetcalElementDistributionsInRange(
+  data: Uint8Array,
+  range: { start: number; end: number },
+  config: OxySideBlowConstraintConfig
+): MetcalDistributionPatchResult {
+  const positioned = collectPositionedPascalTokens(data, range.start, range.end)
+  const tokens = positioned.map((token) => token.text)
+  const startIdx = tokens.findIndex(
+    (token, index) => token === 'Cu' && isConstraintType(tokens[index + 1])
+  )
+  if (startIdx < 0) return { patched: [], errors: ['未定位元素分配约束表'] }
+
+  const desiredByElement = new Map(config.elementDistributions.map((entry) => [entry.element, entry]))
+  const patched: string[] = []
+  const errors: string[] = []
+  let index = startIdx
+
+  while (index < tokens.length) {
+    const metcalElement = tokens[index]
+    if (!isDistElementToken(metcalElement)) break
+    const element = METCAL_DIST_ELEMENT_TO_CONSTRAINT[metcalElement!] ?? metcalElement!
+    const desired = desiredByElement.get(element)
+    index += 1
+
+    for (let productIndex = 0; productIndex < OXY_SIDE_BLOW_PRODUCT_KEYS.length; productIndex += 1) {
+      const typeToken = positioned[index]
+      if (!typeToken || !isConstraintType(typeToken.text)) break
+      const product = OXY_SIDE_BLOW_PRODUCT_KEYS[productIndex]!
+      const desiredRule = desired?.rules.find((rule) => rule.product === product)
+      const currentType = normalizeDistributionRuleType(typeToken.text)
+      index += 1
+      const valueToken = positioned[index]
+      const hasValueToken = Boolean(
+        valueToken &&
+          !isConstraintType(valueToken.text) &&
+          !isDistElementToken(valueToken.text) &&
+          valueToken.text !== '渣精矿' &&
+          !valueToken.text.startsWith('Input')
+      )
+
+      if (!desiredRule || String(desiredRule.value ?? '').trim() === '') {
+        if (hasValueToken && valueToken!.text !== '-' && valueToken!.text !== 'x') {
+          errors.push(`${element}.${product}：模板为有值约束，案例要求留空`)
+        }
+        if (hasValueToken) index += 1
+        continue
+      }
+
+      if (currentType !== desiredRule.type) {
+        if (!writePascalString(data, typeToken.offset, desiredRule.type)) {
+          errors.push(`${element}.${product}：约束类型字段长度不兼容`)
+        } else {
+          patched.push(`${element}.${product}.${desiredRule.type}`)
+        }
+      }
+
+      if (!hasValueToken) {
+        errors.push(`${element}.${product}：模板缺少可写约束值`)
+        continue
+      }
+      const rawValue = desiredRule.value
+      const desiredText =
+        typeof rawValue === 'number'
+          ? formatMetcalNumber(rawValue, valueToken!.length)
+          : String(rawValue).trim() === 'GMC'
+            ? (valueToken!.length === 3 ? 'GMC' : null)
+            : null
+      if (!desiredText || !writePascalString(data, valueToken!.offset, desiredText)) {
+        errors.push(`${element}.${product}：约束值字段长度不兼容`)
+      } else {
+        patched.push(`${element}.${product}`)
+      }
+      index += 1
+    }
+
+    if (
+      isConstraintType(tokens[index]) &&
+      (tokens[index + 1] === '-' || isDistElementToken(tokens[index + 1]))
+    ) {
+      index += 1
+      if (tokens[index] === '-') index += 1
+    }
+  }
+
+  return { patched, errors }
 }
 
 function parseNumericTarget(raw: string): number | null {

@@ -644,7 +644,7 @@ function collectOutputPhaseKmolhs(products: OxyConstraintSolverResult | null): R
   if (!products?.acceptable) return pool
   for (const product of Object.values(products.products)) {
     for (const phase of product.phases) {
-      if (phase.key === 'Other' || phase.mass <= 0) continue
+      if (phase.key === 'Other') continue
       addPhaseKmolh(pool, phase.key, phaseMassThToKmolh(phase.key, phase.mass))
     }
   }
@@ -782,7 +782,6 @@ function outputProductRows(
           } satisfies Record<OxySideBlowProductKey, CopperHeatEnthalpyContext>)[product.key]
         : product.key as CopperHeatEnthalpyContext
     for (const phase of product.phases) {
-      if (phase.mass <= 0) continue
       rows.push({
         section: product.name,
         productKey: product.key,

@@ -1038,6 +1038,87 @@ ipcMain.handle('show-save-dialog-export', async (event, defaultFileName) => {
   }
 })
 
+const EXPORT_BUNDLE_EXTENSIONS = new Set(['.xlsx', '.docx', '.flo'])
+
+function getExportBundleFileName(rawName) {
+  const fileName = path.basename(typeof rawName === 'string' ? rawName : '')
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .trim()
+  const extension = path.extname(fileName).toLowerCase()
+  if (!fileName || !EXPORT_BUNDLE_EXTENSIONS.has(extension)) {
+    throw new Error('导出包中仅允许 Excel、DOCX 和 Flo 文件。')
+  }
+  return fileName
+}
+
+function getExportBundleFolderName(rawName) {
+  const folderName = path.basename(typeof rawName === 'string' ? rawName : '')
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .trim()
+  return folderName || '计算结果导出'
+}
+
+function getExportBundleBuffer(content) {
+  if (content instanceof ArrayBuffer) return Buffer.from(new Uint8Array(content))
+  if (ArrayBuffer.isView(content)) {
+    return Buffer.from(new Uint8Array(content.buffer, content.byteOffset, content.byteLength))
+  }
+  throw new Error('导出文件内容无效。')
+}
+
+function findAvailableExportBundleFolder(parentDirectory, baseName) {
+  let sequence = 1
+  let candidate = path.join(parentDirectory, baseName)
+  while (fs.existsSync(candidate)) {
+    sequence += 1
+    candidate = path.join(parentDirectory, `${baseName}-${sequence}`)
+  }
+  return candidate
+}
+
+ipcMain.handle('export:save-bundle', async (event, payload) => {
+  try {
+    const files = Array.isArray(payload?.files) ? payload.files : []
+    if (files.length === 0) throw new Error('没有可导出的文件。')
+
+    const normalizedFiles = files.map((item) => ({
+      fileName: getExportBundleFileName(item?.fileName),
+      content: getExportBundleBuffer(item?.content),
+    }))
+    if (new Set(normalizedFiles.map((item) => item.fileName.toLowerCase())).size !== normalizedFiles.length) {
+      throw new Error('导出文件名重复。')
+    }
+
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const result = await dialog.showOpenDialog(win ?? undefined, {
+      title: '选择导出文件夹',
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    if (result.canceled || !result.filePaths?.length) return { ok: false, cancelled: true }
+
+    const parentDirectory = path.resolve(result.filePaths[0])
+    const outputDirectory = findAvailableExportBundleFolder(
+      parentDirectory,
+      getExportBundleFolderName(payload?.folderName)
+    )
+    const temporaryDirectory = fs.mkdtempSync(path.join(parentDirectory, `.${path.basename(outputDirectory)}.tmp-`))
+    try {
+      for (const file of normalizedFiles) {
+        fs.writeFileSync(path.join(temporaryDirectory, file.fileName), file.content)
+      }
+      fs.renameSync(temporaryDirectory, outputDirectory)
+    } catch (error) {
+      if (fs.existsSync(temporaryDirectory) && path.dirname(path.resolve(temporaryDirectory)) === parentDirectory) {
+        fs.rmSync(temporaryDirectory, { recursive: true, force: true })
+      }
+      throw error
+    }
+    return { ok: true, folderPath: outputDirectory }
+  } catch (error) {
+    return { ok: false, error: error?.message ?? String(error) }
+  }
+})
+
 ipcMain.handle('export:save-workbook', async (event, payload) => {
   try {
     const win = BrowserWindow.fromWebContents(event.sender)
