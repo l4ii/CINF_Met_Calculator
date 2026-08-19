@@ -72,15 +72,17 @@ export function buildInputMaterialElementSheet({
   blend,
   elements,
   format,
+  summaryName = '混料',
 }: {
   materials: CopperReportMaterial[]
   blend: CopperReportBlend
   elements: CopperReportElement[]
   format: NumberFormatter
+  summaryName?: string
 }): CopperBatchWorkbookSheet {
   const columns = [
     ...materials.map((material) => ({ header: material.header, subHeader: material.name })),
-    { header: '汇总', subHeader: '投入' },
+    { header: '汇总', subHeader: summaryName },
     { header: '汇总', subHeader: '混合干基组成' },
   ]
   const flowValues = (selector: (material: CopperReportMaterial) => number, blendValue: number) => [

@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 
 import {
   buildElementBalanceSheet,
@@ -36,7 +38,7 @@ const inputSheet = buildInputMaterialElementSheet({
   format,
 })
 
-assert.deepEqual(inputSheet.columns.at(-2), { header: '汇总', subHeader: '投入' })
+assert.deepEqual(inputSheet.columns.at(-2), { header: '汇总', subHeader: '混料' })
 assert.equal(inputSheet.rows.find((row) => row.label === '干基量').values.at(-2), '10')
 assert.match(inputSheet.unitNote, /流量 t\/h/)
 assert.doesNotMatch(inputSheet.unitNote, /年量/)
@@ -68,5 +70,17 @@ assert.equal(inputTotal.values[1], '11')
 assert.equal(inputTotal.values[3], '8')
 assert.equal(inputTotal.values[5], '0.111907')
 assert.doesNotMatch(balanceSheet.unitNote, /t\/a/)
+
+for (const path of [
+  '../src/components/modules/copper/shared/CopperOxySideBlowSession.tsx',
+  '../src/components/modules/copper/converting/ConvertingEquipmentPage.tsx',
+]) {
+  const source = await readFile(new URL(path, import.meta.url), 'utf8')
+  assert.match(
+    source,
+    /header: '混料',\s*subHeader: isConvertingStage \? '混料' : '混合铜精矿'/,
+    `${fileURLToPath(new URL(path, import.meta.url))}: converting summary uses 混料`
+  )
+}
 
 console.log('copper report regressions passed')

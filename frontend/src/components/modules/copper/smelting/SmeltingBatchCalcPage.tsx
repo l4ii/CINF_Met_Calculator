@@ -4218,8 +4218,8 @@ export default function SmeltingBatchCalcPage({
     const blendCol: PhaseTableColumn = {
       id: 'blend',
       kind: 'blend',
-      header: isConvertingStage ? '投入' : '混料',
-      subHeader: isConvertingStage ? '投入' : '混合铜精矿',
+      header: '混料',
+      subHeader: isConvertingStage ? '混料' : '混合铜精矿',
       weight: Math.max(0, furnaceFeed.totalWeight - furnaceBlendWaterWeight),
       moisture: furnaceBlend.moisture,
       waterWeight: furnaceBlendWaterWeight,
@@ -4874,7 +4874,11 @@ export default function SmeltingBatchCalcPage({
 
   const buildCalculationExportTable = () => {
     const reportData = buildReportMaterialData()
-    return buildInputMaterialElementSheet({ ...reportData, format: formatTableNumber })
+    return buildInputMaterialElementSheet({
+      ...reportData,
+      format: formatTableNumber,
+      summaryName: inputSummaryColumn?.subHeader ?? inputSummaryColumn?.header,
+    })
   }
 
   const buildElementBalanceExportTable = () => {
@@ -5067,8 +5071,9 @@ export default function SmeltingBatchCalcPage({
       }
       return formatTableNumber(sum / dryWeight)
     }
+    const summaryLabel = inputSummaryColumn?.header || inputSummaryColumn?.subHeader || ''
     const phaseSheet: CopperBatchWorkbookSheet = {
-      title: '混料结果-物相表',
+      title: `${summaryLabel}结果-物相表`,
       columns: [{
         header: inputSummaryColumn?.header ?? '',
         subHeader: inputSummaryColumn?.subHeader ?? inputSummaryColumn?.header ?? '',
