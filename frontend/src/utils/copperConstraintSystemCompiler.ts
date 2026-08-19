@@ -27,7 +27,13 @@ import {
 import type { CopperElementKey } from './copperWorkflowCalc.ts'
 import { COPPER_ELEMENT_KEYS } from './copperWorkflowCalc.ts'
 
-export type EquationKind = 'D%' | 'W%' | 'custom' | 'balance' | 'product_element_closure'
+export type EquationKind =
+  | 'D%'
+  | 'W%'
+  | 'custom'
+  | 'balance'
+  | 'mass_balance'
+  | 'product_element_closure'
 
 export interface CompiledEquation {
   id: string
@@ -97,6 +103,17 @@ function totalProductElementCompoundMass(
     const productName = OXY_PRODUCT_KEY_TO_CN[pk]
     return sum + (table.outputElementMass[productName]?.[feedKey] ?? 0)
   }, 0)
+}
+
+function totalProductMass(table: ConstraintSymbolTable): number {
+  return OXY_SIDE_BLOW_PRODUCT_KEYS.reduce(
+    (sum, productKey) => sum + productTotalMass(table, productKey),
+    0
+  )
+}
+
+function totalInputMass(table: ConstraintSymbolTable): number {
+  return table.inputMass['总投入'] ?? 0
 }
 
 export function compileOxyConstraintSystem(
@@ -169,6 +186,15 @@ export function compileOxyConstraintSystem(
       target: 0,
       label: `元素守恒 ${feedKey}`,
       feedKey,
+    })
+  }
+
+  if (isOxyConvertingConstraintConfig(preparedConfig)) {
+    equations.push({
+      id: 'mass_balance:total',
+      kind: 'mass_balance',
+      target: 0,
+      label: '总质量守恒 Σ产物 = 总投入',
     })
   }
 
@@ -257,6 +283,8 @@ export function evaluateEquationResidual(
       const allocated = totalProductElementCompoundMass(table, equation.feedKey)
       return allocated - feedMass
     }
+    case 'mass_balance':
+      return totalProductMass(table) - totalInputMass(table)
     case 'product_element_closure': {
       if (!equation.productKey) return 0
       return productElementMassSum(table, equation.productKey) - productTotalMass(table, equation.productKey)
@@ -305,6 +333,8 @@ function equationScale(
       if (!equation.feedKey) return 1
       return Math.max(balanceFeedElementWeights[equation.feedKey] ?? 0, 1e-6)
     }
+    case 'mass_balance':
+      return Math.max(totalInputMass(table), totalProductMass(table), 1e-6)
     case 'product_element_closure': {
       if (!equation.productKey) return 1
       return Math.max(productTotalMass(table, equation.productKey), productElementMassSum(table, equation.productKey), productPhaseMass(table, equation.productKey), 1e-6)
@@ -427,6 +457,19 @@ export function equationResidualRow(
     }
   }
 
+  if (equation.kind === 'mass_balance') {
+    const inputMass = totalInputMass(table)
+    const outputMass = totalProductMass(table)
+    return {
+      expr: equation.label,
+      value: outputMass,
+      target: inputMass,
+      residual,
+      relativeResidual: rel,
+      applicable: true as const,
+    }
+  }
+
   if (equation.kind === 'product_element_closure' && equation.productKey) {
     const elementSum = productElementMassSum(table, equation.productKey)
     const productMass = productTotalMass(table, equation.productKey)
@@ -471,6 +514,8 @@ export function formatCompiledEquation(equation: CompiledEquation, index?: numbe
       return `${prefix}${equation.expr ?? equation.label} = ${equation.target}`
     case 'balance':
       return `${prefix}Σ(OutputE.六产物.${equation.feedKey}) = Input.总投入.${equation.feedKey}`
+    case 'mass_balance':
+      return `${prefix}Σ(Output.六产物) = Input.总投入`
     case 'product_element_closure': {
       const product = equation.productKey ? OXY_PRODUCT_KEY_TO_CN[equation.productKey] : ''
       return `${prefix}Σ(OutputE.${product}.所有元素) = Output.${product}（元素w%合计=100%）`

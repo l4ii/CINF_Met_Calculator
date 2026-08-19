@@ -213,8 +213,20 @@ function nonZeroBalanceItems(items: BalanceItem[]) {
 
 function parseBalanceSheet(sheet: ReferenceBatchWorkbookSheet | undefined): BalanceData | null {
   if (!sheet) return null
+  const hourlyMassIndex = sheet.columns.findIndex((column) =>
+    compactLabel(column.header).includes('处理量') &&
+    compactLabel(column.subHeader ?? '').toLowerCase().includes('t/h')
+  )
+  if (hourlyMassIndex < 0) return null
+  const annualMassIndex = sheet.columns.findIndex((column) =>
+    compactLabel(column.header).includes('处理量') &&
+    compactLabel(column.subHeader ?? '').toLowerCase().includes('t/a')
+  )
+  const materialNameIndex = sheet.columns.findIndex((column) =>
+    compactLabel(column.header).includes('物料名称')
+  )
   const elements: BalanceElement[] = []
-  for (let index = 3; index < sheet.columns.length - 1; index += 1) {
+  for (let index = 0; index < sheet.columns.length - 1; index += 1) {
     const column = sheet.columns[index]
     const nextColumn = sheet.columns[index + 1]
     if (!column || !nextColumn) continue
@@ -236,12 +248,15 @@ function parseBalanceSheet(sheet: ReferenceBatchWorkbookSheet | undefined): Bala
       continue
     }
     if (row.role === 'total' || !side) continue
-    const name = String(row.values[0] ?? '').trim()
+    const name = String(row.values[materialNameIndex >= 0 ? materialNameIndex : 0] ?? '').trim()
     if (!name) continue
+    const hourlyMass = numberValue(row.values[hourlyMassIndex])
     const item: BalanceItem = {
       name,
-      annualMass: numberValue(row.values[1]),
-      hourlyMass: numberValue(row.values[2]),
+      annualMass: annualMassIndex >= 0
+        ? numberValue(row.values[annualMassIndex])
+        : hourlyMass * ANNUAL_OPERATING_HOURS,
+      hourlyMass,
       values: row.values,
     }
     if (side === 'input') inputs.push(item)

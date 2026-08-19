@@ -57,6 +57,15 @@ export type OxyConstraintAcceptanceLevel = 'strict' | 'relaxed' | 'failed'
 export const OXY_STRICT_RELATIVE_RESIDUAL = 0.001
 /** 可回填主表的相对残差上限；氧化物物相体系下氧/硫守恒常见 1–3% 级数值残差 */
 export const OXY_RELAXED_RELATIVE_RESIDUAL = 0.03
+/** 吹炼回填的总物料质量闭合阈值；小于显示精度，避免投产出边界不一致。 */
+export const OXY_MATERIAL_MASS_BALANCE_RELATIVE_TOLERANCE = 1e-5
+
+export interface OxyMaterialMassBalance {
+  inputMass: number
+  outputMass: number
+  residual: number
+  relativeResidual: number
+}
 
 export interface OxyConstraintSolverResult {
   valid: boolean
@@ -67,6 +76,7 @@ export interface OxyConstraintSolverResult {
   message?: string
   products: Record<OxySideBlowProductKey, OxyProductResult>
   totalProductMass: number
+  materialMassBalance?: OxyMaterialMassBalance
   iterations: number
   maxRelativeResidual: number
   recommended: {
@@ -102,6 +112,29 @@ export interface OxyConstraintSolverResult {
   elementBalanceResiduals?: Array<{ element: CopperElementKey; feed: number; allocated: number; residual: number }>
 }
 
+function calculateOxyMaterialMassBalance(inputMass: number, outputMass: number): OxyMaterialMassBalance {
+  const residual = outputMass - inputMass
+  const scale = Math.max(Math.abs(inputMass), Math.abs(outputMass), 1e-9)
+  return {
+    inputMass,
+    outputMass,
+    residual,
+    relativeResidual: Math.abs(residual) / scale,
+  }
+}
+
+export function isOxyMaterialMassBalanceClosed(
+  balance: OxyMaterialMassBalance | undefined
+): boolean {
+  return (
+    !balance ||
+    (Number.isFinite(balance.inputMass) &&
+      Number.isFinite(balance.outputMass) &&
+      Number.isFinite(balance.relativeResidual) &&
+      balance.relativeResidual <= OXY_MATERIAL_MASS_BALANCE_RELATIVE_TOLERANCE)
+  )
+}
+
 export type OxyConstraintResidualRow = OxyConstraintSolverResult['constraintResiduals'][number]
 
 function formatConflictNumber(value: number, digits = 4) {
@@ -124,6 +157,9 @@ export function formatConstraintConflictLine(row: OxyConstraintResidualRow): str
   }
   if (row.kind === 'balance') {
     return `${name}：投入 ${formatConflictNumber(row.target)} t/h，产物合计 ${formatConflictNumber(row.value)} t/h（${residualText}）`
+  }
+  if (row.kind === 'mass_balance') {
+    return `${name}：投入 ${formatConflictNumber(row.target)} t/h，产出 ${formatConflictNumber(row.value)} t/h（${residualText}）`
   }
   if (row.kind === 'product_element_closure') {
     return `${name}：产物质量 ${formatConflictNumber(row.target)} t/h，元素合计 ${formatConflictNumber(row.value)} t/h（${residualText}）`
@@ -155,6 +191,8 @@ function buildAcceptanceMessage(params: {
   acceptanceLevel: OxyConstraintAcceptanceLevel
   maxRelativeResidual: number
   allProductsClosed: boolean
+  materialMassBalance?: OxyMaterialMassBalance
+  materialMassBalanceClosed?: boolean
   constraintResiduals: OxyConstraintResidualRow[]
   equationCount: number
   productClosureMessage?: string
@@ -167,6 +205,15 @@ function buildAcceptanceMessage(params: {
   if (acceptanceLevel === 'relaxed') {
     return [
       `近似收敛（上限 ${OXY_RELAXED_RELATIVE_RESIDUAL}）`,
+      conflictNote,
+    ]
+      .filter(Boolean)
+      .join('\n')
+  }
+  if (!params.materialMassBalanceClosed && params.materialMassBalance) {
+    const balance = params.materialMassBalance
+    return [
+      `总质量未闭合：投入 ${formatConflictNumber(balance.inputMass)} t/h，产出 ${formatConflictNumber(balance.outputMass)} t/h，差额 ${formatConflictNumber(balance.residual)} t/h。`,
       conflictNote,
     ]
       .filter(Boolean)
@@ -288,6 +335,12 @@ function buildOxySolverResultFromX(
   )
   const constraintResiduals = buildResidualRowsFromSolution(x, input, config)
   const totalProductMass = OXY_SIDE_BLOW_PRODUCT_KEYS.reduce((sum, pk) => sum + products[pk].mass, 0)
+  const materialMassBalance = calculateOxyMaterialMassBalance(
+    unpacked.balanceFeed.totalWeight,
+    totalProductMass
+  )
+  const materialMassBalanceClosed =
+    !isOxyConvertingConstraintConfig(config) || isOxyMaterialMassBalanceClosed(materialMassBalance)
   const gasWeights = Object.fromEntries(unpacked.airColumns.map((col) => [col.name, col.weight]))
   const solventWeights = Object.fromEntries(unpacked.solventColumns.map((col) => [col.name, col.weight]))
   const productClosureIssues = OXY_SIDE_BLOW_PRODUCT_KEYS
@@ -295,7 +348,11 @@ function buildOxySolverResultFromX(
     .filter((row) => !verifyProductElementTotals(products[row.pk]))
   const allProductsClosed = productClosureIssues.length === 0
   const maxRelativeResidual = maxRelativeResidualFromRows(constraintResiduals)
-  const acceptanceLevel = classifyOxyConstraintAcceptance(maxRelativeResidual, allProductsClosed)
+  const acceptanceLevel = classifyOxyConstraintAcceptance(
+    maxRelativeResidual,
+    allProductsClosed,
+    materialMassBalanceClosed
+  )
   const acceptable = acceptanceLevel !== 'failed'
   const valid = acceptanceLevel === 'strict'
   const equations = compileEquationsForResult(config)
@@ -304,6 +361,8 @@ function buildOxySolverResultFromX(
     acceptanceLevel,
     maxRelativeResidual,
     allProductsClosed,
+    materialMassBalance,
+    materialMassBalanceClosed,
     constraintResiduals,
     equationCount,
     productClosureMessage: !allProductsClosed
@@ -322,6 +381,7 @@ function buildOxySolverResultFromX(
     message,
     products,
     totalProductMass,
+    materialMassBalance,
     iterations: meta.iterations,
     maxRelativeResidual,
     recommended: {
@@ -388,13 +448,21 @@ export async function solveOxySideBlowProducts(input: OxyConstraintSolverInput):
   const allProductsClosed = OXY_SIDE_BLOW_PRODUCT_KEYS.every((pk) =>
     verifyProductElementTotals(result.products[pk])
   )
-  const acceptanceLevel = classifyOxyConstraintAcceptance(solved.maxRelativeResidual, allProductsClosed)
+  const materialMassBalanceClosed =
+    !isOxyConvertingConstraintConfig(config) || isOxyMaterialMassBalanceClosed(result.materialMassBalance)
+  const acceptanceLevel = classifyOxyConstraintAcceptance(
+    solved.maxRelativeResidual,
+    allProductsClosed,
+    materialMassBalanceClosed
+  )
   const acceptable = acceptanceLevel !== 'failed'
   const valid = acceptanceLevel === 'strict'
   const message = buildAcceptanceMessage({
     acceptanceLevel,
     maxRelativeResidual: solved.maxRelativeResidual,
     allProductsClosed,
+    materialMassBalance: result.materialMassBalance,
+    materialMassBalanceClosed,
     constraintResiduals: result.constraintResiduals,
     equationCount: solved.equations.length,
     productClosureMessage: result.message,
@@ -423,9 +491,10 @@ export async function solveOxySideBlowProducts(input: OxyConstraintSolverInput):
 
 export function classifyOxyConstraintAcceptance(
   maxRelativeResidual: number,
-  allProductsClosed = true
+  allProductsClosed = true,
+  materialMassBalanceClosed = true
 ): OxyConstraintAcceptanceLevel {
-  if (!allProductsClosed || !Number.isFinite(maxRelativeResidual)) return 'failed'
+  if (!allProductsClosed || !materialMassBalanceClosed || !Number.isFinite(maxRelativeResidual)) return 'failed'
   if (maxRelativeResidual <= OXY_STRICT_RELATIVE_RESIDUAL) return 'strict'
   if (maxRelativeResidual <= OXY_RELAXED_RELATIVE_RESIDUAL) return 'relaxed'
   return 'failed'

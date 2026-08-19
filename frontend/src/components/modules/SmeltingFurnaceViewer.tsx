@@ -9,7 +9,6 @@ import {
 } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import type { SmeltingFurnaceDesignResult } from '../../utils/copperEquipmentSizing.ts'
 import {
   buildSmeltingFurnaceLayout,
@@ -22,15 +21,10 @@ import {
   type SchematicFlueDims,
 } from '../../utils/copperFurnaceGeometry.ts'
 
-/** 正式炉体外观模型：由 MicroStation/OpenPlant 导出后放到 frontend/public/equipment/ */
-const FURNACE_GLTF_URL = './equipment/side-blown-furnace.glb'
-
 /** 悬停高亮色；水套铜色，风口蓝色 */
 const HIGHLIGHT_COLOR = 0xf97316
 const jacketColor = (darkMode: boolean) => (darkMode ? 0xe0a060 : 0xb87333)
 const tuyereColor = (darkMode: boolean) => (darkMode ? 0x60a5fa : 0x2563eb)
-
-type GltfStatus = 'loading' | 'loaded' | 'absent'
 
 type HoverInfo = { label: string; x: number; y: number }
 
@@ -73,7 +67,7 @@ function fitCameraToBox(
   controls.update()
 }
 
-/** 材质 dispose 不会释放贴图，外观模型可能带贴图，这里一并回收 */
+/** 材质 dispose 不会释放贴图，这里一并回收场景材质引用的贴图。 */
 function disposeMaterial(material: THREE.Material) {
   for (const value of Object.values(material as unknown as Record<string, unknown>)) {
     if (value && (value as THREE.Texture).isTexture) {
@@ -312,7 +306,6 @@ const SmeltingFurnaceViewer = forwardRef<
   const axesPickFnRef = useRef<((clientX: number, clientY: number) => AxisId | null) | null>(null)
   /** 参数化炉体分组：布置变化时整体重建 */
   const parametricRef = useRef<THREE.Group | null>(null)
-  const gltfRef = useRef<THREE.Group | null>(null)
   const jacketMeshRef = useRef<THREE.InstancedMesh | null>(null)
   const tuyereMeshRef = useRef<THREE.InstancedMesh | null>(null)
   const bodyShellRef = useRef<THREE.Object3D | null>(null)
@@ -325,7 +318,6 @@ const SmeltingFurnaceViewer = forwardRef<
   const fittedLayoutRef = useRef<FurnaceLayout | null>(null)
 
   const [webglSupported] = useState(detectWebGLSupport)
-  const [gltfStatus, setGltfStatus] = useState<GltfStatus>('loading')
   const [hover, setHover] = useState<HoverInfo | null>(null)
   const [axesHover, setAxesHover] = useState<AxisId | null>(null)
   const [showBody, setShowBody] = useState(true)
@@ -499,11 +491,6 @@ const SmeltingFurnaceViewer = forwardRef<
         disposeObject(parametricRef.current)
         parametricRef.current = null
       }
-      if (gltfRef.current) {
-        scene.remove(gltfRef.current)
-        disposeObject(gltfRef.current)
-        gltfRef.current = null
-      }
       if (axesRootRef.current) disposeObject(axesRootRef.current)
       axesSceneRef.current = null
       axesCameraRef.current = null
@@ -524,70 +511,6 @@ const SmeltingFurnaceViewer = forwardRef<
       fittedLayoutRef.current = null
     }
   }, [webglSupported])
-
-  // 加载正式外观模型；文件缺失时静默降级为参数化炉体
-  useEffect(() => {
-    if (!webglSupported) return
-    const scene = sceneRef.current
-    if (!scene) return
-    let cancelled = false
-    const loader = new GLTFLoader()
-    loader.load(
-      FURNACE_GLTF_URL,
-      (gltf) => {
-        if (cancelled) return
-        const group = new THREE.Group()
-        group.add(gltf.scene)
-        gltfRef.current = group
-        group.visible = showBody
-        scene.add(group)
-        setGltfStatus('loaded')
-        requestRender()
-      },
-      undefined,
-      () => {
-        if (cancelled) return
-        setGltfStatus('absent')
-      }
-    )
-    return () => {
-      cancelled = true
-    }
-    // showBody 仅用于初次挂载可见性；后续由图层 effect 切换
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [webglSupported])
-
-  // 外观模型按当前炉体尺寸缩放对位：长轴对齐 X、底面贴地、水平居中
-  useEffect(() => {
-    if (gltfStatus !== 'loaded') return
-    const group = gltfRef.current
-    if (!group) return
-    group.rotation.set(0, 0, 0)
-    group.scale.setScalar(1)
-    group.position.set(0, 0, 0)
-    group.updateMatrixWorld(true)
-
-    const rawBox = new THREE.Box3().setFromObject(group)
-    if (rawBox.isEmpty()) return
-    const rawSize = rawBox.getSize(new THREE.Vector3())
-    if (rawSize.z > rawSize.x) {
-      group.rotation.y = Math.PI / 2
-      group.updateMatrixWorld(true)
-    }
-    const orientedBox = new THREE.Box3().setFromObject(group)
-    const orientedSize = orientedBox.getSize(new THREE.Vector3())
-    const longestHorizontal = Math.max(orientedSize.x, 0.001)
-    group.scale.setScalar(layout.body.lengthM / longestHorizontal)
-    group.updateMatrixWorld(true)
-
-    const scaledBox = new THREE.Box3().setFromObject(group)
-    const scaledCenter = scaledBox.getCenter(new THREE.Vector3())
-    group.position.x += -scaledCenter.x
-    group.position.z += -scaledCenter.z
-    group.position.y += -scaledBox.min.y
-    group.updateMatrixWorld(true)
-    requestRender()
-  }, [gltfStatus, layout])
 
   // 参数化炉体、水套与风口：布置或主题变化时重建
   useEffect(() => {
@@ -628,8 +551,7 @@ const SmeltingFurnaceViewer = forwardRef<
     flue.position.y = body.heightM + flueDims.heightM / 2
     bodyShell.add(flue)
 
-    // 正式外观模型到位后隐藏示意炉体，但保留参数化水套与风口叠加显示
-    bodyShell.visible = gltfStatus !== 'loaded' && showBody
+    bodyShell.visible = showBody
     bodyShellRef.current = bodyShell
     group.add(bodyShell)
 
@@ -709,7 +631,7 @@ const SmeltingFurnaceViewer = forwardRef<
     parametricRef.current = group
     scene.add(group)
 
-    // 仅在炉型尺寸变化时重置视角，切换主题或外观模型到位时保留用户当前视角
+    // 仅在炉型尺寸变化时重置视角，切换主题时保留用户当前视角
     if (fittedLayoutRef.current !== layout) {
       const visualHeightM = body.heightM + flueDims.heightM
       const box = new THREE.Box3(
@@ -720,12 +642,11 @@ const SmeltingFurnaceViewer = forwardRef<
       fittedLayoutRef.current = layout
     }
     requestRender()
-  }, [webglSupported, layout, darkMode, gltfStatus])
+  }, [webglSupported, layout, darkMode])
 
   // 图层勾选：不重建场景，只切换可见性
   useEffect(() => {
-    if (gltfRef.current) gltfRef.current.visible = showBody
-    if (bodyShellRef.current) bodyShellRef.current.visible = gltfStatus !== 'loaded' && showBody
+    if (bodyShellRef.current) bodyShellRef.current.visible = showBody
     if (foundationMeshRef.current) foundationMeshRef.current.visible = showBody
     if (jacketMeshRef.current) jacketMeshRef.current.visible = showJackets
     if (tuyereMeshRef.current) tuyereMeshRef.current.visible = showTuyeres
@@ -743,7 +664,7 @@ const SmeltingFurnaceViewer = forwardRef<
       setHover(null)
     }
     requestRender()
-  }, [showBody, showJackets, showTuyeres, gltfStatus, darkMode])
+  }, [showBody, showJackets, showTuyeres, darkMode])
 
   const applyInstanceColor = (mesh: THREE.InstancedMesh, instanceId: number, color: number) => {
     mesh.setColorAt(instanceId, new THREE.Color(color))

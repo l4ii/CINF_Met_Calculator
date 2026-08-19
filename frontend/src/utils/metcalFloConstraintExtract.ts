@@ -899,7 +899,7 @@ function applyConvertingProcessParametersFromConstraints(
 export function extractMetcalConvertingConstraintImport(
   buffer: ArrayBuffer
 ): MetcalConvertingConstraintImportResult {
-  const base = loadOxySideBlowConstraints()
+  const base = loadOxyConvertingConstraints()
   const notes: string[] = []
   const matchedCustomExprs: string[] = []
   const convertingUnit = extractMetcalConvertingUnitInputs(buffer)

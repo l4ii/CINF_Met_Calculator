@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { appSubtitleForLang, appTitleForLang } from '../../constants/appCopy'
 import BackIconButton from '../BackIconButton'
+import MiningAboutPage from './MiningAboutPage'
+import { AboutPageHero, AboutSectionHeading } from './AboutDesignPrimitives'
 // @ts-ignore - react-katex types
 import { InlineMath } from 'react-katex'
 import 'katex/dist/katex.min.css'
@@ -8,7 +10,7 @@ import 'katex/dist/katex.min.css'
 type MunicipalHandbookSpec = { n: number; title: string }
 
 function municipalDocSrc(n: number): string {
-  return `./municipal/doc-image${String(n).padStart(2, '0')}.jpeg`
+  return `./about/2/doc-image${String(n).padStart(2, '0')}.jpeg`
 }
 
 function researchThumbFromFull(full: string): string {
@@ -211,7 +213,7 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
     ],
     metallurgy: [
       {
-        title: '冶金事业部工程实践',
+        title: '矿山事业部工程实践',
         description: '围绕废水治理、浆体输送与工程标准体系，形成稳定的项目交付与技术服务能力。',
         highlights: ['技术体系完整', '工程经验丰富', '多专业协同交付'],
       },
@@ -221,12 +223,12 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
   const departmentNames: Record<string, string> = {
     cinf: '长沙有色冶金设计研究院',
     research: '科研创新中心',
-    metallurgy: '冶金事业部',
+    metallurgy: '冶炼事业部',
   }
 
   const cases = caseStudies[aboutDepartment as keyof typeof caseStudies] || []
   const deptName = departmentNames[aboutDepartment as keyof typeof departmentNames] || ''
-  const wrapCls = `flex-1 min-w-0 overflow-y-auto ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`
+  const wrapCls = `thin-scroll flex-1 min-w-0 overflow-y-auto ${darkMode ? 'bg-gray-800' : 'bg-gray-50'}`
   const pageCls = 'w-full max-w-none px-3 py-4 sm:px-5 lg:px-6 2xl:px-8 2xl:py-6'
   const backButton = (
     <BackIconButton
@@ -241,31 +243,31 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
     const researchCenters: Record<string, { name: string; image: string; placeholder: string }> = {
       recycling: {
         name: '湖南省再生金属资源循环利用工程技术研究中心',
-        image: './info1.jpg',
+        image: './about/rdc/info1.jpg',
         placeholder:
           '湖南省再生金属资源循环利用工程技术研究中心成立于2019年，为省级工程研究中心，由长沙有色冶金设计研究院组建。中心聚焦再生金属资源循环利用，研究方向涵盖多金属复杂物料熔炼、含砷固废治理、废旧动力电池回收等六大关键技术。成果方面，已获得多项省部级优秀设计奖及荣誉证书，技术研发与应用成效显著。',
       },
       leadZinc: {
         name: '湖南省铅锌清洁冶炼工程技术研究中心',
-        image: './info2.jpg',
+        image: './about/rdc/info2.jpg',
         placeholder:
           '湖南省铅锌清洁冶炼工程技术研究中心依托长沙有色冶金设计研究院成立，致力于锌、铜等有色金属的清洁冶炼与智能化关键技术研发，重点方向包括加压浸出、流态化熔炼等。中心承担多项国家及省级重大科研项目，取得显著成效，其中包括国家科技进步二等奖及多项省部级科技一等奖。',
       },
       deepMining: {
         name: '深井矿山安全高效开采技术湖南省工程研究中心',
-        image: './info3.jpg',
+        image: './about/rdc/info3.jpg',
         placeholder:
           '深井矿山安全高效开采技术湖南省工程研究中心由长沙有色冶金设计研究院与中南大学共建，聚焦深地资源绿色开发、矿山固废高值化利用、复杂难采矿体安全开采三大方向。中心团队成果丰硕，已取得多项技术突破与重大工程项目经验，致力于推动深井矿山安全、高效、绿色开采技术发展。',
       },
       safetyMonitor: {
         name: '湖南省矿山安全智能化监控技术与装备工程技术研究中心',
-        image: './info4.jpg',
+        image: './about/rdc/info4.jpg',
         placeholder:
           '湖南省矿山安全智能化监控技术与装备工程技术研究中心聚焦矿山灾害智能监测预警、无人自动巡检及大数据AI分析等方向。成果丰硕，获多项省部级科技奖，如"空天地"一体化监测技术获湖南省科技进步奖二等奖，Online SAR雷达系统获中国有色金属工业科学技术奖一等奖，并入选国家工信部安全应急装备推广案例。',
       },
       smartSmelting: {
         name: '湖南省有色冶金智能制造工程技术研究中心',
-        image: './info5.jpg',
+        image: './about/rdc/info5.jpg',
         placeholder:
           '湖南省有色冶金智能制造工程技术研究中心依托长沙有色冶金设计研究院，专注于数字化交付、大数据分析、智能装备与集成控制等方向。成果丰硕，获国家科技进步二等奖、多项省部级科技一等奖，授权发明专利40余项，制定标准13项，并发表多篇高水平论文。',
       },
@@ -289,15 +291,42 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
             <h1 className={`text-2xl font-bold mb-2 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{appTitle}</h1>
             <p className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{appSubtitle}</p>
           </div>
-          <div className={`rounded-lg shadow-sm border p-6 mb-10 ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-white border-gray-200'}`}>
-            <p className={researchKickerCls}>长沙有色冶金设计研究院有限公司 · 科研创新中心</p>
-            <h2 className={`text-2xl font-bold mb-4 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>科研创新中心</h2>
-            <div className={`space-y-3 text-sm leading-relaxed ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-              <p>{researchIntroP1}</p>
-              <p>{researchIntroP2}</p>
+          <AboutPageHero
+            darkMode={darkMode}
+            index="02"
+            eyebrow="长沙有色冶金设计研究院有限公司 · 科研创新中心"
+            title="科研创新中心"
+            summary={researchIntroP1}
+            specialties={['创新平台建设', '成果转化', '标准与知识产权', '产学研用协同']}
+          >
+            <div className={`border p-5 sm:p-6 ${darkMode ? 'border-gray-700 bg-gray-900/35' : 'border-slate-200 bg-slate-50/75'}`}>
+              <p className={researchKickerCls}>协同方向</p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-4">
+                {[
+                  ['5个', '省级创新平台'],
+                  ['采 · 选 · 冶', '主业技术需求'],
+                  ['绿色低碳', '工程实践方向'],
+                  ['全流程', '成果转化衔接'],
+                ].map(([value, label]) => (
+                  <div key={label} className={`border-l-2 pl-3 ${darkMode ? 'border-blue-400' : 'border-blue-600'}`}>
+                    <strong className={`block text-base font-bold ${darkMode ? 'text-blue-200' : 'text-blue-800'}`}>{value}</strong>
+                    <span className={`mt-0.5 block text-xs leading-5 ${darkMode ? 'text-gray-400' : 'text-slate-500'}`}>{label}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-          {centerOrder.map((key, idx) => {
+          </AboutPageHero>
+
+          <section className="mb-10">
+            <AboutSectionHeading
+              darkMode={darkMode}
+              index="01"
+              eyebrow="创新平台"
+              title="面向工程实践的科研体系"
+              description={researchIntroP2}
+              aside="5个省级平台"
+            />
+            {centerOrder.map((key, idx) => {
             const item = researchCenters[key]
             const imgLoaded = researchPlatformImageLoadedByKey[key] === true
             const useFullInList = researchThumbFallbackByKey[key] === true
@@ -337,6 +366,7 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
                     <p className={capCls}>平台展示 · 点击可放大</p>
                   </div>
                   <div className={`flex flex-col justify-center p-6 sm:p-8 ${isOdd ? 'order-2 lg:order-1' : ''}`}>
+                    <p className={`mb-2 text-[11px] font-bold tracking-[0.16em] ${darkMode ? 'text-blue-300' : 'text-blue-700'}`}>PLATFORM / {String(idx + 1).padStart(2, '0')}</p>
                     <h3 className={sectionTitleCls}>{item.name}</h3>
                     <div className={bodyCls}>
                       <p>{item.placeholder}</p>
@@ -345,7 +375,8 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
                 </div>
               </div>
             )
-          })}
+            })}
+          </section>
           {zoomPlatformImageUrl && (
             <div
               className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 p-4"
@@ -384,6 +415,10 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
   }
 
   if (aboutDepartment === 'metallurgy') {
+    return <MiningAboutPage darkMode={darkMode} appTitle={appTitle} appSubtitle={appSubtitle} onBackToHome={onBackToHome} />
+  }
+
+  if (aboutDepartment === 'mining-legacy') {
     const muniClickImg = (n: number, alt: string, imgCls: string) => (
       <button
         type="button"
@@ -418,7 +453,7 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
             <div
               className={`mb-10 rounded-2xl border px-5 py-7 sm:px-10 sm:py-9 ${darkMode ? 'border-gray-600 bg-gradient-to-br from-slate-900/95 via-gray-900 to-slate-950' : 'border-slate-200/90 bg-gradient-to-br from-white via-slate-50/80 to-blue-50/50 shadow-sm'}`}
             >
-              <p className={sectionKickerCls}>长沙有色冶金设计研究院有限公司 · 冶金事业部</p>
+              <p className={sectionKickerCls}>长沙有色冶金设计研究院有限公司 · 矿山事业部</p>
               <div className="grid grid-cols-1 gap-8 lg:grid-cols-2 lg:gap-10 xl:gap-12 2xl:grid-cols-[minmax(0,1.2fr)_minmax(26rem,0.8fr)] lg:items-start">
                 <div className="min-w-0">
                   <h2 className={`text-2xl sm:text-3xl font-bold tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>冶金工程 · 废水处理及矿浆输送技术</h2>
@@ -589,7 +624,6 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
   }
 
   if (aboutDepartment === 'cinf') {
-    const sectionTitleCls = `text-lg font-bold tracking-tight mb-1 ${darkMode ? 'text-white' : 'text-slate-900'}`
     const sectionKickerCls = `text-[11px] font-semibold uppercase tracking-[0.2em] mb-3 ${darkMode ? 'text-blue-400' : 'text-blue-700'}`
     const panelCls = `rounded-2xl border overflow-hidden shadow-sm ${darkMode ? 'border-gray-600 bg-gray-700/40' : 'border-slate-200 bg-white'}`
     const capCls = `px-3 py-2 text-[11px] shrink-0 ${darkMode ? 'text-gray-400 bg-gray-800/60' : 'text-slate-600 bg-slate-50'}`
@@ -611,41 +645,21 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
             <h1 className={`text-2xl font-bold mb-2 ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>{appTitle}</h1>
             <p className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{appSubtitle}</p>
           </div>
-          <div
-            className={`mb-10 rounded-2xl border px-5 py-7 sm:px-10 sm:py-9 ${darkMode ? 'border-gray-600 bg-gradient-to-br from-slate-900/95 via-gray-900 to-slate-950' : 'border-slate-200/90 bg-gradient-to-br from-white via-slate-50/80 to-blue-50/50 shadow-sm'}`}
+          <AboutPageHero
+            darkMode={darkMode}
+            index="01"
+            eyebrow="长沙有色冶金设计研究院有限公司 · 企业概况"
+            title="有色金属全产业链技术与服务提供商"
+            summary="长沙有色冶金设计研究院有限公司（简称长沙有色院）于1953年正式成立，是我国最早成立的大型综合性设计研究单位之一，隶属于中国铝业集团有限公司，为中铝国际工程股份有限公司子公司。"
+            specialties={['矿山工程', '冶炼工程', '工程总承包', '绿色低碳', '智能制造']}
           >
-            <p className={sectionKickerCls}>长沙有色冶金设计研究院有限公司 · 企业概况</p>
-            <div className="grid grid-cols-1 gap-8 lg:grid-cols-2 lg:gap-10 xl:gap-12 2xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] lg:items-stretch">
-              <div className="min-w-0 flex flex-col justify-center">
-                <h2 className={`text-2xl sm:text-3xl font-bold tracking-tight leading-snug ${darkMode ? 'text-white' : 'text-slate-900'}`}>
-                  有色金属行业全产业链
-                  <br className="hidden sm:block" />
-                  技术与服务提供商
-                </h2>
-                <div className={`mt-4 leading-relaxed text-[15px] sm:text-base ${darkMode ? 'text-gray-200' : 'text-slate-800'}`}>
-                  <p>
-                    <span className="font-semibold">长沙有色冶金设计研究院有限公司</span>
-                    （简称长沙有色院）于1953年正式成立，为国家高新技术企业、国家技术创新示范企业、国家企业技术中心，是我国最早成立的大型综合性设计研究单位之一；隶属于中国铝业集团有限公司，为中铝国际工程股份有限公司子公司。
-                  </p>
-                </div>
-                <div className="mt-5 flex flex-wrap gap-2">
-                  {['国家高新技术企业', '国家技术创新示范企业', '国家企业技术中心', 'AAA级信用企业'].map((c) => (
-                    <span key={c} className={chipCls}>
-                      {c}
-                    </span>
-                  ))}
-                </div>
+            <div className={`relative overflow-hidden border shadow-sm ${darkMode ? 'border-gray-700 bg-black/20' : 'border-slate-200 bg-slate-100'}`}>
+              <div className="aspect-[16/10] w-full">
+                <img src="./about/cinf/chinalco-building.png" alt="长沙有色冶金设计研究院大楼" className="h-full w-full object-cover" loading="lazy" />
               </div>
-              <div className="min-w-0">
-                <div className={`relative overflow-hidden rounded-xl border shadow-sm ${darkMode ? 'border-gray-600 bg-black/20' : 'border-slate-200/90 bg-slate-100'}`}>
-                  <div className="aspect-[16/10] w-full">
-                    <img src="./about/chinalco-building.png" alt="长沙有色冶金设计研究院大楼" className="h-full w-full object-cover" loading="lazy" />
-                  </div>
-                  <p className={capCls}>中国铝业集团 · 长沙有色冶金设计研究院有限公司</p>
-                </div>
-              </div>
+              <p className={capCls}>中国铝业集团 · 长沙有色冶金设计研究院有限公司</p>
             </div>
-          </div>
+          </AboutPageHero>
 
           <div className={`mb-10 ${panelCls}`}>
             <div className={`grid grid-cols-2 sm:grid-cols-4 divide-x divide-y sm:divide-y-0 ${darkMode ? 'divide-gray-600' : 'divide-slate-200'}`}>
@@ -663,7 +677,7 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
               <div className="mx-auto w-full max-w-[min(100%,360px)] shrink-0 sm:max-w-[380px] lg:mx-0 lg:max-w-none xl:max-w-[420px] 2xl:max-w-[460px]">
                 <div className={`overflow-hidden rounded-xl border shadow-sm ${darkMode ? 'border-gray-600 bg-black/20' : 'border-slate-200/90 bg-slate-100'}`}>
                   <img
-                    src="./pic1.png"
+                    src="./about/cinf/pic1.png"
                     alt="长沙有色冶金设计研究院"
                     className="mx-auto block h-auto w-full max-h-[min(620px,62vh)] object-contain object-top sm:max-h-[min(700px,66vh)] lg:max-h-[min(780px,70vh)] xl:max-h-[min(860px,72vh)]"
                     loading="lazy"
@@ -687,8 +701,13 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
                 </div>
               </div>
               <div className="min-w-0">
-                <p className={sectionKickerCls}>历史沿革 · 创新实践</p>
-                <h3 className={sectionTitleCls}>发展历程与组织沿革</h3>
+                <AboutSectionHeading
+                  darkMode={darkMode}
+                  index="01"
+                  eyebrow="历史沿革 · 创新实践"
+                  title="发展历程与组织沿革"
+                  aside="70余年技术积淀"
+                />
                 <div className={`mt-4 space-y-3 leading-relaxed text-[15px] sm:text-base ${darkMode ? 'text-gray-200' : 'text-slate-800'}`}>
                   <p>
                     1954年，长沙有色院由赣州迁至长沙，先后隶属于重工业部、冶金工业部、中国有色金属工业总公司、国家有色金属工业局、中国稀有稀土集团。2000年7月由中央下放到湖南省管理，2007年6月加入中国铝业公司。2011年3月改制为中铝国际出资设立的一人有限责任公司，名称变更为「长沙有色冶金设计研究院有限公司」。2015年3月，中铝国际将山东建设（后更名为南方工程）划转；2024年3月，将长勘院划转到长沙有色院。
@@ -705,15 +724,20 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
 
           <div className={`mb-8 overflow-hidden rounded-2xl border shadow-sm ${darkMode ? 'border-gray-600 bg-gray-800/30' : 'border-slate-200 bg-white'}`}>
             <div className={darkMode ? 'bg-black/25' : 'bg-slate-100'}>
-              <img src="./pic3.jpg" alt="长沙有色院企业形象" className="mx-auto block h-auto w-full max-h-[280px] object-contain sm:max-h-[320px] md:max-h-[380px]" loading="lazy" />
+              <img src="./about/cinf/pic3.jpg" alt="长沙有色院企业形象" className="mx-auto block h-auto w-full max-h-[280px] object-contain sm:max-h-[320px] md:max-h-[380px]" loading="lazy" />
             </div>
             <p className={`border-t px-4 py-2.5 text-center text-xs sm:text-sm ${darkMode ? 'border-gray-600 text-gray-400 bg-gray-900/40' : 'border-slate-200 text-slate-600 bg-slate-50'}`}>企业精神</p>
           </div>
 
           <div className={`mb-10 ${panelCls}`}>
             <div className="p-5 sm:p-6">
-              <p className={sectionKickerCls}>联系方式</p>
-              <h3 className={`text-base font-bold tracking-tight sm:text-lg ${darkMode ? 'text-white' : 'text-slate-900'}`}>公司与业务联系</h3>
+              <AboutSectionHeading
+                darkMode={darkMode}
+                index="02"
+                eyebrow="联系方式"
+                title="公司与业务联系"
+                aside="对外联络"
+              />
               <div className={`mt-3 grid gap-3 rounded-lg border p-4 sm:grid-cols-2 lg:grid-cols-6 lg:gap-x-4 lg:gap-y-2 ${darkMode ? 'border-gray-600 bg-gray-800/35' : 'border-slate-200 bg-slate-50/90'}`}>
                 <div className="min-w-0 sm:col-span-2 lg:col-span-3">
                   <div className={`text-[10px] font-semibold uppercase tracking-wide ${darkMode ? 'text-gray-500' : 'text-gray-500'}`}>联系地址</div>

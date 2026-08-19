@@ -127,8 +127,5 @@ extraResources:
     to: backend/models
     filter:
       - "**/*.gguf"
-  # 炉体 DGN 原件放到 resources/cad，供「打开 DGN 模型」交给本机 MicroStation 打开
-  - from: cad
-    to: cad
   - from: requirements.txt
     to: requirements.txt

@@ -6,6 +6,7 @@ import {
   buildElementBalanceSheet,
   buildInputMaterialElementSheet,
 } from '../src/utils/copperReportSheetBuilders.ts'
+import { prepareReferenceBatchSheets } from '../src/utils/referenceBatchWorkbook.ts'
 
 const format = (value) => String(Number(value.toFixed(6)))
 
@@ -70,6 +71,17 @@ assert.equal(inputTotal.values[1], '11')
 assert.equal(inputTotal.values[3], '8')
 assert.equal(inputTotal.values[5], '0.111907')
 assert.doesNotMatch(balanceSheet.unitNote, /t\/a/)
+
+const preparedSheets = prepareReferenceBatchSheets([balanceSheet])
+const annualBalanceSheet = preparedSheets.find((sheet) => sheet.tableNumber === '6')
+assert.ok(annualBalanceSheet, 'hourly-only element balance produces table 6')
+const annualTotals = annualBalanceSheet.rows.filter((row) => row.role === 'total')
+assert.equal(annualTotals[0].values[3], 11, 'table 6 input mass uses the t/h processing column')
+assert.equal(annualTotals[1].values[3], 11, 'table 6 output mass uses the t/h processing column')
+assert.ok(
+  annualBalanceSheet.columns.some((column) => column.header === 'Cu' && column.subHeader === '%'),
+  'table 6 keeps the first element pair'
+)
 
 for (const path of [
   '../src/components/modules/copper/shared/CopperOxySideBlowSession.tsx',
