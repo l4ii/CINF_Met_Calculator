@@ -17,7 +17,7 @@
 
 - [ ] **Step 1: Write the failing validation script**
 
-The script must resolve the repository root from its own location and assert that the shared primitive, mining page, AboutPage identity branches, and required copied assets exist. It must assert the exact title strings `ABOUT / 01`, `ABOUT / 02`, `ABOUT / 03`, `科研创新中心`, and `冶炼事业部` in the source files. Exit with code 1 and an explanatory error when any assertion fails.
+The script must resolve the repository root from its own location and assert that the shared primitive, mining page, AboutPage identity branches, and required copied assets exist. It must assert the exact title strings `ABOUT / 01`, `ABOUT / 02`, `ABOUT / 03`, `科研创新中心`, and `冶金事业部` in the source files. Exit with code 1 and an explanatory error when any assertion fails.
 
 - [ ] **Step 2: Run it and verify the expected failure**
 
@@ -57,7 +57,7 @@ Use the reference `AboutPage.tsx` as the base so company and research pages use 
 
 - [ ] **Step 2: Map the department branch to `metallurgy`**
 
-Change the reference branch guard from `aboutDepartment === 'mining'` to `aboutDepartment === 'metallurgy'`. Change the `MiningAboutPage` props passed from that branch so the page uses the current application title/subtitle while the component renders the identity text `长沙有色院 · 冶炼事业部` and `冶炼事业部`. Do not add a `mining` route and do not change `Sidebar.tsx`.
+Change the reference branch guard from `aboutDepartment === 'mining'` to `aboutDepartment === 'metallurgy'`. Change the `MiningAboutPage` props passed from that branch so the page uses the current application title/subtitle while the component renders the identity text `长沙有色院 · 冶金事业部` and `冶金事业部`. Do not add a `mining` route and do not change `Sidebar.tsx`.
 
 - [ ] **Step 3: Preserve current Met-specific imports and compile compatibility**
 
@@ -91,7 +91,7 @@ Open the app and select the three sidebar entries. Confirm the visible headings 
 ```text
 ABOUT / 01   有色金属全产业链技术与服务提供商
 ABOUT / 02   科研创新中心
-ABOUT / 03   冶炼事业部
+ABOUT / 03   冶金事业部
 ```
 
 Confirm research images load, department images load, dark mode does not obscure text, and the back button returns to the home/module view.
@@ -99,4 +99,3 @@ Confirm research images load, department images load, dark mode does not obscure
 - [ ] **Step 4: Record final verification**
 
 Run `git diff --check`, `node frontend/scripts/validate-about-pages.mjs`, `npx tsc --noEmit -p frontend/tsconfig.json`, and `npm run build --prefix frontend` after the final edits. Report each exit status and preserve unrelated existing worktree changes.
-

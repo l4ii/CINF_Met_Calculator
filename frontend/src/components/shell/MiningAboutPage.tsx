@@ -196,8 +196,8 @@ export default function MiningAboutPage({ darkMode, appTitle, appSubtitle, onBac
           <AboutPageHero
             darkMode={darkMode}
             index="03"
-            eyebrow="长沙有色院 · 冶炼事业部"
-            title="冶炼事业部"
+            eyebrow="长沙有色院 · 冶金事业部"
+            title="冶金事业部"
             summary="经过70余年的技术积累，长沙有色院持续服务国内外矿山工程建设，在高寒高海拔、超深井、复杂难采和绿色智能矿山领域形成了完整的技术体系。"
             specialties={['规划咨询', '工程设计', 'EPC总承包', '科研与技术开发']}
           >

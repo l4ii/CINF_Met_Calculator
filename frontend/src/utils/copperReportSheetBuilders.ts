@@ -73,22 +73,27 @@ export function buildInputMaterialElementSheet({
   elements,
   format,
   summaryName = '混料',
+  includeSummary = true,
 }: {
   materials: CopperReportMaterial[]
   blend: CopperReportBlend
   elements: CopperReportElement[]
   format: NumberFormatter
   summaryName?: string
+  includeSummary?: boolean
 }): CopperBatchWorkbookSheet {
   const columns = [
     ...materials.map((material) => ({ header: material.header, subHeader: material.name })),
-    { header: '汇总', subHeader: summaryName },
-    { header: '汇总', subHeader: '混合干基组成' },
+    ...(includeSummary
+      ? [
+          { header: '汇总', subHeader: summaryName },
+          { header: '汇总', subHeader: '混合干基组成' },
+        ]
+      : []),
   ]
   const flowValues = (selector: (material: CopperReportMaterial) => number, blendValue: number) => [
     ...materials.map((material) => format(selector(material))),
-    format(blendValue),
-    '',
+    ...(includeSummary ? [format(blendValue), ''] : []),
   ]
   const rows: CopperBatchExportRow[] = [
     { label: '流量', values: blankValues(columns.length), role: 'section' },
@@ -112,16 +117,14 @@ export function buildInputMaterialElementSheet({
       label: element.label,
       values: [
         ...materials.map((material) => format(elementValue(material.composition, element))),
-        '',
-        format(elementValue(blend.composition, element)),
+        ...(includeSummary ? ['', format(elementValue(blend.composition, element))] : []),
       ],
     })),
     {
       label: '合计',
       values: [
         ...materials.map((material) => format(material.compositionTotal)),
-        '',
-        format(blend.compositionTotal),
+        ...(includeSummary ? ['', format(blend.compositionTotal)] : []),
       ],
       role: 'total',
     },
@@ -132,7 +135,7 @@ export function buildInputMaterialElementSheet({
     rows,
     unitNote: '流量 t/h；元素组成 w%（干基）',
     rowHeaderLabel: '项目',
-    columnWidthWeights: [1.65, ...materials.map(() => 1), 1, 1.15],
+    columnWidthWeights: [1.65, ...materials.map(() => 1), ...(includeSummary ? [1, 1.15] : [])],
     reportDensity: columns.length > 10 || rows.length > 24 ? 'compact' : 'normal',
     reportLayout: 'inputMaterialElement',
   }
@@ -221,7 +224,13 @@ export function buildElementBalanceSheet({
   const activeOutputs = outputs.filter(
     (product) =>
       product.name.trim() &&
-      (product.massTh > 0 || product.productKey === 'fugitive' || product.name.includes('无组织排放'))
+      (
+        product.massTh > 0 ||
+        product.productKey === 'fugitive' ||
+        product.productKey === 'loss' ||
+        product.name.includes('无组织排放') ||
+        product.name.includes('损失')
+      )
   )
   const selectedElements = balanceElements(elements)
   if (activeInputs.length === 0 || activeOutputs.length === 0 || selectedElements.length === 0) return null

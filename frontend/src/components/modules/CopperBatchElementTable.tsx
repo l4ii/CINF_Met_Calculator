@@ -374,6 +374,24 @@ export function CopperBatchElementTable({
     decomposeElementTableRatios(ratios, elementDisplayMode)
   const displayRatioValue = (ratios: Partial<Record<CopperElementKey, number>>, element: string) =>
     elementDisplayRatios(ratios)[element] ?? 0
+  const furnaceWetRatios = useMemo(() => {
+    const dryMass = Math.max(0, feedTotalWeight)
+    const waterMass = Math.max(0, furnaceBlendWaterWeight)
+    const totalMass = dryMass + waterMass
+    if (totalMass <= 0) return furnaceFeedRatios
+    const keys = new Set<string>([
+      ...Object.keys(furnaceFeedRatios),
+      WATER_H_KEY,
+      WATER_O_KEY,
+    ])
+    return Object.fromEntries(
+      [...keys].map((key) => {
+        const dryElementMass = dryMass * Math.max(0, furnaceFeedRatios[key] ?? 0) / 100
+        const waterElementMass = waterMass * Math.max(0, WATER_ELEMENT_RATIOS[key as keyof typeof WATER_ELEMENT_RATIOS] ?? 0) / 100
+        return [key, ((dryElementMass + waterElementMass) / totalMass) * 100]
+      })
+    ) as Partial<Record<CopperElementKey, number>>
+  }, [feedTotalWeight, furnaceBlendWaterWeight, furnaceFeedRatios])
   const displayDraftToStorageDraft = (
     displayElement: string,
     ratios: Partial<Record<CopperElementKey, number>>,
@@ -1100,7 +1118,7 @@ export function CopperBatchElementTable({
           ))}
           <Fragment key="blend-group">
             <tr>
-              <td rowSpan={2} className={categoryRowSpanCellClass(darkMode, 'total')}>
+              <td className={categoryRowSpanCellClass(darkMode, 'total')}>
                 投入
               </td>
               <td className={stickyCellClass(darkMode, 'total', 'name')} style={nameColStyle(nameColWidth)}>
@@ -1109,8 +1127,8 @@ export function CopperBatchElementTable({
               <td className={`${dataCellClass(darkMode, 'total')} font-semibold`}>
                 <BatchTableNumericReadonly
                   darkMode={darkMode}
-                  value={feedTotalWeight}
-                  helpTitle={`投入总计（干基） ${formatTableNumber(feedTotalWeight)} t/h`}
+                  value={feedTotalWeight + furnaceBlendWaterWeight}
+                  helpTitle={`投入总计（湿基） ${formatTableNumber(feedTotalWeight + furnaceBlendWaterWeight)} t/h`}
                   className="text-sm font-semibold"
                 />
               </td>
@@ -1118,7 +1136,7 @@ export function CopperBatchElementTable({
                 <td key={`blend-${element}`} className={dataCellClass(darkMode, 'total')}>
                   <BatchTableNumericReadonly
                     darkMode={darkMode}
-                    value={displayRatioValue(furnaceFeedRatios, element)}
+                    value={displayRatioValue(furnaceWetRatios, element)}
                     className="text-sm"
                   />
                 </td>
@@ -1138,10 +1156,6 @@ export function CopperBatchElementTable({
                 />
               </td>
             </tr>
-            {renderMaterialWaterRow('blend-water', 'total', {
-              waterWeightDisplay: furnaceBlendWaterWeight,
-              waterWeightHelpTitle: `投入总计含水 ${formatTableNumber(furnaceBlendWaterWeight)} t/h`,
-            })}
           </Fragment>
           {showProductRows &&
             (() => {

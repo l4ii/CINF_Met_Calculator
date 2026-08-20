@@ -189,14 +189,15 @@ export function compileOxyConstraintSystem(
     })
   }
 
-  if (isOxyConvertingConstraintConfig(preparedConfig)) {
-    equations.push({
-      id: 'mass_balance:total',
-      kind: 'mass_balance',
-      target: 0,
-      label: '总质量守恒 Σ产物 = 总投入',
-    })
-  }
+  // 所有工序都按湿基边界闭合：原料/熔剂/煤/工艺气及各自水分的总投入，
+  // 必须等于六股产物总量。不能只在吹炼阶段验收，否则熔炼可以在元素残差可接受时
+  // 仍带着总量差额回填到主表。
+  equations.push({
+    id: 'mass_balance:total',
+    kind: 'mass_balance',
+    target: 0,
+    label: '总质量守恒（湿基）Σ产物 = Σ投入',
+  })
 
   for (const productKey of OXY_SIDE_BLOW_PRODUCT_KEYS) {
     equations.push({

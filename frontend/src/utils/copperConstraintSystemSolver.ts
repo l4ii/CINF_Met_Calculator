@@ -380,7 +380,7 @@ export function buildResidualRowsFromSolution(
 ) {
   const specs = buildUnknownSpecs(config, baseInput)
   const equations = compileOxyConstraintSystem(config, { includeSoftCustom: true })
-  const unpacked = unpackProjectedUnknowns(x, specs, baseInput, config)
+  const unpacked = unpackProjectedUnknowns(x, specs, baseInput, config, { enforceMassClosure: true })
   const table = buildSymbolTableFromUnknowns(unpacked, baseInput, config)
   return equations.map((equation) => {
     const row = equationResidualRow(

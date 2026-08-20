@@ -159,7 +159,9 @@ function feedLeakAirVolumeFromMassTh(massTh: number): number {
 }
 
 export function derivedFuelDryMass(baseInput: OxyConstraintBaseInput, config: OxySideBlowConstraintConfig): number {
-  if (baseInput.preserveFuelInputWeight) return Math.max(0, baseInput.fuelColumn.weight)
+  if (baseInput.preserveFuelInputWeight || baseInput.manualInputWeights?.fuel) {
+    return Math.max(0, baseInput.fuelColumn.weight)
+  }
   return Math.max(0, baseInput.concentrateMass) * resolveFuelConcentrateRatioTarget(config)
 }
 
@@ -219,10 +221,41 @@ export interface OxyConstraintBaseInput {
    * false/undefined：兼容旧流程，按 customConstraints 中“煤/混合铜精矿”目标派生煤量。
    */
   preserveFuelInputWeight?: boolean
+  /**
+   * 用户显式填写的辅助物料量。未标记的列从 0 起算并由约束系统求解；
+   * 标记列保持输入值，若其与工艺约束冲突则由残差明确报告，而不是被静默改写。
+   */
+  manualInputWeights?: {
+    fuel?: boolean
+    solvents?: Record<string, boolean>
+    gases?: Record<string, boolean>
+  }
   inputPhaseMass?: Record<string, Record<string, number>>
   fuelColumn: CopperMaterialColumn
   solventColumns: CopperMaterialColumn[]
   airColumns: CopperMaterialColumn[]
+}
+
+function isManualColumnWeight(
+  flags: Record<string, boolean> | undefined,
+  column: CopperMaterialColumn | undefined
+): boolean {
+  if (!column) return false
+  return Boolean(flags?.[column.id] || flags?.[column.name])
+}
+
+function isManualSolventWeight(
+  baseInput: OxyConstraintBaseInput,
+  column: CopperMaterialColumn | undefined
+): boolean {
+  return isManualColumnWeight(baseInput.manualInputWeights?.solvents, column)
+}
+
+function isManualGasWeight(
+  baseInput: OxyConstraintBaseInput,
+  column: CopperMaterialColumn | undefined
+): boolean {
+  return isManualColumnWeight(baseInput.manualInputWeights?.gases, column)
 }
 
 export interface UnpackedUnknowns {
@@ -678,6 +711,7 @@ export function buildUnknownSpecs(config: OxySideBlowConstraintConfig, baseInput
     })
   }
   for (const [solventIndex, solvent] of (baseInput?.solventColumns ?? []).entries()) {
+    if (baseInput && isManualSolventWeight(baseInput, solvent)) continue
     specs.push({
       id: `solvent:${solvent.id || solventIndex}:${solvent.name || solventIndex}`,
       kind: 'solvent_mass',
@@ -685,6 +719,8 @@ export function buildUnknownSpecs(config: OxySideBlowConstraintConfig, baseInput
     })
   }
   for (const inputName of SOLVER_INPUT_MASS_UNKNOWN_NAMES) {
+    const inputColumn = baseInput?.airColumns.find((column) => column.name === inputName)
+    if (baseInput && isManualGasWeight(baseInput, inputColumn)) continue
     // 吹炼等无二次风列时不把二次风列为未知量，避免无约束自由度干扰收敛
     if (
       inputName === '二次风' &&
@@ -810,16 +846,45 @@ function oxygenGasMassForVolumeFraction(
 
 function adjustPrimaryAirOxygenMix(
   unpacked: UnpackedUnknowns,
+  baseInput: OxyConstraintBaseInput,
   config: OxySideBlowConstraintConfig
 ) {
   const processAir = findAirColumn(unpacked.airColumns, '空气')
   const oxygen = findAirColumn(unpacked.airColumns, '氧气')
+  const airLocked = isManualGasWeight(baseInput, processAir)
+  const oxygenLocked = isManualGasWeight(baseInput, oxygen)
+  if (airLocked && oxygenLocked) return
+
+  const target = resolvePrimaryOxygenEnrichmentTarget(config)
+  const airRates = gasMoleRatesPerDryTon(processAir)
+  const oxygenRates = gasMoleRatesPerDryTon(oxygen)
+
+  if (oxygenLocked) {
+    const oxygenMass = Math.max(0, unpacked.gasMass['氧气'] ?? 0)
+    const denominator = target * airRates.total - airRates.o2
+    const numerator = oxygenMass * (oxygenRates.o2 - target * oxygenRates.total)
+    if (Math.abs(denominator) > 1e-12) {
+      unpacked.gasMass['空气'] = Math.max(0, numerator / denominator)
+    }
+    return
+  }
+
+  if (airLocked) {
+    const airMass = Math.max(0, unpacked.gasMass['空气'] ?? 0)
+    const denominator = oxygenRates.o2 - target * oxygenRates.total
+    const numerator = airMass * (target * airRates.total - airRates.o2)
+    if (Math.abs(denominator) > 1e-12) {
+      unpacked.gasMass['氧气'] = Math.max(0, numerator / denominator)
+    }
+    return
+  }
+
   const totalPrimaryOxygenGas = Math.max(0, unpacked.gasMass['空气'] ?? 0) + Math.max(0, unpacked.gasMass['氧气'] ?? 0)
   const oxygenMass = oxygenGasMassForVolumeFraction(
     totalPrimaryOxygenGas,
     processAir,
     oxygen,
-    resolvePrimaryOxygenEnrichmentTarget(config)
+    target
   )
   if (oxygenMass != null) {
     unpacked.gasMass['氧气'] = oxygenMass
@@ -841,6 +906,7 @@ function adjustSecondaryAirSupply(
     ((cuFeS2Sulfur / 4 + feS2Sulfur / 2) / atomicMass('S')) * 0.7 +
     (fuelCarbon / 12) * 0.7
   const secondaryAir = findAirColumn(unpacked.airColumns, '二次风')
+  if (isManualGasWeight(baseInput, secondaryAir)) return
   const secondaryOxygenFraction = columnElementFraction(secondaryAir, 'O(氧)')
   if (oxygenMolesTarget > 0 && secondaryOxygenFraction > 0) {
     unpacked.gasMass['二次风'] =
@@ -855,6 +921,7 @@ function adjustSecondaryAirSupply(
  */
 function raisePrimaryOxygenGasToDeliver(
   unpacked: UnpackedUnknowns,
+  baseInput: OxyConstraintBaseInput,
   config: OxySideBlowConstraintConfig,
   primaryOxygenNeeded: number,
   sulfurScale: number
@@ -863,6 +930,7 @@ function raisePrimaryOxygenGasToDeliver(
 
   const processAir = findAirColumn(unpacked.airColumns, '空气')
   const oxygenCol = findAirColumn(unpacked.airColumns, '氧气')
+  if (isManualGasWeight(baseInput, processAir) || isManualGasWeight(baseInput, oxygenCol)) return
   const enrichment = resolvePrimaryOxygenEnrichmentTarget(config)
   let lo = Math.max(1, primaryOxygenNeeded)
   let hi = Math.max(lo * 2, sulfurScale * 8, 80)
@@ -895,6 +963,7 @@ function raisePrimaryOxygenGasToDeliver(
  */
 function adjustConvertingPrimaryOxygenSupply(
   unpacked: UnpackedUnknowns,
+  baseInput: OxyConstraintBaseInput,
   config: OxySideBlowConstraintConfig
 ) {
   if (!isOxyConvertingConstraintConfig(config)) return
@@ -926,7 +995,7 @@ function adjustConvertingPrimaryOxygenSupply(
   const leakMass = Math.max(0, unpacked.gasMass['加料口漏风'] ?? 0)
   const leakOxygen = leakMass * columnElementFraction(leakCol, 'O(氧)')
   const primaryOxygenNeeded = Math.max(0, inletOxygenNeeded - leakOxygen)
-  raisePrimaryOxygenGasToDeliver(unpacked, config, primaryOxygenNeeded, sulfur)
+  raisePrimaryOxygenGasToDeliver(unpacked, baseInput, config, primaryOxygenNeeded, sulfur)
 }
 
 /**
@@ -936,6 +1005,7 @@ function adjustConvertingPrimaryOxygenSupply(
  */
 function adjustSmeltingPrimaryOxygenSupply(
   unpacked: UnpackedUnknowns,
+  baseInput: OxyConstraintBaseInput,
   config: OxySideBlowConstraintConfig
 ) {
   if (isOxyConvertingConstraintConfig(config)) return
@@ -975,7 +1045,7 @@ function adjustSmeltingPrimaryOxygenSupply(
     Math.max(0, unpacked.gasMass['加料口漏风'] ?? 0) * columnElementFraction(leakCol, 'O(氧)')
   const otherOxygen = secondaryOxygen + leakOxygen
   const primaryOxygenNeeded = Math.max(0, inletOxygenNeeded - otherOxygen)
-  raisePrimaryOxygenGasToDeliver(unpacked, config, primaryOxygenNeeded, sulfur)
+  raisePrimaryOxygenGasToDeliver(unpacked, baseInput, config, primaryOxygenNeeded, sulfur)
 }
 
 function applyHardInputGasConstraints(
@@ -983,9 +1053,12 @@ function applyHardInputGasConstraints(
   baseInput: OxyConstraintBaseInput,
   config: OxySideBlowConstraintConfig
 ) {
-  unpacked.gasMass['加料口漏风'] = resolveFeedLeakAirMassTarget(config)
+  const leakAir = findAirColumn(unpacked.airColumns, '加料口漏风')
+  if (!isManualGasWeight(baseInput, leakAir)) {
+    unpacked.gasMass['加料口漏风'] = resolveFeedLeakAirMassTarget(config)
+  }
   adjustSecondaryAirSupply(unpacked, baseInput, config)
-  adjustPrimaryAirOxygenMix(unpacked, config)
+  adjustPrimaryAirOxygenMix(unpacked, baseInput, config)
 }
 
 function applyHardInputMassConstraints(
@@ -1004,11 +1077,14 @@ function applyInitialInputMassGuess(
   baseInput: OxyConstraintBaseInput,
   config: OxySideBlowConstraintConfig
 ) {
-  unpacked.gasMass['加料口漏风'] = resolveFeedLeakAirMassTarget(config)
+  const leakAir = findAirColumn(unpacked.airColumns, '加料口漏风')
+  if (!isManualGasWeight(baseInput, leakAir)) {
+    unpacked.gasMass['加料口漏风'] = resolveFeedLeakAirMassTarget(config)
+  }
   adjustSecondaryAirSupply(unpacked, baseInput, config)
-  adjustConvertingPrimaryOxygenSupply(unpacked, config)
-  adjustSmeltingPrimaryOxygenSupply(unpacked, config)
-  adjustPrimaryAirOxygenMix(unpacked, config)
+  adjustConvertingPrimaryOxygenSupply(unpacked, baseInput, config)
+  adjustSmeltingPrimaryOxygenSupply(unpacked, baseInput, config)
+  adjustPrimaryAirOxygenMix(unpacked, baseInput, config)
 }
 
 function applyInitialSlagPhaseGuess(unpacked: UnpackedUnknowns) {
@@ -1492,6 +1568,7 @@ function applyConvertingOtherIronReserve(unpacked: UnpackedUnknowns, config: Oxy
 
 function applyHardSilicaSolventForSlagFeSiO2(
   unpacked: UnpackedUnknowns,
+  baseInput: OxyConstraintBaseInput,
   config: OxySideBlowConstraintConfig
 ) {
   if (isOxyConvertingConstraintConfig(config)) return
@@ -1500,6 +1577,7 @@ function applyHardSilicaSolventForSlagFeSiO2(
   const silicaSolventIndex = unpacked.solventColumns.findIndex((column) => column.name === '石英石')
   if (silicaSolventIndex < 0) return
   const silicaColumn = unpacked.solventColumns[silicaSolventIndex]!
+  if (isManualSolventWeight(baseInput, silicaColumn)) return
   const silicaFraction = (closeRatiosForBalance(silicaColumn.ratios)['SiO₂(二氧化硅)'] ?? 0) / 100
   if (silicaFraction <= 1e-9) return
 
@@ -1669,11 +1747,12 @@ export function unpackProjectedUnknowns(
   x: number[],
   specs: UnknownSpec[],
   baseInput: OxyConstraintBaseInput,
-  config: OxySideBlowConstraintConfig
+  config: OxySideBlowConstraintConfig,
+  options: { enforceMassClosure?: boolean } = {}
 ): UnpackedUnknowns {
   const inputProjected = unpackUnknowns(x, specs, baseInput, config)
   applyHardInputMassConstraints(inputProjected, baseInput, config)
-  applyHardSilicaSolventForSlagFeSiO2(inputProjected, config)
+  applyHardSilicaSolventForSlagFeSiO2(inputProjected, baseInput, config)
   // 先写入投影后的气/熔剂，再 unpack，保证 airColumns / balanceFeed 与 gasMass 一致
   let unpacked = unpackUnknowns(packUnknowns(inputProjected, specs), specs, baseInput, config)
   // 最终再投影一次气量（富氧分裂/二次风/漏风），避免 pack/unpack 夹缝导致验收看到未投影比例
@@ -1686,6 +1765,7 @@ export function unpackProjectedUnknowns(
   applyDirectlySolvablePhaseConstraints(unpacked, config)
   applyHardOutputPhaseConstraints(unpacked, config)
   applyConvertingOtherIronReserve(unpacked, config)
+  if (options.enforceMassClosure) applyHardWetMassClosure(unpacked)
   // 硬投影后再同步总量，避免直接矫正物相后 productMass 滞后
   unpacked.productMasses = productMassesFromPhaseSums(unpacked.outputPhases)
   for (const pk of OXY_SIDE_BLOW_PRODUCT_KEYS) {
@@ -1705,6 +1785,40 @@ function productMassesFromPhaseSums(
   return Object.fromEntries(
     OXY_SIDE_BLOW_PRODUCT_KEYS.map((pk) => [pk, productPhaseMass(outputPhases[pk] ?? {})])
   ) as Record<OxySideBlowProductKey, number>
+}
+
+/**
+ * 湿基总质量硬投影。
+ *
+ * 相质量已经由元素分配、物相比和工艺气约束确定后，数值迭代仍可能残留很小的
+ * 总量误差。对六股产物做同一比例缩放可精确满足 Σ产物 = Σ湿基投入，同时保持
+ * 各产物的 W%、各元素 D% 以及相间比例不变；其他硬约束仍由残差系统继续验收。
+ */
+function applyHardWetMassClosure(unpacked: UnpackedUnknowns) {
+  const inputMass = Math.max(0, unpacked.balanceFeed.totalWeight)
+  const outputMass = OXY_SIDE_BLOW_PRODUCT_KEYS.reduce(
+    (sum, productKey) => sum + productPhaseMass(unpacked.outputPhases[productKey] ?? {}),
+    0
+  )
+  if (!(inputMass > 0) || !(outputMass > 1e-12)) return
+
+  const factor = inputMass / outputMass
+  if (!Number.isFinite(factor) || factor <= 0 || Math.abs(factor - 1) <= 1e-14) return
+
+  for (const productKey of OXY_SIDE_BLOW_PRODUCT_KEYS) {
+    for (const phaseKey of Object.keys(unpacked.outputPhases[productKey] ?? {})) {
+      unpacked.outputPhases[productKey][phaseKey] = Math.max(
+        0,
+        (unpacked.outputPhases[productKey][phaseKey] ?? 0) * factor
+      )
+    }
+    for (const elementKey of Object.keys(unpacked.outputElementMasses[productKey] ?? {}) as CopperElementKey[]) {
+      unpacked.outputElementMasses[productKey][elementKey] = Math.max(
+        0,
+        (unpacked.outputElementMasses[productKey][elementKey] ?? 0) * factor
+      )
+    }
+  }
 }
 
 function mergeElementMasses(

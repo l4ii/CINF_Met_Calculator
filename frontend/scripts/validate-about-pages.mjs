@@ -16,7 +16,7 @@ const checks = [
   {
     label: 'department page',
     file: path.join(sourceRoot, 'MiningAboutPage.tsx'),
-    includes: ['index="03"', '冶炼事业部'],
+    includes: ['index="03"', '冶金事业部'],
   },
   {
     label: 'about page',

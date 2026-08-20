@@ -213,7 +213,7 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
     ],
     metallurgy: [
       {
-        title: '矿山事业部工程实践',
+        title: '冶金事业部工程实践',
         description: '围绕废水治理、浆体输送与工程标准体系，形成稳定的项目交付与技术服务能力。',
         highlights: ['技术体系完整', '工程经验丰富', '多专业协同交付'],
       },
@@ -223,7 +223,7 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
   const departmentNames: Record<string, string> = {
     cinf: '长沙有色冶金设计研究院',
     research: '科研创新中心',
-    metallurgy: '冶炼事业部',
+    metallurgy: '冶金事业部',
   }
 
   const cases = caseStudies[aboutDepartment as keyof typeof caseStudies] || []
@@ -453,7 +453,7 @@ export default function AboutPage({ darkMode, language, aboutDepartment, onBackT
             <div
               className={`mb-10 rounded-2xl border px-5 py-7 sm:px-10 sm:py-9 ${darkMode ? 'border-gray-600 bg-gradient-to-br from-slate-900/95 via-gray-900 to-slate-950' : 'border-slate-200/90 bg-gradient-to-br from-white via-slate-50/80 to-blue-50/50 shadow-sm'}`}
             >
-              <p className={sectionKickerCls}>长沙有色冶金设计研究院有限公司 · 矿山事业部</p>
+              <p className={sectionKickerCls}>长沙有色冶金设计研究院有限公司 · 冶金事业部</p>
               <div className="grid grid-cols-1 gap-8 lg:grid-cols-2 lg:gap-10 xl:gap-12 2xl:grid-cols-[minmax(0,1.2fr)_minmax(26rem,0.8fr)] lg:items-start">
                 <div className="min-w-0">
                   <h2 className={`text-2xl sm:text-3xl font-bold tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>冶金工程 · 废水处理及矿浆输送技术</h2>

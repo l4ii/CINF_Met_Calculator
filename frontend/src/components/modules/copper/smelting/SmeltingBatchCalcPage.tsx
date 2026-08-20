@@ -32,6 +32,14 @@ import {
   type CopperReportMaterial,
 } from '../../../../utils/copperReportSheetBuilders.ts'
 import {
+  copperStageExportProfile,
+  copperStageExportSheetKeys,
+} from '../../../../utils/copperStageExportProfile.ts'
+import {
+  resolveOxySolverColdStartInputs,
+  resolveOxySolverRecommendedInputs,
+} from '../../../../utils/copperOxySolverInputs.ts'
+import {
   patchCopperMetcalFloCase,
   type CopperMetcalFloStagePayload,
 } from '../../../../utils/copperMetcalFloCase.ts'
@@ -325,7 +333,7 @@ import {
   fuelSearchSensitivityAbnormal,
   proposeNextFuelWeightTh,
 } from '../../../../utils/copperHeatBalanceFuelSearch.ts'
-import { derivedFuelDryMass } from '../../../../utils/copperConstraintUnknowns.ts'
+import { derivedFuelDryMass, type OxyConstraintBaseInput } from '../../../../utils/copperConstraintUnknowns.ts'
 import {
   classifyOxyConstraintAcceptance,
   formatConstraintConflictLine,
@@ -843,6 +851,7 @@ interface CopperCaseRecord {
   manualPhaseCells: Record<string, boolean>
   manualSolventWeights: Record<string, boolean>
   manualFuelWeightValid: boolean
+  manualAirWeights?: Record<string, boolean>
   manualAirWeightValid?: boolean
   phaseCompleted: boolean
   productCalculated: boolean
@@ -1993,37 +2002,6 @@ function heatBalanceFuelSearchResidualMJh(
 // feedback loop to settle before the product equations become feasible.
 const OXY_PRODUCT_SOLVER_MAX_PASSES = 4
 
-function applyOxySolverRecommendedInputs(params: {
-  result: OxyConstraintSolverResult
-  fuelColumn: CopperFuelMaterial
-  solventColumns: CopperMaterialColumn[]
-  airColumns: CopperMaterialColumn[]
-}) {
-  const fuelColumn = cloneFuelMaterial({
-    ...params.fuelColumn,
-    weight: params.result.recommended.fuelWeight,
-    waterWeight: params.result.recommended.fuelWaterWeight,
-    moisture: params.result.recommended.fuelMoisture,
-  })
-  const solventColumns = params.solventColumns.map((column) =>
-    cloneMaterialColumn({
-      ...column,
-      weight: params.result.recommended.solventWeights[column.name] ?? column.weight,
-    })
-  )
-  const airColumns = params.airColumns.map((column) => {
-    const weight = Math.max(0, params.result.recommended.gasWeights[column.name] ?? column.weight)
-    const moisture = Math.max(0, column.moisture ?? 0)
-    return cloneMaterialColumn({
-      ...column,
-      weight,
-      waterWeight: weight > 0 && moisture > 0 ? weight * (moisture / 100) : 0,
-      moisture,
-    })
-  })
-  return { fuelColumn, solventColumns, airColumns }
-}
-
 function hasWarmStartProductInputs(params: {
   fuelColumn: CopperFuelMaterial
   solventColumns: CopperMaterialColumn[]
@@ -2044,6 +2022,7 @@ async function runOxySideBlowProductPasses(params: {
   rawFeed: ReturnType<typeof calculateWeightedComposition>
   concentrateMass: number
   preserveFuelInputWeight?: boolean
+  manualInputWeights?: NonNullable<OxyConstraintBaseInput['manualInputWeights']>
   inputPhaseMass?: Record<string, Record<string, number>>
   fuelColumn: CopperFuelMaterial
   solventColumns: CopperMaterialColumn[]
@@ -2093,6 +2072,7 @@ async function runOxySideBlowProductPasses(params: {
       rawMaterialColumns: params.rawMaterials,
       concentrateMass: params.concentrateMass,
       preserveFuelInputWeight: params.preserveFuelInputWeight,
+      manualInputWeights: params.manualInputWeights,
       inputPhaseMass: params.inputPhaseMass,
       fuelColumn,
       solventColumns,
@@ -2102,7 +2082,7 @@ async function runOxySideBlowProductPasses(params: {
       seed,
     })
     if (params.shouldCancel?.()) throw new OxyConstraintCalculationCancelledError()
-    const nextInputs = applyOxySolverRecommendedInputs({ result, fuelColumn, solventColumns, airColumns })
+    const nextInputs = resolveOxySolverRecommendedInputs({ result, fuelColumn, solventColumns, airColumns })
 
     if (isBetterResult(result, best)) {
       best = result
@@ -2124,7 +2104,7 @@ async function runOxySideBlowProductPasses(params: {
     throw new Error('产出求解未生成结果')
   }
   const displayInputs = best.acceptable
-    ? applyOxySolverRecommendedInputs({ result: best, ...bestInputs })
+    ? resolveOxySolverRecommendedInputs({ result: best, ...bestInputs })
     : bestInputs
   return { result: best, passes, ...displayInputs }
 }
@@ -2134,6 +2114,7 @@ async function solveOxySideBlowProductsIterative(params: {
   rawFeed: ReturnType<typeof calculateWeightedComposition>
   concentrateMass: number
   preserveFuelInputWeight?: boolean
+  manualInputWeights?: NonNullable<OxyConstraintBaseInput['manualInputWeights']>
   inputPhaseMass?: Record<string, Record<string, number>>
   fuelColumn: CopperFuelMaterial
   solventColumns: CopperMaterialColumn[]
@@ -2160,6 +2141,7 @@ async function solveOxySideBlowProductsIterative(params: {
     rawFeed: params.rawFeed,
     concentrateMass: params.concentrateMass,
     inputPhaseMass: params.inputPhaseMass,
+    manualInputWeights: params.manualInputWeights,
     config: params.config,
     shouldCancel: params.shouldCancel,
     maxPasses,
@@ -2196,20 +2178,20 @@ async function solveOxySideBlowProductsIterative(params: {
     if (warmAttempt.result.acceptable) return warmAttempt
   }
 
-  const coldFuel = cloneFuelMaterial(
-    params.preserveFuelInputWeight
-      ? params.fuelColumn
-      : { ...params.fuelColumn, weight: 0, waterWeight: 0 }
-  )
-  const coldSolvent = params.solventColumns.map((column) => cloneMaterialColumn({ ...column, weight: 0 }))
-  const coldAir = solverAirColumns.map((column) => cloneMaterialColumn({ ...column, weight: 0 }))
+  const coldInputs = resolveOxySolverColdStartInputs({
+    fuelColumn: params.fuelColumn,
+    solventColumns: params.solventColumns,
+    airColumns: solverAirColumns,
+    preserveFuelInputWeight: params.preserveFuelInputWeight,
+    manualInputWeights: params.manualInputWeights,
+  })
   const coldAttempt = await runOxySideBlowProductPasses({
     ...shared,
     seed: null,
     preserveFuelInputWeight: params.preserveFuelInputWeight,
-    fuelColumn: coldFuel,
-    solventColumns: coldSolvent,
-    airColumns: coldAir,
+    fuelColumn: coldInputs.fuelColumn,
+    solventColumns: coldInputs.solventColumns,
+    airColumns: coldInputs.airColumns,
   })
   if (!warmAttempt || coldAttempt.result.acceptable) return coldAttempt
   return pickBetter(warmAttempt, coldAttempt)
@@ -2220,6 +2202,7 @@ function restoreProductCalculationFromCaseState(params: {
   solventColumns: CopperMaterialColumn[]
   fuelColumn: CopperFuelMaterial
   airColumns: CopperMaterialColumn[]
+  manualInputWeights?: NonNullable<OxyConstraintBaseInput['manualInputWeights']>
   phaseBatchResults: PhaseBatchResults | null | undefined
   materialPhaseRows: Record<string, MaterialPhaseAssistRow[]>
   productConstraintConfig: OxySideBlowConstraintConfig
@@ -2254,6 +2237,7 @@ function restoreProductCalculationFromCaseState(params: {
         params.phaseBatchResults,
         params.materialPhaseRows
       ),
+      manualInputWeights: params.manualInputWeights,
       fuelColumn: params.fuelColumn,
       solventColumns: params.solventColumns,
       airColumns: params.airColumns,
@@ -2344,6 +2328,7 @@ function normalizeImportedCopperCase(payload: unknown, methodName: string): Copp
     manualPhaseCells: candidate.manualPhaseCells ?? {},
     manualSolventWeights: candidate.manualSolventWeights ?? {},
     manualFuelWeightValid: candidate.manualFuelWeightValid ?? false,
+    manualAirWeights: candidate.manualAirWeights ?? {},
     manualAirWeightValid: candidate.manualAirWeightValid ?? false,
     phaseCompleted: candidate.phaseCompleted ?? false,
     productCalculated: candidate.productCalculated ?? false,
@@ -3165,6 +3150,7 @@ export default function SmeltingBatchCalcPage({
   const [manualPhaseCells, setManualPhaseCells] = useState<Record<string, boolean>>({})
   const [manualSolventWeights, setManualSolventWeights] = useState<Record<string, boolean>>({})
   const [manualFuelWeightValid, setManualFuelWeightValid] = useState(false)
+  const [manualAirWeights, setManualAirWeights] = useState<Record<string, boolean>>({})
   const [ratioDrafts, setRatioDrafts] = useState<Record<string, string>>({})
   const [phaseCompleted, setPhaseCompleted] = useState(false)
   const [showElementAssist, setShowElementAssist] = useState(false)
@@ -3195,6 +3181,11 @@ export default function SmeltingBatchCalcPage({
   const [productCalculated, setProductCalculated] = useState(false)
   const [productFilledBack, setProductFilledBack] = useState(false)
   const [oxySolverResult, setOxySolverResult] = useState<OxyConstraintSolverResult | null>(null)
+  // Keep the latest rejected settlement separate from the last accepted fill-back.
+  // The output tables must not be overwritten by a failed verification, but its
+  // residuals still need to remain visible for the user to correct the constraints.
+  const [productCalculationFailure, setProductCalculationFailure] = useState<OxyConstraintSolverResult | null>(null)
+  const [productCalculationError, setProductCalculationError] = useState<string | null>(null)
   const [metcalProductResult, setMetcalProductResult] = useState<OxyConstraintSolverResult | null>(null)
   const [showMetcalCalcResults, setShowMetcalCalcResults] = useState(false)
   const [isProductCalculating, setIsProductCalculating] = useState(false)
@@ -3501,6 +3492,8 @@ export default function SmeltingBatchCalcPage({
   const resetProductCalculation = useCallback(() => {
     setProductCalculated(false)
     setProductFilledBack(false)
+    setProductCalculationFailure(null)
+    setProductCalculationError(null)
     resetHeatBalanceCalculation()
   }, [resetHeatBalanceCalculation])
   const resetDownstreamCalculations = useCallback(() => {
@@ -4822,9 +4815,12 @@ export default function SmeltingBatchCalcPage({
     smeltingTuyereCountOverridden,
   ])
 
+  const exportProfile = copperStageExportProfile(activeProcessStageId)
+
   const buildReportMaterialData = () => {
     const materialTotal = (material: CopperMaterialColumn | CopperFuelMaterial) =>
       calculateKnownTotal(material.ratios) + (material.ratios['Other(其他)'] ?? 0)
+    const exportedFuelColumns = exportProfile.includeFuel ? [fuelColumn] : []
     const materials: CopperReportMaterial[] = [
       ...rawMaterials.map((material, index) => ({
         header: isMixOtherMaterial(material) ? '其他' : `原料${index + 1}`,
@@ -4842,14 +4838,14 @@ export default function SmeltingBatchCalcPage({
         composition: material.ratios,
         compositionTotal: materialTotal(material),
       })),
-      {
+      ...exportedFuelColumns.map((material) => ({
         header: '燃料煤',
-        name: displayFuelName(fuelColumn.name),
-        dryWeightTh: fuelColumn.weight,
-        waterWeightTh: materialWaterWeight(fuelColumn),
-        composition: fuelColumn.ratios,
-        compositionTotal: materialTotal(fuelColumn),
-      },
+        name: displayFuelName(material.name),
+        dryWeightTh: material.weight,
+        waterWeightTh: materialWaterWeight(material),
+        composition: material.ratios,
+        compositionTotal: materialTotal(material),
+      })),
       ...airColumns.map((column) => ({
         header: '气',
         name: column.name,
@@ -4878,6 +4874,7 @@ export default function SmeltingBatchCalcPage({
       ...reportData,
       format: formatTableNumber,
       summaryName: inputSummaryColumn?.subHeader ?? inputSummaryColumn?.header,
+      includeSummary: exportProfile.includeInputSummary,
     })
   }
 
@@ -5413,7 +5410,8 @@ export default function SmeltingBatchCalcPage({
     const hasMaterialPhase = Boolean(
       phaseBatchResults && Object.values(phaseBatchResults).some((result) => result?.valid)
     )
-    const hasBlendResult = rawMaterials.some((material) => material.name.trim() && material.weight > 0)
+    const hasBlendResult =
+      exportProfile.includeBlendResult && rawMaterials.some((material) => material.name.trim() && material.weight > 0)
     const hasElement = rawMaterials.some((material) => material.name.trim())
     const hasInputPhase = inputPhaseColumnData.some((column) => column.kind !== 'blend')
     const inputSheetKeys: CopperBatchExportSheetKey[] = []
@@ -5428,7 +5426,9 @@ export default function SmeltingBatchCalcPage({
       {
         key: 'input',
         label: '投入计算表',
-        description: '物料元素组成、原料物相成分、投入物相质量与组成及混料汇总',
+        description: exportProfile.includeBlendResult
+          ? '物料元素组成、原料物相成分、投入物相质量与组成及混料汇总'
+          : '物料元素组成、原料物相成分及投入物相质量',
         available: inputSheetKeys.length > 0,
         sheetKeys: inputSheetKeys,
       },
@@ -5454,6 +5454,7 @@ export default function SmeltingBatchCalcPage({
     phaseBatchResults,
     productFilledBack,
     rawMaterials,
+    exportProfile,
   ])
 
   const buildMaterialPhaseExportSheets = useCallback((): CopperBatchWorkbookSheet[] => {
@@ -5591,20 +5592,21 @@ export default function SmeltingBatchCalcPage({
     async (selection: CopperBatchExportSelection) => {
       setShowBatchExportDialog(false)
       const buildSheets = (selectedKeys: CopperBatchExportSheetKey[]) => {
+        const stageSheetKeys = copperStageExportSheetKeys(activeProcessStageId, selectedKeys)
         const sheets: CopperBatchWorkbookSheet[] = []
-        if (selectedKeys.includes('element')) {
+        if (stageSheetKeys.includes('element')) {
           sheets.push(buildCalculationExportTable())
         }
-        if (selectedKeys.includes('materialPhase')) sheets.push(...buildMaterialPhaseExportSheets())
+        if (stageSheetKeys.includes('materialPhase')) sheets.push(...buildMaterialPhaseExportSheets())
         const phaseTables = buildPhaseExportTable()
-        if (selectedKeys.includes('inputPhase')) sheets.push(phaseTables.inputSheet)
-        if (selectedKeys.includes('blendResult')) sheets.push(...buildBlendResultExportSheets())
-        if (selectedKeys.includes('outputPhase')) sheets.push(phaseTables.outputSheet)
-        if (selectedKeys.includes('outputElement')) sheets.push(buildProductElementExportTable())
-        if (selectedKeys.includes('heatBalance') && calculatedHeatBalance) {
+        if (stageSheetKeys.includes('inputPhase')) sheets.push(phaseTables.inputSheet)
+        if (stageSheetKeys.includes('blendResult')) sheets.push(...buildBlendResultExportSheets())
+        if (stageSheetKeys.includes('outputPhase')) sheets.push(phaseTables.outputSheet)
+        if (stageSheetKeys.includes('outputElement')) sheets.push(buildProductElementExportTable())
+        if (stageSheetKeys.includes('heatBalance') && calculatedHeatBalance) {
           sheets.push(...buildHeatBalanceExportSheets(calculatedHeatBalance))
         }
-        if (selectedKeys.includes('element') && selectedKeys.includes('outputElement')) {
+        if (stageSheetKeys.includes('element') && stageSheetKeys.includes('outputElement')) {
           const balanceSheet = buildElementBalanceExportTable()
           if (balanceSheet) sheets.unshift(balanceSheet)
         }
@@ -6103,6 +6105,7 @@ export default function SmeltingBatchCalcPage({
       return
     }
     updateAirColumn(id, { weight: toNumber(value, 0) })
+    setManualAirWeights((prev) => ({ ...prev, [id]: true }))
     setManualAirWeightValid(true)
     resetProductCalculation()
     setHeatBalanced(false)
@@ -6114,6 +6117,7 @@ export default function SmeltingBatchCalcPage({
     const draftText = ratioDrafts[key]
     if (typeof draftText === 'string' && draftText.trim() === '') {
       updateAirColumn(id, { weight: 0 })
+      setManualAirWeights((prev) => ({ ...prev, [id]: true }))
       setManualAirWeightValid(true)
       resetProductCalculation()
       setHeatBalanced(false)
@@ -6852,6 +6856,8 @@ export default function SmeltingBatchCalcPage({
     const shouldCancel = () => isCalculationTokenCancelled(cancelToken)
     setBatchTableView('productPhase')
     resetHeatBalanceCalculation()
+    setProductCalculationFailure(null)
+    setProductCalculationError(null)
     setIsProductCalculating(true)
     setProductCalculationStep(0)
     setProductCalculationDetail('')
@@ -6970,6 +6976,11 @@ export default function SmeltingBatchCalcPage({
           : concentrateMass,
       inputPhaseMass,
       preserveFuelInputWeight: activeProcessStageId === 'cu_converting',
+      manualInputWeights: {
+        fuel: manualFuelWeightValid,
+        solvents: manualSolventWeights,
+        gases: manualAirWeights,
+      },
       fuelColumn:
         activeProcessStageId === 'cu_converting'
           ? { ...fuelColumn, weight: 0, waterWeight: 0, moisture: 0 }
@@ -7003,6 +7014,11 @@ export default function SmeltingBatchCalcPage({
           : concentrateMass,
       inputPhaseMass,
       preserveFuelInputWeight: activeProcessStageId === 'cu_converting',
+      manualInputWeights: {
+        fuel: manualFuelWeightValid,
+        solvents: manualSolventWeights,
+        gases: manualAirWeights,
+      },
       fuelColumn: iterative.fuelColumn,
       solventColumns: iterative.solventColumns,
       airColumns: iterative.airColumns,
@@ -7010,9 +7026,10 @@ export default function SmeltingBatchCalcPage({
       shouldCancel,
       seed: iterative.result.acceptable ? oxySolverResultToSeed(iterative.result) : null,
     })
-    const solverResult = settled.acceptable ? settled : iterative.result
+    const solverResult = settled
     const canFillBack = solverResult.acceptable
     if (!canFillBack) {
+      setProductCalculationFailure(solverResult)
       setWorkflowMessage(
         workflowStepMessage(
           6,
@@ -7024,45 +7041,43 @@ export default function SmeltingBatchCalcPage({
       )
       return
     }
+    const resolvedInputs = resolveOxySolverRecommendedInputs({
+      result: solverResult,
+      fuelColumn: iterative.fuelColumn,
+      solventColumns: iterative.solventColumns,
+      airColumns: iterative.airColumns,
+    })
     await advanceProductCalculationStep(3, '正在回填产出结果到配料总表…')
     throwIfCalculationCancelled(cancelToken)
     const bridged = oxySolverToCopperProductResult(solverResult)
     // 先完成写入所需数据，最后一次性置位；避免中间把 filledBack=false 暴露给界面形成「已计算但未回填」
     if (
-      iterative.fuelColumn.weight > 0 &&
-      (!nearlyEqual(fuelColumn.weight, iterative.fuelColumn.weight) ||
-        !nearlyEqual(materialWaterWeight(fuelColumn), materialWaterWeight(iterative.fuelColumn)))
+      resolvedInputs.fuelColumn.weight > 0 &&
+      (!nearlyEqual(fuelColumn.weight, resolvedInputs.fuelColumn.weight) ||
+        !nearlyEqual(materialWaterWeight(fuelColumn), materialWaterWeight(resolvedInputs.fuelColumn)))
     ) {
       updateFuelColumn({
-        weight: iterative.fuelColumn.weight,
-        waterWeight: iterative.fuelColumn.waterWeight,
-        moisture: iterative.fuelColumn.moisture,
+        weight: resolvedInputs.fuelColumn.weight,
+        waterWeight: resolvedInputs.fuelColumn.waterWeight,
+        moisture: resolvedInputs.fuelColumn.moisture,
       }, { preserveProductCalculation: true, syncFuelRatioConstraint: false })
     }
     if (
       solventColumns.some((column) => {
-        const solvedWeight = iterative.solventColumns.find((item) => item.id === column.id)?.weight
+        const solvedWeight = resolvedInputs.solventColumns.find((item) => item.id === column.id)?.weight
         return solvedWeight != null && !nearlyEqual(column.weight, solvedWeight)
       })
     ) {
       setSolventColumns((prev) =>
         prev.map((column) => {
-          const solved = iterative.solventColumns.find((item) => item.id === column.id)
+          const solved = resolvedInputs.solventColumns.find((item) => item.id === column.id)
           return solved == null ? column : { ...column, weight: solved.weight }
         })
       )
-      setManualSolventWeights((prev) => ({
-        ...prev,
-        ...Object.fromEntries(
-          solventColumns
-            .filter((column) => iterative.solventColumns.some((item) => item.id === column.id))
-            .map((column) => [column.id, true])
-        ),
-      }))
     }
     if (
       airColumns.some((column) => {
-        const solved = iterative.airColumns.find((item) => item.id === column.id)
+        const solved = resolvedInputs.airColumns.find((item) => item.id === column.id)
         return (
           solved != null &&
           (!nearlyEqual(column.weight, solved.weight) ||
@@ -7072,7 +7087,7 @@ export default function SmeltingBatchCalcPage({
     ) {
       setAirColumns((prev) =>
         prev.map((column) => {
-          const solved = iterative.airColumns.find((item) => item.id === column.id)
+          const solved = resolvedInputs.airColumns.find((item) => item.id === column.id)
           if (solved == null) return column
           const weight = Math.max(0, solved.weight)
           const moisture = Math.max(0, solved.moisture ?? column.moisture ?? 0)
@@ -7101,6 +7116,8 @@ export default function SmeltingBatchCalcPage({
                 .join('\n')
 
     setOxySolverResult(solverResult)
+    setProductCalculationFailure(null)
+    setProductCalculationError(null)
     setProductCalculated(true)
     setProductFilledBack(true)
     setProductPhaseManual(false)
@@ -7116,10 +7133,26 @@ export default function SmeltingBatchCalcPage({
     // 立即写入工序缓存（含本次结果），避免尚未 re-render 就切页导致捕获到旧空结果
     if (activeProcessStageId) {
       const snapshot = captureCurrentProcessStageState()
+      const resolvedStageSnapshot: CopperProcessStageState = {
+        ...snapshot,
+        rawMaterials: solveRawMaterials.map(cloneMaterialColumn),
+        rawWeightDrafts: {
+          ...snapshot.rawWeightDrafts,
+          ...Object.fromEntries(
+            solveRawMaterials.map((material) => [
+              material.id,
+              material.weight > 0 ? String(material.weight) : '',
+            ])
+          ),
+        },
+        fuelColumn: resolvedInputs.fuelColumn,
+        solventColumns: resolvedInputs.solventColumns,
+        airColumns: resolvedInputs.airColumns,
+      }
       processStagesCacheRef.current = {
         ...processStagesCacheRef.current,
         [activeProcessStageId]: {
-          ...snapshot,
+          ...resolvedStageSnapshot,
           productCalculated: true,
           productFilledBack: true,
           productSolverResult: cloneOxySolverResult(solverResult),
@@ -7157,7 +7190,15 @@ export default function SmeltingBatchCalcPage({
         )
         return
       }
-      throw error
+      const message = error instanceof Error ? error.message.trim() : String(error ?? '').trim()
+      const detail = productCalculationDetailRef.current
+      const userMessage = detail
+        ? `产出计算失败：${message || '求解器未返回结果'}（失败位置：${detail}）。请检查输入物相、关键参数和产出约束后重试。`
+        : `产出计算失败：${message || '求解器未返回结果'}。请检查输入物相、关键参数和产出约束后重试。`
+      console.error('[oxy-product-calc]', error)
+      setProductCalculationError(userMessage)
+      setWorkflowMessage(workflowStepMessage(6, userMessage), 'error')
+      return
     } finally {
       if (productCalculationCancelRef.current === cancelToken) productCalculationCancelRef.current = null
       setIsProductCalculating(false)
@@ -9050,6 +9091,7 @@ export default function SmeltingBatchCalcPage({
     manualPhaseCells: { ...manualPhaseCells },
     manualSolventWeights: { ...manualSolventWeights },
     manualFuelWeightValid,
+    manualAirWeights: { ...manualAirWeights },
     manualAirWeightValid,
     phaseCompleted,
     productCalculated,
@@ -9120,6 +9162,7 @@ export default function SmeltingBatchCalcPage({
     manualPhaseCells,
     manualPhaseRatioColumns,
     manualSolventWeights,
+    manualAirWeights,
     materialLibrary,
     materialPhaseRows,
     matteTemperature,
@@ -9194,6 +9237,11 @@ export default function SmeltingBatchCalcPage({
             solventColumns: nextSolventColumns,
             fuelColumn: nextFuelColumn,
             airColumns: nextAirColumns,
+            manualInputWeights: {
+              fuel: state.manualFuelWeightValid,
+              solvents: state.manualSolventWeights,
+              gases: state.manualAirWeights,
+            },
             phaseBatchResults: nextPhaseBatchResults,
             materialPhaseRows: nextMaterialPhaseRows,
             productConstraintConfig: nextProductConstraintConfig,
@@ -9261,6 +9309,7 @@ export default function SmeltingBatchCalcPage({
     setManualPhaseCells(state.manualPhaseCells ?? {})
     setManualSolventWeights(state.manualSolventWeights ?? {})
     setManualFuelWeightValid(state.manualFuelWeightValid ?? false)
+    setManualAirWeights(state.manualAirWeights ?? {})
     setManualAirWeightValid(state.manualAirWeightValid ?? false)
     setPhaseCompleted(state.phaseCompleted ?? false)
     setProductCalculated(restoredProductCalculated)
@@ -9470,6 +9519,7 @@ export default function SmeltingBatchCalcPage({
       manualPhaseCells: { ...currentStageState.manualPhaseCells },
       manualSolventWeights: { ...currentStageState.manualSolventWeights },
       manualFuelWeightValid: currentStageState.manualFuelWeightValid,
+      manualAirWeights: { ...(currentStageState.manualAirWeights ?? {}) },
       manualAirWeightValid: currentStageState.manualAirWeightValid,
       phaseCompleted: currentStageState.phaseCompleted,
       productCalculated: currentStageState.productCalculated,
@@ -9597,6 +9647,7 @@ export default function SmeltingBatchCalcPage({
       manualPhaseCells: {},
       manualSolventWeights: {},
       manualFuelWeightValid: false,
+      manualAirWeights: {},
       manualAirWeightValid: false,
       phaseCompleted: false,
       productCalculated: false,
@@ -10330,8 +10381,9 @@ export default function SmeltingBatchCalcPage({
     const showIntro = options.showIntro ?? true
     const hasResult = hasProductResult
     const recommendedFuelWeight = oxySolverResult?.recommended.fuelWeight ?? 0
-    const conflictRows = productSolverConflictRows(oxySolverResult)
-    const showConflictPanel = Boolean(oxySolverResult && !oxySolverResult.acceptable)
+    const conflictResult = productCalculationFailure ?? oxySolverResult
+    const conflictRows = productSolverConflictRows(conflictResult)
+    const showConflictPanel = Boolean(conflictResult && !conflictResult.acceptable)
 
     return (
       <div key={key} className={`space-y-4 ${extraClassName}`}>
@@ -10367,7 +10419,7 @@ export default function SmeltingBatchCalcPage({
         {showConflictPanel && (
           <div className={productConflictPanelClassName(darkMode)} role="alert">
             <div className="font-semibold">产出计算无可回填结果，请检查约束冲突</div>
-            <div className="mt-1 whitespace-pre-line leading-relaxed">{productSolverConflictSummary(oxySolverResult)}</div>
+            <div className="mt-1 whitespace-pre-line leading-relaxed">{productSolverConflictSummary(conflictResult)}</div>
             {conflictRows.length > 0 && (
               <ul className="mt-2 space-y-1 leading-relaxed">
                 {conflictRows.map((row, index) => (
@@ -10377,6 +10429,12 @@ export default function SmeltingBatchCalcPage({
                 ))}
               </ul>
             )}
+          </div>
+        )}
+        {productCalculationError && !isProductCalculating && (
+          <div className={productConflictPanelClassName(darkMode)} role="alert">
+            <div className="font-semibold">产出计算异常，未生成结果</div>
+            <div className="mt-1 whitespace-pre-line leading-relaxed">{productCalculationError}</div>
           </div>
         )}
       </div>

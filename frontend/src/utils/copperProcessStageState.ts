@@ -73,6 +73,7 @@ export type CopperProcessStageState = {
   manualPhaseCells: Record<string, boolean>
   manualSolventWeights: Record<string, boolean>
   manualFuelWeightValid: boolean
+  manualAirWeights?: Record<string, boolean>
   manualAirWeightValid: boolean
   phaseCompleted: boolean
   productCalculated: boolean
@@ -357,6 +358,7 @@ export function createBlankProcessStageState(): CopperProcessStageState {
     manualPhaseCells: {},
     manualSolventWeights: {},
     manualFuelWeightValid: false,
+    manualAirWeights: {},
     manualAirWeightValid: false,
     phaseCompleted: false,
     productCalculated: false,
@@ -547,6 +549,7 @@ export function extractLegacyFlatProcessStageState(record: Record<string, unknow
     manualPhaseCells: (record.manualPhaseCells as Record<string, boolean> | undefined) ?? {},
     manualSolventWeights: (record.manualSolventWeights as Record<string, boolean> | undefined) ?? {},
     manualFuelWeightValid: Boolean(record.manualFuelWeightValid),
+    manualAirWeights: (record.manualAirWeights as Record<string, boolean> | undefined) ?? {},
     manualAirWeightValid: Boolean(record.manualAirWeightValid),
     phaseCompleted: Boolean(record.phaseCompleted),
     productCalculated: Boolean(record.productCalculated),

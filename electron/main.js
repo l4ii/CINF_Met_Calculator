@@ -147,6 +147,30 @@ function buildApplicationMenu() {
 
 // 仅根据是否打包判断：打包后的 exe 始终为生产模式
 const isDev = !app.isPackaged
+const DEV_FRONTEND_URL = 'http://127.0.0.1:5173'
+const DEV_EXPORT_MODULE_URL = `${DEV_FRONTEND_URL}/src/utils/copperBatchExportXlsx.ts`
+
+function requestDevModule(url) {
+  return new Promise((resolve, reject) => {
+    const request = http.get(url, (response) => {
+      response.resume()
+      if (response.statusCode === 200) {
+        resolve()
+        return
+      }
+      reject(new Error(`开发导出模块不可用（HTTP ${response.statusCode ?? '未知'}）：${url}`))
+    })
+    request.setTimeout(5000, () => {
+      request.destroy(new Error(`开发导出模块检查超时：${url}`))
+    })
+    request.once('error', reject)
+  })
+}
+
+async function ensureDevExportModuleReachable() {
+  if (!isDev) return
+  await requestDevModule(DEV_EXPORT_MODULE_URL)
+}
 
 function parseEnvBool(raw) {
   if (typeof raw !== 'string') return null
@@ -815,7 +839,7 @@ function createWindow() {
 
   // 开发环境加载本地服务器，生产环境加载打包后的文件（不自动打开 DevTools）
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173')
+    mainWindow.loadURL(DEV_FRONTEND_URL)
     // 需要调试时可在控制台或菜单中手动打开 DevTools
   } else {
     // 生产环境：前端在 extraResources 的 frontend-dist（resources/frontend-dist），安装即覆盖，避免旧版缓存
@@ -1243,6 +1267,7 @@ app.whenReady().then(async () => {
   const startupT0 = Date.now()
   const mark = (label) => console.log(`[启动] ${label}: +${Date.now() - startupT0}ms`)
   try {
+    await ensureDevExportModuleReachable()
     license.setElectronApp(app)
     mark('license.init')
     Menu.setApplicationMenu(buildApplicationMenu())

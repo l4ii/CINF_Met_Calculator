@@ -326,7 +326,7 @@ function buildOxySolverResultFromX(
   meta: { iterations: number; converged: boolean }
 ): OxyConstraintSolverResult {
   const specs = buildUnknownSpecs(config, input)
-  const unpacked = unpackProjectedUnknowns(x, specs, input, config)
+  const unpacked = unpackProjectedUnknowns(x, specs, input, config, { enforceMassClosure: true })
   const products = buildOxyProductResults(
     unpacked.outputPhases,
     unpacked.productMasses,
@@ -339,8 +339,7 @@ function buildOxySolverResultFromX(
     unpacked.balanceFeed.totalWeight,
     totalProductMass
   )
-  const materialMassBalanceClosed =
-    !isOxyConvertingConstraintConfig(config) || isOxyMaterialMassBalanceClosed(materialMassBalance)
+  const materialMassBalanceClosed = isOxyMaterialMassBalanceClosed(materialMassBalance)
   const gasWeights = Object.fromEntries(unpacked.airColumns.map((col) => [col.name, col.weight]))
   const solventWeights = Object.fromEntries(unpacked.solventColumns.map((col) => [col.name, col.weight]))
   const productClosureIssues = OXY_SIDE_BLOW_PRODUCT_KEYS
@@ -448,10 +447,10 @@ export async function solveOxySideBlowProducts(input: OxyConstraintSolverInput):
   const allProductsClosed = OXY_SIDE_BLOW_PRODUCT_KEYS.every((pk) =>
     verifyProductElementTotals(result.products[pk])
   )
-  const materialMassBalanceClosed =
-    !isOxyConvertingConstraintConfig(config) || isOxyMaterialMassBalanceClosed(result.materialMassBalance)
+  const materialMassBalanceClosed = isOxyMaterialMassBalanceClosed(result.materialMassBalance)
+  const finalMaxRelativeResidual = maxRelativeResidualFromRows(result.constraintResiduals)
   const acceptanceLevel = classifyOxyConstraintAcceptance(
-    solved.maxRelativeResidual,
+    finalMaxRelativeResidual,
     allProductsClosed,
     materialMassBalanceClosed
   )
@@ -477,7 +476,7 @@ export async function solveOxySideBlowProducts(input: OxyConstraintSolverInput):
     stage: acceptable ? 'complete' : 'stage2',
     message,
     iterations: solved.iterations,
-    maxRelativeResidual: solved.maxRelativeResidual,
+    maxRelativeResidual: finalMaxRelativeResidual,
     equations: solved.equations.map((equation, index) => ({
       id: equation.id,
       kind: equation.kind,
