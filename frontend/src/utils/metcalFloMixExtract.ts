@@ -48,6 +48,7 @@ import {
   extractMetcalFloProductResults,
   enrichMetcalProductLossFromDistributions,
   gasVolumePercentToPhaseMass,
+  inferMetcalConvertingRoughCopperFromBalance,
   type MetcalFloProductExtraction,
 } from './metcalFloResultExtract.ts'
 
@@ -960,7 +961,7 @@ export function buildMetcalFloImportBundle(
     if (floCu > 1e-9) return fromFloBlend
     return Object.keys(fromRecomputed).length > 0 ? fromRecomputed : fromFloBlend
   })()
-  const productResults = enrichMetcalProductLossFromDistributions(
+  const extractedProductResults = enrichMetcalProductLossFromDistributions(
     extractMetcalFloProductResults(buffer),
     {
       elementDistributions: constraints.config.elementDistributions,
@@ -969,14 +970,19 @@ export function buildMetcalFloImportBundle(
     }
   )
   const convertingInputElementMass = sumFeedElementMasses(extraction.convertingFeeds ?? [])
-  const convertingProductResults = enrichMetcalProductLossFromDistributions(
-    extractMetcalFloConvertingProductResults(buffer),
-    {
-      elementDistributions: convertingConstraints.config.elementDistributions,
-      inputElementMass: convertingInputElementMass,
-      config: convertingConstraints.config,
-    }
+  const extractedConvertingProductResults = inferMetcalConvertingRoughCopperFromBalance(
+    buffer,
+    enrichMetcalProductLossFromDistributions(
+      extractMetcalFloConvertingProductResults(buffer),
+      {
+        elementDistributions: convertingConstraints.config.elementDistributions,
+        inputElementMass: convertingInputElementMass,
+        config: convertingConstraints.config,
+      }
+    )
   )
+
+  const productResults = extractedProductResults
 
   const comparisonKeys = [
     'Cu(铜)',
@@ -1029,6 +1035,7 @@ export function buildMetcalFloImportBundle(
     fuels: [],
     blend: null,
   }
+  const convertingProductResults = extractedConvertingProductResults
 
   const smeltingRange = extraction.smeltingUnit
     ? { start: extraction.smeltingUnit.start, end: extraction.smeltingUnit.end }

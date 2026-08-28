@@ -15,6 +15,7 @@ import {
   GAS_PHASE_MOLAR_MASS,
   STANDARD_GAS_MOLAR_VOLUME_NM3_PER_KMOL,
 } from './copperProductPhaseCalc.ts'
+import { COPPER_BUILTIN_PHASE_FRACTIONS } from './copperPhaseStoichiometry.ts'
 import {
   extractMetcalConvertingUnitInputs,
   extractMetcalSmeltingUnitInputs,
@@ -507,20 +508,7 @@ export function extractMetcalFloConvertingProductResults(buffer: ArrayBuffer): M
 
   for (const pk of ['matte', 'smeltingSlag'] as const) {
     const streamName = CONVERTING_PRODUCT_STREAM_BY_KEY[pk]!
-    const roughCopperHandoff =
-      pk === 'matte' && convertingUnit
-        ? streamBlocks
-            .filter(
-              (item) =>
-                item.name === streamName &&
-                item.offset >= productSearchEnd &&
-                item.offset < productSearchEnd + 20000
-            )
-            .sort((a, b) => a.offset - b.offset)
-        : []
-    const block = pickBestSolidBlock(
-      roughCopperHandoff.length > 0 ? [roughCopperHandoff[0]!] : candidateBlocks(streamName)
-    )
+    const block = pickBestSolidBlock(candidateBlocks(streamName))
     if (!block) {
       warnings.push(
         pk === 'matte'
@@ -688,6 +676,103 @@ export function extractMetcalFloConvertingProductResults(buffer: ArrayBuffer): M
   clearElementComposition(result)
 
   return { result, streams, warnings }
+}
+
+function copperFractionFromBlock(block: FloStreamBlock): number {
+  return block.composition.reduce((sum, entry) => {
+    const value = parseFiniteNumber(entry.value)
+    if (value == null) return sum
+    return sum + (value / 100) * (COPPER_BUILTIN_PHASE_FRACTIONS[entry.name]?.['Cu(铜)'] ?? 0)
+  }, 0)
+}
+
+function copperMassFromProduct(product: OxyProductResult): number {
+  return product.phases.reduce(
+    (sum, phase) => sum + phase.mass * (COPPER_BUILTIN_PHASE_FRACTIONS[phase.key]?.['Cu(铜)'] ?? 0),
+    0
+  )
+}
+
+/**
+ * 部分 FLO 只在吹炼炉 Output 中保存「粗铜」x 占位，数值粗铜出现在后续阳极炉，不能直接复用。
+ * 利用吹炼固体投入和已解析产物的 Cu 质量守恒，按粗铜组成模板反算吹炼粗铜质量。
+ */
+export function inferMetcalConvertingRoughCopperFromBalance(
+  buffer: ArrayBuffer,
+  extraction: MetcalFloProductExtraction
+): MetcalFloProductExtraction {
+  if (!extraction.result || extraction.result.products.matte.mass > 1e-12) return extraction
+
+  const convertingUnit = extractMetcalConvertingUnitInputs(buffer)
+  if (!convertingUnit) return extraction
+  const blocks = findStreamBlocks(buffer)
+  const inputNames = new Set(convertingUnit.inputNames)
+  const inputCopperMass = blocks
+    .filter(
+      (block) =>
+        inputNames.has(block.name) &&
+        block.offset >= convertingUnit.start &&
+        block.offset < convertingUnit.end &&
+        block.compositionKind === 'W%' &&
+        parseFiniteNumber(block.flowT) != null
+    )
+    .reduce((sum, block) => sum + (parseFiniteNumber(block.flowT) ?? 0) * copperFractionFromBlock(block), 0)
+
+  const roughTemplate = blocks
+    .filter(
+      (block) =>
+        block.name === '粗铜' &&
+        block.offset >= convertingUnit.end &&
+        block.compositionKind === 'W%' &&
+        parseFiniteNumber(block.flowT) != null
+    )
+    .sort((a, b) => a.offset - b.offset)[0]
+  if (!roughTemplate || !(inputCopperMass > 1e-12)) return extraction
+
+  const roughCopperFraction = copperFractionFromBlock(roughTemplate)
+  if (!(roughCopperFraction > 1e-12)) return extraction
+
+  const knownCopperMass = Object.entries(extraction.result.products)
+    .filter(([key]) => key !== 'matte')
+    .reduce((sum, [, product]) => sum + copperMassFromProduct(product), 0)
+  const roughCopperMass = (inputCopperMass - knownCopperMass) / roughCopperFraction
+  if (!Number.isFinite(roughCopperMass) || roughCopperMass <= 1e-12) return extraction
+
+  const roughProduct = extraction.result.products.matte
+  const previousMass = roughProduct.mass
+  const phases = roughTemplate.composition
+    .map((entry) => {
+      const value = parseFiniteNumber(entry.value)
+      if (value == null || value <= 0) return null
+      const existing = roughProduct.phases.find(
+        (phase) =>
+          phase.key === entry.name ||
+          normalizeMetcalPhaseFormula(phase.key) === normalizeMetcalPhaseFormula(entry.name)
+      )
+      return {
+        key: existing?.key ?? entry.name,
+        mass: (roughCopperMass * value) / 100,
+        pct: value,
+      }
+    })
+    .filter((phase): phase is { key: string; mass: number; pct: number } => phase != null)
+
+  roughProduct.mass = roughCopperMass
+  roughProduct.phases = phases
+  extraction.result.totalProductMass += roughCopperMass - previousMass
+  extraction.streams.push({
+    productKey: 'matte',
+    streamName: '粗铜（元素质量守恒反算）',
+    massTh: roughCopperMass,
+    volumeNm3h: null,
+    compositionKind: 'W%',
+    phasePercent: Object.fromEntries(phases.map((phase) => [phase.key, phase.pct])),
+    sourceOffset: -1,
+  })
+  extraction.warnings.push(
+    `吹炼炉「粗铜」为 x 占位，未采用阳极炉粗铜；已按投入与其余产物的 Cu 元素质量守恒反算 ${roughCopperMass.toFixed(4)} t/h。`
+  )
+  return extraction
 }
 
 export function compareMetcalNumeric(

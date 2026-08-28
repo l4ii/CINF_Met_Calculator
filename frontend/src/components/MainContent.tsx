@@ -8,6 +8,7 @@ import { useCalcOptional } from '../context/CalcContext'
 
 const CopperWorkflow = lazy(() => import('./modules/CopperWorkflow'))
 const AntimonyWorkflow = lazy(() => import('./modules/antimony/AntimonyWorkflowShell'))
+const LeadKivcetWorkflow = lazy(() => import('./modules/lead/LeadKivcetWorkflow'))
 const AboutPage = lazy(() => import('./shell/AboutPage'))
 const SettingsPage = lazy(() => import('./shell/SettingsPage'))
 
@@ -71,7 +72,11 @@ export default function MainContent({
     }
     setCopperCaseTitleDraft(nextName)
     if (typeof window !== 'undefined') {
-      const process = selectedMethod?.smeltTypeId === 'sb' ? 'antimony' : 'copper'
+      const process = selectedMethod?.smeltTypeId === 'sb'
+        ? 'antimony'
+        : selectedMethod?.smeltTypeId === 'pb' && selectedMethod.smeltMethodId === 'kivcet'
+          ? 'lead-kivcet'
+          : 'copper'
       window.dispatchEvent(new CustomEvent(`metcal:${process}-rename-active-case`, { detail: { name: nextName } }))
     }
   }, [copperCaseTitleDraft, selectedMethod?.smeltTypeId])
@@ -160,6 +165,7 @@ export default function MainContent({
   const selectedAlgorithm = getSelectedSmeltAlgorithm(selectedMethod)
   const isCopperSideBlown = selectedAlgorithm === 'copper-side-blown'
   const isAntimonySideBlown = selectedAlgorithm === 'antimony-side-blown'
+  const isLeadKivcet = selectedAlgorithm === 'lead-kivcet'
   const copperWorkflowMethodId = selectedMethod.smeltMethodId === 'side-blown' ? 'oxy-side-blast' : selectedMethod.smeltMethodId
   const antimonyWorkflowMethodId = selectedMethod.smeltMethodId === 'side-blown' ? 'oxy-side-blast' : selectedMethod.smeltMethodId
   const placeholderMessage = isEn
@@ -170,7 +176,7 @@ export default function MainContent({
       onSheetSelect?.('raw_material')
       return
     }
-    const process = isAntimonySideBlown ? 'antimony' : 'copper'
+    const process = isAntimonySideBlown ? 'antimony' : isLeadKivcet ? 'lead-kivcet' : 'copper'
     window.dispatchEvent(new CustomEvent(`metcal:${process}-back-workspace`))
   }
   const handleHeaderBack = () => {
@@ -262,6 +268,22 @@ export default function MainContent({
                   activeSheet={activeSheet}
                   onStageSelect={onSheetSelect ?? (() => undefined)}
                   smeltMethodId={antimonyWorkflowMethodId}
+                  smeltMethodName={selectedMethod.smeltMethodName}
+                  caseTitleDraft={copperCaseTitleDraft}
+                  onActiveCaseNameChange={handleActiveCopperCaseNameChange}
+                />
+              </Suspense>
+            </ErrorBoundary>
+          )}
+          {isLeadKivcet && (
+            <ErrorBoundary>
+              <Suspense fallback={<ModuleLoadingFallback darkMode={darkMode} />}>
+                <LeadKivcetWorkflow
+                  darkMode={darkMode}
+                  language={language}
+                  activeSheet={activeSheet}
+                  onStageSelect={onSheetSelect ?? (() => undefined)}
+                  smeltMethodId={selectedMethod.smeltMethodId}
                   smeltMethodName={selectedMethod.smeltMethodName}
                   caseTitleDraft={copperCaseTitleDraft}
                   onActiveCaseNameChange={handleActiveCopperCaseNameChange}

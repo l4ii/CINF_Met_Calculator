@@ -16,8 +16,10 @@ import {
 import { PhaseFormulaDisplay } from '../PhaseFormulaDisplay.tsx'
 import {
   calculateKnownTotal,
+  calculateWeightedComposition,
   materialWaterWeight,
   partitionRawMixMaterials,
+  totalWaterWeight,
   type CopperMaterialColumn,
 } from '../../utils/copperWorkflowCalc.ts'
 import {
@@ -610,7 +612,20 @@ export function MetcalFloImportPanel({
     ]
   )
 
-  const elementKeys = useMemo(() => visibleMetcalImportElementKeys(previewMaterials), [previewMaterials])
+  const inputMaterials = useMemo(
+    () => [...rawMaterials, ...solventColumns, fuelColumn, ...airColumns],
+    [airColumns, fuelColumn, rawMaterials, solventColumns]
+  )
+  const elementTotal = useMemo(() => calculateWeightedComposition(inputMaterials), [inputMaterials])
+  const inputDryWeight = useMemo(
+    () => inputMaterials.reduce((sum, material) => sum + Math.max(0, material.weight), 0),
+    [inputMaterials]
+  )
+  const inputWaterWeight = useMemo(() => totalWaterWeight(inputMaterials), [inputMaterials])
+  const elementKeys = useMemo(
+    () => visibleMetcalImportElementKeys([...previewMaterials, { ...fuelColumn, id: 'metcal-import-total', name: '投入', weight: elementTotal.totalWeight, ratios: elementTotal.ratios }]),
+    [elementTotal.ratios, elementTotal.totalWeight, fuelColumn, previewMaterials]
+  )
   const phaseColumns = useMemo(
     () =>
       buildMetcalPhasePreviewColumns({
@@ -680,6 +695,31 @@ export function MetcalFloImportPanel({
       {elementKeys.map((key) => (
         <td key={key} className={`border-t px-1 py-2 text-center whitespace-nowrap ${borderClass}`}>
           {formatCell(blendRatios[key], 2)}
+        </td>
+      ))}
+    </tr>
+  )
+
+  const elementTotalRow = (
+    <tr className={darkMode ? 'bg-blue-950 text-blue-50' : 'bg-blue-50 text-blue-950'}>
+      <td className={`sticky left-0 z-10 border-t px-1.5 py-2 text-center font-semibold whitespace-nowrap ${borderClass} ${darkMode ? 'bg-blue-950' : 'bg-blue-50'}`}>
+        投入
+      </td>
+      <td className={`sticky z-10 border-t px-1.5 py-2 text-center font-semibold whitespace-nowrap ${borderClass} ${darkMode ? 'bg-blue-950' : 'bg-blue-50'}`} style={{ left: COL.category }}>
+        投入
+      </td>
+      <td className={`border-t px-1.5 py-2 text-center font-semibold whitespace-nowrap ${borderClass}`}>
+        {formatCell(inputDryWeight, 2)}
+      </td>
+      <td className={`border-t px-1.5 py-2 text-center font-semibold whitespace-nowrap ${borderClass}`}>
+        {formatCell(inputWaterWeight, 2)}
+      </td>
+      <td className={`border-t px-1.5 py-2 text-center font-semibold whitespace-nowrap ${borderClass}`}>
+        {formatCell(calculateKnownTotal(elementTotal.ratios) + (elementTotal.ratios['Other(其他)'] ?? 0), 2)}
+      </td>
+      {elementKeys.map((key) => (
+        <td key={`total-${key}`} className={`border-t px-1 py-2 text-center font-semibold whitespace-nowrap ${borderClass}`}>
+          {formatCell(elementTotal.ratios[key], 2)}
         </td>
       ))}
     </tr>
@@ -838,6 +878,7 @@ export function MetcalFloImportPanel({
                     borderClass={borderClass}
                     rowClass={gasRowClass}
                   />
+                  {elementTotalRow}
                 </tbody>
               </table>
             </div>

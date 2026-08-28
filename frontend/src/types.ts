@@ -22,6 +22,11 @@ export type SheetId =
   | 'sb_refining_equipment'
   | 'sb_summary'
   | 'sb_equipment'
+  | 'pb_kivcet_smelting'
+  | 'pb_kivcet_smelting_equipment'
+  | 'pb_kivcet_converting'
+  | 'pb_kivcet_converting_equipment'
+  | 'pb_kivcet_summary'
 
 /** 冶炼方法 */
 export interface SmeltMethod {
@@ -90,8 +95,8 @@ export const SMELT_TYPES: SmeltType[] = [
         methods: [
           { id: 'side-blown', name: '侧吹炉', smeltTypeId: 'pb', sectionId: 'pyro' },
           { id: 'ausmelt', name: '奥斯麦特炉', smeltTypeId: 'pb', sectionId: 'pyro' },
-          { id: 'flash', name: '闪速炉', smeltTypeId: 'pb', sectionId: 'pyro' },
           { id: 'kivcet', name: '基夫赛特炉', smeltTypeId: 'pb', sectionId: 'pyro' },
+          { id: 'isp', name: 'ISP炉', smeltTypeId: 'pb', sectionId: 'pyro' },
         ],
       },
     ],
@@ -133,7 +138,7 @@ export const SMELT_TYPES: SmeltType[] = [
   },
 ]
 
-export type SmeltAlgorithmKind = 'copper-side-blown' | 'antimony-side-blown' | 'none'
+export type SmeltAlgorithmKind = 'copper-side-blown' | 'antimony-side-blown' | 'lead-kivcet' | 'none'
 
 export function getSmeltTypeMethods(smeltType: SmeltType): SmeltMethod[] {
   return smeltType.sections.flatMap((section) => section.methods)
@@ -145,6 +150,7 @@ export function getSelectedSmeltAlgorithm(method?: Pick<SelectedMethod, 'smeltTy
   const isSideBlown = method.smeltMethodId === 'side-blown' || method.smeltMethodId === 'oxy-side-blast'
   if (method.smeltTypeId === 'cu' && isPyro && isSideBlown) return 'copper-side-blown'
   if (method.smeltTypeId === 'sb' && isPyro && isSideBlown) return 'antimony-side-blown'
+  if (method.smeltTypeId === 'pb' && isPyro && method.smeltMethodId === 'kivcet') return 'lead-kivcet'
   return 'none'
 }
 
@@ -171,4 +177,13 @@ export const ANTIMONY_SHEETS: { id: SheetId; name: string }[] = [
   { id: 'sb_smelting', name: '熔炼' },
   { id: 'sb_smelting_equipment', name: '熔炼设备选型' },
   { id: 'sb_summary', name: '案例汇总' },
+]
+
+/** 铅 Kivcet 首版开放与铜熔炼/吹炼一致的六段工作流（默认计算模型暂沿用铜）。 */
+export const LEAD_KIVCET_SHEETS: { id: SheetId; name: string }[] = [
+  { id: 'pb_kivcet_smelting', name: '熔炼' },
+  { id: 'pb_kivcet_smelting_equipment', name: '熔炼设备选型' },
+  { id: 'pb_kivcet_converting', name: '吹炼' },
+  { id: 'pb_kivcet_converting_equipment', name: '吹炼设备选型' },
+  { id: 'pb_kivcet_summary', name: '案例汇总' },
 ]

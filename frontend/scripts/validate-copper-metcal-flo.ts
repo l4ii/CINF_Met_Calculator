@@ -12,6 +12,7 @@ import {
   patchCopperMetcalFloCase,
   type CopperMetcalFloStagePayload,
 } from '../src/utils/copperMetcalFloCase.ts'
+import { calculateWeightedComposition } from '../src/utils/copperWorkflowCalc.ts'
 
 function arrayBufferFromFile(path: string): ArrayBuffer {
   const buffer = readFileSync(path)
@@ -25,6 +26,42 @@ function assert(condition: unknown, message: string): asserts condition {
 function approx(actual: number, expected: number, tolerance = 1e-8) {
   return Math.abs(actual - expected) <= tolerance * Math.max(1, Math.abs(actual), Math.abs(expected))
 }
+
+const elementTotal = calculateWeightedComposition([
+  {
+    id: 'ore',
+    name: '精矿',
+    kind: 'raw',
+    weight: 100,
+    ratios: { 'Cu(铜)': 60, 'S (硫)': 40 },
+  },
+  {
+    id: 'flux',
+    name: '熔剂',
+    kind: 'solvent',
+    weight: 10,
+    ratios: { 'CaO(氧化钙)': 100 },
+  },
+  {
+    id: 'coal',
+    name: '煤',
+    kind: 'fuel',
+    weight: 10,
+    ratios: { 'C (碳)': 100 },
+  },
+  {
+    id: 'air',
+    name: '空气',
+    kind: 'gas',
+    weight: 20,
+    moisture: 10,
+    ratios: { 'N(氮)': 100 },
+  },
+])
+assert(approx(elementTotal.totalWeight, 142), '投入元素总计必须以湿基汇总所有实际投入')
+assert(approx(elementTotal.ratios['Cu(铜)'] ?? 0, 60 / 142 * 100), '投入元素总计必须按实际投入加权')
+assert((elementTotal.ratios['H(氢)'] ?? 0) > 0, '投入元素总计必须将水分计入氢')
+assert((elementTotal.ratios['O(氧)'] ?? 0) > 0, '投入元素总计必须将水分计入氧')
 
 function stagePayload(stage: MetcalFloStageBundle): CopperMetcalFloStagePayload {
   assert(stage.productResults.result, `${stage.stageName}缺少产出结果`)
@@ -135,7 +172,21 @@ if (legacyPath) {
   const legacy = buildMetcalFloImportBundle(arrayBufferFromFile(legacyPath), {
     referenceTemplateBuffer: template,
   })
-  assert(legacy.stages.map((stage) => stage.stageId).join(',') === 'smelting', '旧附件未排除模板吹炼段')
+  assert(
+    legacy.stages.map((stage) => stage.stageId).join(',') === 'smelting,converting',
+    '真实 FLO 附件应识别出熔炼和吹炼两段'
+  )
+  assert(legacy.productResults.result, '真实 FLO 附件熔炼产出结果不应为空')
+  assert(legacy.convertingProductResults.result, '真实 FLO 附件吹炼产出结果不应为空')
+  assert(
+    (legacy.convertingProductResults.result.products.matte.mass ?? 0) > 45 &&
+      (legacy.convertingProductResults.result.products.matte.mass ?? 0) < 55,
+    '吹炼粗铜应由投入元素守恒反算，不能误读阳极炉的粗铜流量'
+  )
+  assert(
+    legacy.convertingProductResults.warnings.some((warning) => warning.includes('元素质量守恒')),
+    '吹炼粗铜反算应说明 FLO 中原始粗铜为 x 占位'
+  )
   assert(
     !legacy.stages[0]!.rawMaterials.some(
       (material) => material.name === '渣精矿' || material.name === '吹炼渣'
@@ -143,7 +194,7 @@ if (legacyPath) {
     '旧附件仍显示渣精矿或吹炼渣模板残值'
   )
   assert(
-    approx(legacy.stages[0]!.extraction.blend?.phaseRatios.Other ?? 0, 4.16198275074376),
+    approx(legacy.stages[0]!.extraction.blend?.phaseRatios.Other ?? 0, 4.57677238082738),
     '旧附件混合铜精矿 Other 未保留在物相数据中'
   )
   const legacyStage = legacy.stages[0]!
@@ -153,6 +204,22 @@ if (legacyPath) {
   assert(
     phaseKeysForMetcalPreviewColumn(legacyBlendPhase).filter((key) => key === 'Other').length === 1,
     '旧附件混合铜精矿 Other 在物相预览中重复显示'
+  )
+}
+
+const closureCasePath = process.env.METCAL_FLO_CLOSURE_CASE
+if (closureCasePath) {
+  const closureCase = buildMetcalFloImportBundle(arrayBufferFromFile(closureCasePath), {
+    referenceTemplateBuffer: template,
+  })
+  const smelting = closureCase.stages.find((stage) => stage.stageId === 'smelting')
+  assert(
+    Boolean(smelting?.productResults.result ?? closureCase.productResults.result),
+    '质量口径不完全闭合时，仍应保留可解析的 FLO 熔炼产出结果'
+  )
+  assert(
+    !closureCase.productResults.warnings.some((warning) => warning.includes('总质量不闭合')),
+    'FLO 产出不应再因总质量口径差异被清空'
   )
 }
 

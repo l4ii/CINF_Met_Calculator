@@ -48,6 +48,11 @@ function flattenCatalog(language: 'zh' | 'en'): { id: string; name: string; grou
     sb_refining_equipment: 'Refining Equipment',
     sb_summary: 'Case Summary',
     sb_equipment: 'Equipment Selection',
+    pb_kivcet_smelting: 'Kivcet Smelting',
+    pb_kivcet_smelting_equipment: 'Kivcet Smelting Equipment',
+    pb_kivcet_converting: 'Kivcet Converting',
+    pb_kivcet_converting_equipment: 'Kivcet Converting Equipment',
+    pb_kivcet_summary: 'Kivcet Case Summary',
   }
   const group = language === 'en' ? 'Sheets' : '页签'
   return SHEETS.map((s) => ({
