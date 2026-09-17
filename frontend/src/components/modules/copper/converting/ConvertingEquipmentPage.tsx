@@ -1,3 +1,5 @@
+import { normalizeProjectCostWorkbooks, type ProjectCostWorkbookState, createProjectCostWorkbook } from '../../../../utils/projectCostWorkbook.ts'
+import { normalizeEquipmentBomSnapshots } from '../../../../utils/copperEquipmentBom.ts'
 /**
  * 铜-火法-富氧侧吹-吹炼-设备选型（独立页面）。
  * 设备参数、产物物相和热平衡只读取吹炼工序；挂载时从 cache 恢复吹炼快照。
@@ -18,6 +20,10 @@ import {
 import type { SheetId } from '../../../../types'
 import { APP_PLATFORM_NAME_ZH } from '../../../../constants/appCopy'
 import { btnPrimary, btnSecondary, cardBase, cardCompact, hintText, inputBase, inputSm, sectionTitle } from '../../../../theme/uiTheme'
+import ProjectCostTable from '../cost/ProjectCostTable.tsx'
+import EquipmentBomTable from '../cost/EquipmentBomTable.tsx'
+import { enrichCopperEquipmentBom, EQUIPMENT_BOM_PRICING_LABELS, type EquipmentBomItem } from '../../../../utils/copperEquipmentBom.ts'
+import { buildAnnualMaterialCost, resolveCostAnnualDays } from '../../../../utils/copperProjectCost.ts'
 import {
   buildCopperBatchExportBaseName,
   type CopperBatchExportColumn,
@@ -460,15 +466,6 @@ const LIBRARY_CATEGORY_OPTIONS: { value: CopperLibraryCategory | ''; label: stri
   { value: 'product', label: '产物' },
   { value: 'flux', label: '熔剂' },
 ]
-type EquipmentBomItem = {
-  id: string
-  name: string
-  specification: string
-  quantity: number
-  unit: string
-  material: string
-  note: string
-}
 type DraftRatioKind = 'raw' | 'solvent' | 'fuel' | 'gas'
 type BatchTableView = 'element' | 'phase' | 'parameters' | 'productPhase' | 'productElement' | 'balance'
 type CopperProcessStageId = Extract<SheetId, 'cu_smelting' | 'cu_converting' | 'cu_refining'>
@@ -880,6 +877,8 @@ interface CopperCaseRecord {
   equipmentDimensionAdjustments?: Record<EquipmentStageId, string>
   equipmentModelGenerated?: Record<EquipmentStageId, boolean>
   equipmentBomGenerated?: Record<EquipmentStageId, boolean>
+  equipmentBomSnapshots?: Record<string, EquipmentBomItem[]>
+  projectCostWorkbooks?: Record<string, ProjectCostWorkbookState>
   convertingDailyFeedTd?: string
   convertingFeedMode?: 'daily' | 'annual'
   convertingAnnualFeedTa?: string
@@ -903,6 +902,8 @@ interface CopperCaseRecord {
   convertingJacketRemainderDecision?: JacketRemainderDecision | null
   convertingTuyereCountOverridden?: boolean
   convertingJacketCountOneSide?: string
+  materialPriceOverrides?: Record<string, string>
+  costAnnualDays?: string
   batchTableView?: BatchTableView
   phaseRatioOverrides?: Record<string, Record<string, string>>
   manualPhaseRatioColumns?: Record<string, boolean>
@@ -2382,6 +2383,8 @@ function normalizeImportedCopperCase(payload: unknown, methodName: string): Copp
     equipmentDimensionAdjustments: candidate.equipmentDimensionAdjustments ?? { smelting: '1', converting: '1', refining: '1' },
     equipmentModelGenerated: candidate.equipmentModelGenerated ?? { smelting: false, converting: false, refining: false },
     equipmentBomGenerated: candidate.equipmentBomGenerated ?? { smelting: false, converting: false, refining: false },
+    equipmentBomSnapshots: normalizeEquipmentBomSnapshots(candidate.equipmentBomSnapshots),
+    projectCostWorkbooks: normalizeProjectCostWorkbooks(candidate.projectCostWorkbooks),
     convertingDailyFeedTd: candidate.convertingDailyFeedTd,
     convertingFeedMode: candidate.convertingFeedMode === 'annual' ? 'annual' : 'daily',
     convertingAnnualFeedTa: candidate.convertingAnnualFeedTa,
@@ -2414,6 +2417,8 @@ function normalizeImportedCopperCase(payload: unknown, methodName: string): Copp
         ? candidate.convertingJacketRemainderDecision
         : null,
     convertingTuyereCountOverridden: candidate.convertingTuyereCountOverridden ?? false,
+    materialPriceOverrides: candidate.materialPriceOverrides ?? {},
+    costAnnualDays: candidate.costAnnualDays ?? '',
     batchTableView: normalizeBatchTableView(
       candidate.batchTableView,
       candidate.productFilledBack ?? candidate.productCalculated ?? false
@@ -3377,6 +3382,8 @@ export default function ConvertingEquipmentPage({
   const [equipmentBomGenerated, setEquipmentBomGenerated] = useState<Record<EquipmentStageId, boolean>>(
     initialActiveCaseRecord?.equipmentBomGenerated ?? { smelting: false, converting: false, refining: false }
   )
+  const [equipmentBomSnapshots, setEquipmentBomSnapshots] = useState(() => normalizeEquipmentBomSnapshots(initialActiveCaseRecord?.equipmentBomSnapshots))
+  const [projectCostWorkbooks, setProjectCostWorkbooks] = useState(() => normalizeProjectCostWorkbooks(initialActiveCaseRecord?.projectCostWorkbooks))
   const [convertingDailyFeedTd, setConvertingDailyFeedTd] = useState(initialActiveCaseRecord?.convertingDailyFeedTd ?? '')
   const [convertingFeedMode, setConvertingFeedMode] = useState<'daily' | 'annual'>(
     initialActiveCaseRecord?.convertingFeedMode === 'annual' ? 'annual' : 'daily'
@@ -3385,6 +3392,10 @@ export default function ConvertingEquipmentPage({
   const [convertingProcessDays, setConvertingProcessDays] = useState(
     initialActiveCaseRecord?.convertingProcessDays ?? String(DEFAULT_SMELTING_PROCESS_DAYS)
   )
+  const [materialPriceOverrides, setMaterialPriceOverrides] = useState<Record<string, string>>(
+    initialActiveCaseRecord?.materialPriceOverrides ?? {}
+  )
+  const [costAnnualDays, setCostAnnualDays] = useState(initialActiveCaseRecord?.costAnnualDays ?? '')
   const [convertingBedCapacity, setConvertingBedCapacity] = useState(initialActiveCaseRecord?.convertingBedCapacity ?? '')
   const [convertingFurnaceWidthM, setConvertingFurnaceWidthM] = useState(
     initialActiveCaseRecord?.convertingFurnaceWidthM ?? String(DEFAULT_SMELTING_FURNACE_WIDTH_M)
@@ -3756,10 +3767,14 @@ export default function ConvertingEquipmentPage({
     )
     setEquipmentModelGenerated(record.equipmentModelGenerated ?? { smelting: false, converting: false, refining: false })
     setEquipmentBomGenerated(record.equipmentBomGenerated ?? { smelting: false, converting: false, refining: false })
+    setEquipmentBomSnapshots(normalizeEquipmentBomSnapshots(record.equipmentBomSnapshots))
+    setProjectCostWorkbooks(normalizeProjectCostWorkbooks(record.projectCostWorkbooks))
     setConvertingDailyFeedTd(record.convertingDailyFeedTd ?? '')
     setConvertingFeedMode(record.convertingFeedMode === 'annual' ? 'annual' : 'daily')
     setConvertingAnnualFeedTa(record.convertingAnnualFeedTa ?? '')
     setConvertingProcessDays(record.convertingProcessDays ?? String(DEFAULT_SMELTING_PROCESS_DAYS))
+    setMaterialPriceOverrides(record.materialPriceOverrides ?? {})
+    setCostAnnualDays(record.costAnnualDays ?? '')
     setConvertingBedCapacity(record.convertingBedCapacity ?? '')
     setConvertingFurnaceWidthM(record.convertingFurnaceWidthM ?? String(DEFAULT_SMELTING_FURNACE_WIDTH_M))
     setConvertingFurnaceLengthM(record.convertingFurnaceLengthM ?? '')
@@ -4774,7 +4789,7 @@ export default function ConvertingEquipmentPage({
   )
   const activeEquipmentModelReady = activeEquipmentStageId ? equipmentModelGenerated[activeEquipmentStageId] : false
   const activeEquipmentBomGenerated = activeEquipmentStageId ? equipmentBomGenerated[activeEquipmentStageId] : false
-  const activeEquipmentBomItems = activeEquipmentRow
+  const calculatedEquipmentBomItems = activeEquipmentRow
     ? buildCopperEquipmentBom(
         activeEquipmentStageId,
         activeEquipmentRow,
@@ -4783,7 +4798,47 @@ export default function ConvertingEquipmentPage({
         activeEquipmentStageId === 'converting' ? convertingDesign : null
       )
     : []
+  const activeEquipmentBomItems = (activeEquipmentStageId && activeEquipmentBomGenerated
+    ? equipmentBomSnapshots[activeEquipmentStageId] : undefined) ?? calculatedEquipmentBomItems
   const activeEquipmentBomReady = activeEquipmentBomGenerated && activeEquipmentBomItems.length > 0
+  const costProcessDays = toNumber(convertingProcessDays, DEFAULT_SMELTING_PROCESS_DAYS)
+  const costStageKey = activeEquipmentStageId ?? 'smelting'
+  const activeCostWorkbook = useMemo(() => projectCostWorkbooks[costStageKey] ?? {
+    ...createProjectCostWorkbook(), priceOverrides: { ...materialPriceOverrides }, annualDays: costAnnualDays,
+  }, [projectCostWorkbooks, costStageKey, materialPriceOverrides, costAnnualDays])
+  const costPriceDrafts = activeCostWorkbook.priceOverrides ?? materialPriceOverrides
+  const activeCostAnnualDays = activeCostWorkbook.annualDays ?? costAnnualDays
+  const updateCostWorkbook = (next: ProjectCostWorkbookState) =>
+    setProjectCostWorkbooks((prev) => ({ ...prev, [costStageKey]: next }))
+  const annualMaterialCost = useMemo(
+    () =>
+      buildAnnualMaterialCost({
+        rawMaterials,
+        solventColumns,
+        fuelColumn,
+        airColumns,
+        products: OXY_SIDE_BLOW_PRODUCT_KEYS.map((productKey) => ({
+          id: `output-${productKey}`,
+          name: oxyProductDisplayName(productKey, oxyProductDisplayStageForProcess(activeProcessStageId)),
+          hourlyMass: oxySolverResult?.products?.[productKey]?.mass ?? 0,
+        })),
+        annualDays: resolveCostAnnualDays(activeCostAnnualDays, costProcessDays),
+        priceOverrides: costPriceDrafts,
+        productName: oxyProductDisplayName('matte', oxyProductDisplayStageForProcess(activeProcessStageId)),
+        productHourlyTh: oxySolverResult?.products?.matte?.mass ?? 0,
+      }),
+    [
+      activeProcessStageId,
+      airColumns,
+      activeCostAnnualDays,
+      costProcessDays,
+      fuelColumn,
+      costPriceDrafts,
+      oxySolverResult,
+      rawMaterials,
+      solventColumns,
+    ]
+  )
 
   useEffect(() => {
     if (activeSheet !== 'cu_converting_equipment') return
@@ -7752,8 +7807,8 @@ export default function ConvertingEquipmentPage({
   }
 
   const resetConvertingEquipmentModel = () => {
-    setEquipmentModelGenerated((prev) => ({ ...prev, smelting: false }))
-    setEquipmentBomGenerated((prev) => ({ ...prev, smelting: false }))
+    setEquipmentModelGenerated((prev) => ({ ...prev, converting: false }))
+    setEquipmentBomGenerated((prev) => ({ ...prev, converting: false }))
   }
 
   const updateConvertingEquipmentField = (
@@ -7827,6 +7882,7 @@ export default function ConvertingEquipmentPage({
 
   const generateEquipmentBom = () => {
     if (!activeEquipmentStageId || !activeEquipmentModelReady) return
+    setEquipmentBomSnapshots((prev) => ({ ...prev, [activeEquipmentStageId]: calculatedEquipmentBomItems.map((item) => ({ ...item })) }))
     setEquipmentBomGenerated((prev) => ({ ...prev, [activeEquipmentStageId]: true }))
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
@@ -9511,10 +9567,14 @@ export default function ConvertingEquipmentPage({
       equipmentDimensionAdjustments: { ...equipmentDimensionAdjustments },
       equipmentModelGenerated: { ...equipmentModelGenerated },
       equipmentBomGenerated: { ...equipmentBomGenerated },
+      equipmentBomSnapshots,
+      projectCostWorkbooks,
       convertingDailyFeedTd: convertingDailyFeedDisplay,
       convertingFeedMode,
       convertingAnnualFeedTa: convertingAnnualFeedDisplay,
       convertingProcessDays,
+      materialPriceOverrides: { ...materialPriceOverrides },
+      costAnnualDays,
       convertingBedCapacity,
       convertingFurnaceWidthM: formatTableNumber(convertingDesign.furnaceWidthM),
       convertingFurnaceLengthM: formatTableNumber(convertingDesign.furnaceLengthM),
@@ -9630,10 +9690,14 @@ export default function ConvertingEquipmentPage({
       equipmentDimensionAdjustments: { smelting: '1', converting: '1', refining: '1' },
       equipmentModelGenerated: { smelting: false, converting: false, refining: false },
       equipmentBomGenerated: { smelting: false, converting: false, refining: false },
+      equipmentBomSnapshots: {},
+      projectCostWorkbooks: {},
       convertingDailyFeedTd: '',
       convertingFeedMode: 'daily',
       convertingAnnualFeedTa: '',
       convertingProcessDays: String(DEFAULT_SMELTING_PROCESS_DAYS),
+      materialPriceOverrides: {},
+      costAnnualDays: '',
       convertingBedCapacity: '',
       convertingFurnaceWidthM: String(DEFAULT_SMELTING_FURNACE_WIDTH_M),
       convertingFurnaceLengthM: '',
@@ -11083,6 +11147,7 @@ export default function ConvertingEquipmentPage({
                   darkMode={darkMode}
                   design={convertingDesign}
                   viewerRef={furnaceViewerRef}
+                  scopeKey={`${activeCaseId ?? 'unsaved'}:converting`}
                 />
               )}
               {!isConvertingEquipment && (
@@ -11167,6 +11232,28 @@ export default function ConvertingEquipmentPage({
             </div>
           )}
 
+          {activeEquipmentBomGenerated && (
+            <ProjectCostTable
+              darkMode={darkMode}
+              title={isConvertingEquipment ? '6. 工程造价' : '4. 工程造价'}
+              result={annualMaterialCost}
+              annualDaysText={activeCostAnnualDays}
+              processDays={costProcessDays}
+              priceDrafts={costPriceDrafts}
+              onAnnualDaysChange={(value) => updateCostWorkbook({ ...activeCostWorkbook, annualDays: value })}
+              onPriceChange={(rowId, value) =>
+                updateCostWorkbook({ ...activeCostWorkbook, priceOverrides: { ...costPriceDrafts, [rowId]: value } })
+              }
+              onResetPrices={() => updateCostWorkbook({ ...activeCostWorkbook, priceOverrides: {} })}
+              workbook={activeCostWorkbook}
+              onWorkbookChange={updateCostWorkbook}
+              bomItems={activeEquipmentBomItems}
+              onBomItemsChange={(items) => setEquipmentBomSnapshots((prev) => ({ ...prev, [costStageKey]: items }))}
+              caseName={activeCase?.name ?? '未命名案例'}
+              stageLabel={activeEquipmentRow?.stage ?? '当前工序'}
+            />
+          )}
+
           {!activeEquipmentModelReady && (
             <div className={`mt-4 rounded-lg border px-3 py-3 text-sm ${darkMode ? 'border-gray-700 bg-gray-900/30 text-gray-300' : 'border-gray-200 bg-gray-50 text-gray-600'}`}>
               {isConvertingEquipment
@@ -11234,6 +11321,8 @@ export default function ConvertingEquipmentPage({
     const isEquipmentSizingReady = (stageId: EquipmentStageId) => {
       if (stageId === 'refining') return false
       if (!equipmentBomGenerated[stageId]) return false
+      const savedBom = equipmentBomSnapshots[stageId]
+      if (savedBom) return savedBom.length > 0
       const row = equipmentSizingRows.find((item) => item.id === stageId)
       if (!row) return false
       return (
@@ -11335,6 +11424,7 @@ export default function ConvertingEquipmentPage({
           </div>
 
           <ProcessIsland3DOverview
+            scopeKey={`${activeCaseId ?? 'unsaved'}:converting`}
             darkMode={darkMode}
             equipmentCompleteByStage={equipmentCompleteByStage}
             completedCount={completedCount}
@@ -11347,7 +11437,7 @@ export default function ConvertingEquipmentPage({
 
         {stageSections.map((section) => {
           const equipmentRow = equipmentSizingRows.find((row) => row.id === section.id) ?? null
-          const bomItems =
+          const bomItems = equipmentBomSnapshots[section.id] ?? (
             equipmentRow != null
               ? buildCopperEquipmentBom(
                   section.id,
@@ -11356,7 +11446,7 @@ export default function ConvertingEquipmentPage({
                   toNumber(equipmentDimensionAdjustments[section.id], 1),
                   section.id === 'converting' ? convertingDesign : null
                 )
-              : []
+              : [])
           const bomReady = Boolean(equipmentBomGenerated[section.id] && bomItems.length > 0)
           const statusLabel = section.comingSoon
             ? '待开发'
@@ -14398,6 +14488,7 @@ function CaseSummaryStageTables({
 }
 
 function ProcessIsland3DOverview({
+  scopeKey,
   darkMode,
   equipmentCompleteByStage,
   completedCount,
@@ -14406,6 +14497,7 @@ function ProcessIsland3DOverview({
   totalFeedTh,
   convertingDesign,
 }: {
+  scopeKey: string
   darkMode: boolean
   equipmentCompleteByStage: Record<EquipmentStageId, boolean>
   completedCount: number
@@ -14466,7 +14558,7 @@ function ProcessIsland3DOverview({
             onChange={(id) => setActiveEquipmentTab(id as EquipmentStageId)}
           />
           {resolvedEquipmentTab === 'smelting' && convertingDesign && (
-            <SmeltingFurnacePlanPanel darkMode={darkMode} design={convertingDesign} embedded />
+            <SmeltingFurnacePlanPanel darkMode={darkMode} design={convertingDesign} embedded scopeKey={scopeKey} />
           )}
         </div>
       ) : (
@@ -14519,7 +14611,7 @@ function buildCopperEquipmentBom(
     const lengthM = convertingDesign.designLengthM
     const widthM = convertingDesign.furnaceWidthM
     const heightM = resolveFurnaceBodyHeightM(widthM)
-    return [
+    return enrichCopperEquipmentBom([
       {
         id: 'converting-furnace',
         name: '吹炼炉本体',
@@ -14531,7 +14623,7 @@ function buildCopperEquipmentBom(
       },
       {
         id: 'converting-feed',
-        name: '粗铜加入及供风系统',
+        name: '冰铜加入及供风系统',
         specification: `配套 1 台炉`,
         quantity: 1,
         unit: '套',
@@ -14563,9 +14655,9 @@ function buildCopperEquipmentBom(
         quantity: 1,
         unit: '套',
         material: '耐热钢 + 浇注料',
-        note: '按熔炼设计参数生成',
+        note: '按吹炼设计参数生成',
       },
-    ]
+    ], stageId, convertingDesign)
   }
 
   if (row.sizing.recommendedUnits <= 0 || row.sizing.adjustedThroughput <= 0) return []
@@ -14579,11 +14671,11 @@ function buildCopperEquipmentBom(
 
   const stageConfig: Record<EquipmentStageId, { main: string; feed: string; offgas: string; tap: string }> = {
     smelting: { main: 'Smelting furnace', feed: 'Smelting feed and injection system', offgas: 'Smelting off-gas interface', tap: 'Matte/slag tapping system' },
-    converting: { main: '吹炼炉本体', feed: '粗铜加入与供风系统', offgas: '吹炼烟气接口', tap: '粗铜/吹炼渣排放系统' },
+    converting: { main: '吹炼炉本体', feed: '冰铜加入与供风系统', offgas: '吹炼烟气接口', tap: '粗铜/吹炼渣排放系统' },
     refining: { main: '精炼炉本体', feed: '粗铜加入与氧化还原系统', offgas: '精炼烟气接口', tap: '阳极铜浇铸接口' },
   }
   const config = stageConfig[stageId]
-  return [
+  return enrichCopperEquipmentBom([
     {
       id: `${stageId}-furnace`,
       name: config.main,
@@ -14620,21 +14712,23 @@ function buildCopperEquipmentBom(
       material: '耐热钢 + 浇注料',
       note: '临时 BOM，待正式炉型参数校核',
     },
-  ]
+  ], stageId)
 }
 
-/** 三维方案面板：视图占满整宽，炉型参数集中到下方横向信息总览 */
+/** 三维方案面板：左侧参数与三维视图直接并排，避免外层重复套框 */
 function SmeltingFurnacePlanPanel({
   darkMode,
   design,
   viewerRef,
   embedded = false,
+  scopeKey = 'unsaved',
 }: {
   darkMode: boolean
   design: SmeltingFurnaceDesignResult
   viewerRef?: RefObject<SmeltingFurnaceViewerHandle>
   /** 汇总总览内嵌时去掉外层卡片边框，避免双重套框 */
   embedded?: boolean
+  scopeKey?: string
 }) {
   const lengthM = Math.max(design.designLengthM || design.furnaceLengthM, 0.1)
   const widthM = Math.max(design.furnaceWidthM, 0.1)
@@ -14643,11 +14737,9 @@ function SmeltingFurnacePlanPanel({
   const body = (
     <>
       {!embedded && (
-        <div className={`flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4 ${
-          darkMode ? 'border-gray-700 bg-gray-900/70' : 'border-gray-200 bg-slate-50'
-        }`}>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className={`text-sm font-semibold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>三维熔炼炉方案</div>
+            <div className={`text-lg font-semibold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>三维熔炼炉方案</div>
           </div>
           <div className={`rounded-full px-2.5 py-1 text-xs font-medium ${
             darkMode ? 'bg-emerald-950/50 text-emerald-200' : 'bg-emerald-50 text-emerald-700'
@@ -14656,14 +14748,13 @@ function SmeltingFurnacePlanPanel({
           </div>
         </div>
       )}
-      <div className={embedded ? 'pt-1' : 'p-4'}>
-        <SmeltingFurnaceViewer ref={viewerRef ?? null} darkMode={darkMode} design={design} />
-      </div>
-      <div className={`${embedded ? 'mt-3' : 'border-t'} px-1 pb-1 pt-3 ${
+      <SmeltingFurnaceViewer ref={viewerRef ?? null} darkMode={darkMode} design={design} readOnly={embedded} scopeKey={scopeKey} />
+      <div className={`furnace-planning-summary ${embedded ? 'mt-3' : 'border-t'} px-1 pb-1 pt-3 ${
         embedded ? '' : darkMode ? 'border-gray-700 bg-gray-900/30 px-4 pb-4 pt-4' : 'border-gray-200 bg-slate-50/70 px-4 pb-4 pt-4'
       }`}>
         <div className="mb-3">
-          <div className={`text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>参数信息总览</div>
+          <div className={`text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>选型计算参考</div>
+          <p className="mt-1 text-xs">调整后的三维尺寸见左侧构件参数，以下为原始选型计算值。</p>
         </div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-8">
           <SummaryMetricCard darkMode={darkMode} label="炉床面积" value={`${formatTableDisplayValue(design.areaM2)} m²`} />
@@ -14698,9 +14789,7 @@ function SmeltingFurnacePlanPanel({
   if (embedded) return <div className="space-y-1">{body}</div>
 
   return (
-    <div className={`mt-4 overflow-hidden rounded-2xl border shadow-sm ${
-      darkMode ? 'border-gray-600 bg-gray-950/40' : 'border-gray-200 bg-white'
-    }`}>
+    <div className="mt-4 min-w-0">
       {body}
     </div>
   )
@@ -14737,11 +14826,15 @@ function buildEquipmentBomExportHtml(input: {
     .map(
       (item, index) => `<tr>
   <td>${index + 1}</td>
+  <td>${escapeHtmlText(item.id)}</td>
+  <td>${escapeHtmlText(item.group ?? '')}</td>
   <td>${escapeHtmlText(item.name)}</td>
   <td>${escapeHtmlText(item.specification)}</td>
   <td>${item.quantity}</td>
   <td>${escapeHtmlText(item.unit)}</td>
   <td>${escapeHtmlText(item.material)}</td>
+  <td>${escapeHtmlText(EQUIPMENT_BOM_PRICING_LABELS[item.pricingMode ?? 'separate'])}</td>
+  <td>${escapeHtmlText(item.source ?? '选型计算')}</td>
   <td>${escapeHtmlText(item.note)}</td>
 </tr>`
     )
@@ -14789,15 +14882,20 @@ function buildEquipmentBomExportHtml(input: {
 ${designBlock}
 ${imageBlock}
 <h2>BOM 设备清单</h2>
+<p class="meta">水套、风口默认含在炉体成套报价中，接口预留不计入设备购置费；拆分采购时应调整计价范围。规格依据选型计算值。</p>
 <table>
   <thead>
     <tr>
       <th>序号</th>
+      <th>设备编码</th>
+      <th>系统分组</th>
       <th>设备名称</th>
       <th>规格/能力</th>
       <th>数量</th>
       <th>单位</th>
       <th>材质/类型</th>
+      <th>计价范围</th>
+      <th>依据</th>
       <th>备注</th>
     </tr>
   </thead>
@@ -14808,39 +14906,6 @@ ${rows}
 </body>
 </html>
 `
-}
-
-function EquipmentBomTable({ darkMode, items }: { darkMode: boolean; items: EquipmentBomItem[] }) {
-  return (
-    <div className={`w-full overflow-x-auto rounded-lg border ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
-      <table className={`w-full table-auto text-sm ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>
-        <thead className={darkMode ? 'bg-gray-800/80 text-gray-300' : 'bg-slate-50 text-gray-600'}>
-          <tr>
-            <th className="whitespace-nowrap px-3 py-2.5 text-center font-semibold">序号</th>
-            <th className="min-w-[8rem] px-3 py-2.5 text-left font-semibold">设备名称</th>
-            <th className="min-w-[10rem] px-3 py-2.5 text-left font-semibold">规格/能力</th>
-            <th className="whitespace-nowrap px-3 py-2.5 text-center font-semibold">数量</th>
-            <th className="whitespace-nowrap px-3 py-2.5 text-center font-semibold">单位</th>
-            <th className="min-w-[7rem] px-3 py-2.5 text-left font-semibold">材质/类型</th>
-            <th className="min-w-[8rem] px-3 py-2.5 text-left font-semibold">备注</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((item, index) => (
-            <tr key={item.id} className={`border-t ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
-              <td className="px-3 py-2 text-center font-mono">{index + 1}</td>
-              <td className="px-3 py-2 text-left font-medium">{item.name}</td>
-              <td className="px-3 py-2 text-left leading-relaxed">{item.specification}</td>
-              <td className="px-3 py-2 text-center font-mono">{item.quantity}</td>
-              <td className="px-3 py-2 text-center">{item.unit}</td>
-              <td className="px-3 py-2 text-left">{item.material}</td>
-              <td className={`px-3 py-2 text-left ${hintText(darkMode)}`}>{item.note}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
 }
 
 function HeatParameterGroup({

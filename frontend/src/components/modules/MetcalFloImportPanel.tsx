@@ -756,13 +756,13 @@ export function MetcalFloImportPanel({
         ]
 
   const panel = (
-    <div className="katex-app-typography fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 p-3 sm:p-5">
+    <div className="workflow-content katex-app-typography fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 p-3 sm:p-5">
       <div
         className={`${cardBase(darkMode)} flex w-[min(96vw,1440px)] max-h-[88vh] flex-col overflow-hidden p-4 text-sm shadow-2xl sm:p-5 ${textClass}`}
         style={{ height: 'min(88vh, calc(min(96vw, 1440px) * 9 / 16))' }}
       >
         <div className="shrink-0">
-          <h3 className={`${sectionTitle(darkMode)} !text-sm font-semibold`}>MetCal Flo 案例导入</h3>
+          <h3 className={`${sectionTitle(darkMode)} text-base font-semibold`}>MetCal Flo 案例导入</h3>
           <p className={`mt-1.5 leading-relaxed ${mutedClass}`}>
             来源：{sourceFileName}。已识别 {stages.map((stage) => stage.stageName).join('、')}工序；各工序产出作为
             MetCal 只读对照导入。

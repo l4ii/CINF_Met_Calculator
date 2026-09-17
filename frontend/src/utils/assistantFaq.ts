@@ -6,6 +6,10 @@ import {
   findHeatAuxiliaryExplainItem,
   isHeatAuxiliaryExplainQuery,
 } from './copperHeatAuxiliaryExplain.ts'
+import {
+  buildConstraintSyntaxReply,
+  isConstraintSyntaxQuery,
+} from './copperConstraintSyntaxHelp.ts'
 
 function normalize(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, ' ')
@@ -78,6 +82,11 @@ export function tryRuleBasedAssistantReply(
       live: snapshot?.heatAuxiliaryParams ?? null,
       trace: snapshot?.heatAuxiliaryTrace ?? null,
     })
+  }
+
+  // 自定义约束语法说明（无本地 AI 也可回复；有快照时列出当前页可用符号）
+  if (zh && isConstraintSyntaxQuery(raw)) {
+    return buildConstraintSyntaxReply(snapshot?.constraintContext ?? null)
   }
 
   if (

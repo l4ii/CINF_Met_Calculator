@@ -108,6 +108,30 @@ const FORMULA_CONSTANTS: Record<string, number> = {
   As2S3: COMPOUND_MOLAR_MASS.As2S3,
 }
 
+/** resolveRef 认得的作用域前缀，大小写敏感；写成 input./output. 会静默求值为 0。 */
+export const CONSTRAINT_SCOPE_TOKENS = ['Input', 'Output', 'OutputE'] as const
+
+/** 裸标识符可引用的摩尔/原子质量常量（g/mol） */
+export const CONSTRAINT_FORMULA_CONSTANT_TOKENS: readonly string[] = Object.keys(FORMULA_CONSTANTS)
+
+/** 由氧化物当量折算出单质质量的符号，见 resolveElementMass */
+const OXIDE_EQUIVALENT_ELEMENT_LABELS: Record<string, string> = {
+  Si: 'Si(硅)，由 SiO₂ 当量折算',
+  Ca: 'Ca(钙)，由 CaO 当量折算',
+  Mg: 'Mg(镁)，由 MgO 当量折算',
+  Al: 'Al(铝)，由 Al₂O₃ 当量折算',
+}
+
+/** 表达式末段可写的元素符号 → 对应化验列名（供输入补全与语法说明引用） */
+export const CONSTRAINT_ELEMENT_TOKEN_LABELS: Readonly<Record<string, string>> = {
+  ...Object.fromEntries(
+    Object.entries(ELEMENT_SYMBOL_MAP)
+      .filter(([token]) => /^[A-Za-z]/.test(token))
+      .map(([token, elementKey]) => [token, elementKey])
+  ),
+  ...OXIDE_EQUIVALENT_ELEMENT_LABELS,
+}
+
 function tokenize(expr: string): string[] {
   const tokens: string[] = []
   let i = 0

@@ -13,6 +13,7 @@ import type {
   CopperHeatAuxiliaryParams,
   CopperHeatAuxiliaryTrace,
 } from '../utils/copperHeatAuxiliaryParams.ts'
+import type { ConstraintSyntaxContext } from '../utils/copperConstraintSyntaxHelp.ts'
 
 /** 供助手后端注入的软件状态（MainContent 持续更新） */
 export type AssistantWorkspaceSnapshot = {
@@ -30,6 +31,8 @@ export type AssistantWorkspaceSnapshot = {
   heatAuxiliaryParams?: CopperHeatAuxiliaryParams | null
   /** 热平衡相关参数演算中间量 */
   heatAuxiliaryTrace?: CopperHeatAuxiliaryTrace | null
+  /** 约束编辑区当前可用的符号，供助手回答「约束怎么写」 */
+  constraintContext?: ConstraintSyntaxContext | null
 }
 
 type AssistantContextValue = {

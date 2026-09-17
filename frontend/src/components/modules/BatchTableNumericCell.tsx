@@ -35,7 +35,7 @@ function mergeClass(...parts: Array<string | false | undefined>) {
   return parts.filter(Boolean).join(' ')
 }
 
-function copyTextToClipboard(text: string): Promise<void> {
+export function copyTextToClipboard(text: string): Promise<void> {
   if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
     return navigator.clipboard.writeText(text)
   }

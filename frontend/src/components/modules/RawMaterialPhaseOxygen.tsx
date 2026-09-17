@@ -1554,7 +1554,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
               const minC = costs.length ? Math.min(...costs) : 0
               const maxC = costs.length ? Math.max(...costs) : 1
               const colorBarW = 32
-              const pad = { left: 72, right: 72, top: 28, bottom: 44 }
+              const pad = { left: 100, right: 120, top: 52, bottom: 52 }
               const plotW = 800
               const plotH = 320
               const dataW = plotW - pad.left - pad.right - colorBarW
@@ -1572,7 +1572,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
               const tx = makeTicks(minFe, maxFe, 4)
               const ty = makeTicks(minCa, maxCa, 3)
               const axisFill = dark ? '#9ca3af' : '#4b5563'
-              const barX = plotW - colorBarW - 45
+              const barX = plotW - 64
               const barH = dataH
               const isSingleObj = (l: string | undefined) => l === '最小成本解' || l === '最低能耗解' || l === '最小渣量解'
               const singleObjColors = ['#dc2626', '#059669', '#d97706']
@@ -1589,7 +1589,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                       ? 'This chart shows the NSGA-II Pareto front in the feasible slag-type space (Fe/SiO₂ vs CaO/SiO₂). X-axis: Fe/SiO₂ ratio; Y-axis: CaO/SiO₂ ratio. Point color indicates cost (CNY/h) with the color bar on the right. Small points are Pareto solutions, and dashed callouts indicate five single-objective optimum solutions. Hover to inspect each point and click to apply.'
                       : '本图在渣型可行域（Fe/SiO₂–CaO/SiO₂ 平面）内展示 NSGA-II 多目标优化的 Pareto 前沿分布。横轴为 Fe/SiO₂ 铁硅比，纵轴为 CaO/SiO₂ 钙硅比；散点颜色表示成本（元/h），右侧色条为成本刻度。小点为全部 Pareto 前沿解，虚线引出标注为五类单目标最优解。支持悬浮查看各点渣型与成本、点击任意点快速应用。'}
                   </p>
-                  <div className="relative">
+                  <div className="relative overflow-x-auto">
                     {hoveredPoint && (
                       <div className={`absolute top-2 left-3 right-3 z-10 px-3 py-2 rounded text-sm ${dark ? 'bg-gray-900/95 text-gray-100 border border-gray-600' : 'bg-white/95 text-gray-800 border border-gray-200 shadow-md'}`}>
                         <span className="font-semibold">{hoveredPoint.label || 'Pareto 解'}</span>
@@ -1601,24 +1601,24 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                         {' · 渣量 '}{(hoveredPoint.totalSlag ?? 0).toFixed(2)} t/h
                       </div>
                     )}
-                    <svg viewBox={`0 0 ${plotW} ${plotH}`} className="w-full h-auto block cursor-crosshair" style={{ minHeight: plotH }} preserveAspectRatio="xMidYMid meet">
+                    <svg viewBox={`0 0 ${plotW} ${plotH}`} className="w-full h-auto block cursor-crosshair" style={{ minHeight: plotH, minWidth: plotW }} preserveAspectRatio="xMidYMid meet">
                       <rect x={pad.left} y={pad.top} width={dataW} height={dataH} fill={dark ? 'rgba(31,41,55,0.3)' : 'rgba(255,255,255,0.8)'} stroke={axisFill} strokeWidth={0.5} opacity={0.5} />
                       <line x1={pad.left} y1={plotH - pad.bottom} x2={pad.left + dataW} y2={plotH - pad.bottom} stroke={axisFill} strokeWidth={1.5} />
                       <line x1={pad.left} y1={plotH - pad.bottom} x2={pad.left} y2={pad.top} stroke={axisFill} strokeWidth={1.5} />
                       {tx.map((v, i) => (
                         <g key={`tx-${i}`}>
                           <line x1={xScale(v)} y1={plotH - pad.bottom} x2={xScale(v)} y2={plotH - pad.bottom + 5} stroke={axisFill} strokeWidth={1} />
-                          <text x={xScale(v)} y={plotH - pad.bottom + 18} textAnchor="middle" fontSize={11} fill={axisFill}>{Number(v).toFixed(3)}</text>
+                          <text x={xScale(v)} y={plotH - pad.bottom + 18} textAnchor="middle" fontSize={14} fill={axisFill}>{Number(v).toFixed(3)}</text>
                         </g>
                       ))}
                       {ty.map((v, i) => (
                         <g key={`ty-${i}`}>
                           <line x1={pad.left - 5} y1={yScale(v)} x2={pad.left} y2={yScale(v)} stroke={axisFill} strokeWidth={1} />
-                          <text x={pad.left - 10} y={yScale(v) + 4} textAnchor="end" fontSize={11} fill={axisFill}>{Number(v).toFixed(3)}</text>
+                          <text x={pad.left - 10} y={yScale(v) + 4} textAnchor="end" fontSize={14} fill={axisFill}>{Number(v).toFixed(3)}</text>
                         </g>
                       ))}
-                      <text x={pad.left + dataW / 2} y={plotH - 14} textAnchor="middle" fontSize={11} fontWeight="bold" fill={axisFill}>{isEn ? 'Fe/SiO₂ ratio' : 'Fe/SiO₂ 铁硅比'}</text>
-                      <text x={36} y={pad.top + dataH / 2.2} textAnchor="middle" transform={`rotate(-90, 36, ${pad.top + dataH / 2})`} fontSize={10} fontWeight="bold" fill={axisFill}>{isEn ? 'CaO/SiO₂ ratio' : 'CaO/SiO₂ 钙硅比'}</text>
+                      <text x={pad.left + dataW / 2} y={plotH - 14} textAnchor="middle" fontSize={14} fontWeight="bold" fill={axisFill}>{isEn ? 'Fe/SiO₂ ratio' : 'Fe/SiO₂ 铁硅比'}</text>
+                      <text x={36} y={pad.top + dataH / 2.2} textAnchor="middle" transform={`rotate(-90, 36, ${pad.top + dataH / 2})`} fontSize={14} fontWeight="bold" fill={axisFill}>{isEn ? 'CaO/SiO₂ ratio' : 'CaO/SiO₂ 钙硅比'}</text>
                       {paretoFront.filter((s) => s && Number.isFinite(s.feSiO2) && Number.isFinite(s.caOSiO2)).map((s, i) => (
                         <circle key={`pf-${i}`} cx={xScale(s.feSiO2)} cy={yScale(s.caOSiO2)} r={4} fill={costToColor(s.cost ?? minC)} opacity={0.88} className="cursor-pointer" style={{ pointerEvents: 'all' }}
                           onMouseEnter={() => setHoveredPoint(s)} onMouseLeave={() => setHoveredPoint(null)} onClick={() => handleApplySolvent(s)} />
@@ -1637,7 +1637,7 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                             <line x1={x} y1={y} x2={lx} y2={ly} stroke={fill} strokeWidth={1} strokeDasharray="2,2" opacity={0.8} />
                             <circle cx={x} cy={y} r={4} fill={fill} stroke={dark ? '#1f2937' : '#fff'} strokeWidth={1} className="cursor-pointer" style={{ pointerEvents: 'all' }}
                               onMouseEnter={() => setHoveredPoint(s)} onMouseLeave={() => setHoveredPoint(null)} onClick={() => handleApplySolvent(s)} />
-                            <text x={lx} y={ly} textAnchor={off.anchor} fontSize={10} fill={axisFill}>{s.label ?? solLabels[i]}</text>
+                            <text x={lx} y={ly} textAnchor={off.anchor} fontSize={14} fill={axisFill}>{s.label ?? solLabels[i]}</text>
                           </g>
                         )
                       })}
@@ -1648,9 +1648,9 @@ export default function RawMaterialPhaseOxygen({ darkMode, language = 'zh' }: Ra
                         </linearGradient>
                       </defs>
                       <rect x={barX} y={pad.top} width={12} height={barH} fill="url(#costGradViz)" rx={2} />
-                      <text x={barX + 25} y={pad.top + 5} fontSize={9} fill={axisFill} textAnchor="start">{isEn ? 'Cost (CNY/h)' : '成本(元/h)'}</text>
-                      <text x={barX + 7} y={pad.top + barH + 14} textAnchor="middle" fontSize={9} fill={axisFill}>{minC.toFixed(0)}</text>
-                      <text x={barX + 7} y={pad.top - 6} textAnchor="middle" fontSize={9} fill={axisFill}>{maxC.toFixed(0)}</text>
+                      <text x={plotW - 12} y={18} fontSize={14} fill={axisFill} textAnchor="end">{isEn ? 'Cost (CNY/h)' : '成本(元/h)'}</text>
+                      <text x={barX + 7} y={pad.top + barH + 14} textAnchor="middle" fontSize={14} fill={axisFill}>{minC.toFixed(0)}</text>
+                      <text x={barX + 7} y={pad.top - 6} textAnchor="middle" fontSize={14} fill={axisFill}>{maxC.toFixed(0)}</text>
                     </svg>
                   </div>
                 </div>

@@ -1,3 +1,5 @@
+import { normalizeProjectCostWorkbooks, type ProjectCostWorkbookState } from '../../../../utils/projectCostWorkbook.ts'
+import { normalizeEquipmentBomSnapshots } from '../../../../utils/copperEquipmentBom.ts'
 /**
  * 铜-火法-富氧侧吹-熔炼-配料计算（独立页面）。
  * 保留精矿混料 / 物相辅助 / 燃料煤；挂载时从 cache 恢复熔炼快照。
@@ -17,6 +19,15 @@ import {
 } from 'react'
 import type { SheetId } from '../../../../types'
 import { APP_PLATFORM_NAME_ZH } from '../../../../constants/appCopy'
+import { useAssistantSnapshotOptional } from '../../../../context/AssistantContext'
+import ConstraintExpressionInput from '../../ConstraintExpressionInput.tsx'
+import ConstraintTemplatePanel from '../../ConstraintTemplatePanel.tsx'
+import { buildConstraintSuggestionScope } from '../../../../utils/copperConstraintSuggestions.ts'
+import {
+  buildConstraintTemplates,
+  constraintExprAlreadyUsed,
+  type ConstraintTemplate,
+} from '../../../../utils/copperConstraintTemplates.ts'
 import { btnPrimary, btnSecondary, cardBase, cardCompact, hintText, inputBase, inputSm, sectionTitle } from '../../../../theme/uiTheme'
 import {
   buildCopperBatchExportBaseName,
@@ -889,6 +900,10 @@ interface CopperCaseRecord {
   equipmentDimensionAdjustments?: Record<EquipmentStageId, string>
   equipmentModelGenerated?: Record<EquipmentStageId, boolean>
   equipmentBomGenerated?: Record<EquipmentStageId, boolean>
+  equipmentBomSnapshots?: Record<string, EquipmentBomItem[]>
+  projectCostWorkbooks?: Record<string, ProjectCostWorkbookState>
+  materialPriceOverrides?: Record<string, string>
+  costAnnualDays?: string
   smeltingDailyFeedTd?: string
   smeltingFeedMode?: 'daily' | 'annual'
   smeltingAnnualFeedTa?: string
@@ -1076,6 +1091,13 @@ function defaultCoolingWaterMassThForStage(stageId?: CopperProcessStageId | null
 
 function oxyProductDisplayStageForProcess(stageId?: CopperProcessStageId | null): OxyProductDisplayStage {
   return stageId === 'cu_converting' ? 'converting' : 'smelting'
+}
+
+/** 助手上下文里用的工序简称 */
+const PROCESS_STAGE_SHORT_NAMES: Record<CopperProcessStageId, string> = {
+  cu_smelting: '熔炼',
+  cu_converting: '吹炼',
+  cu_refining: '精炼',
 }
 
 type ProductDistributionDrafts = Partial<Record<CopperElementKey, Partial<Record<CopperProductKey, string>>>>
@@ -2367,6 +2389,10 @@ function normalizeImportedCopperCase(payload: unknown, methodName: string): Copp
     equipmentDimensionAdjustments: candidate.equipmentDimensionAdjustments ?? { smelting: '1', converting: '1', refining: '1' },
     equipmentModelGenerated: candidate.equipmentModelGenerated ?? { smelting: false, converting: false, refining: false },
     equipmentBomGenerated: candidate.equipmentBomGenerated ?? { smelting: false, converting: false, refining: false },
+    equipmentBomSnapshots: normalizeEquipmentBomSnapshots(candidate.equipmentBomSnapshots),
+    projectCostWorkbooks: normalizeProjectCostWorkbooks(candidate.projectCostWorkbooks),
+    materialPriceOverrides: candidate.materialPriceOverrides ?? {},
+    costAnnualDays: candidate.costAnnualDays ?? '',
     smeltingDailyFeedTd: candidate.smeltingDailyFeedTd,
     smeltingFeedMode: candidate.smeltingFeedMode === 'annual' ? 'annual' : 'daily',
     smeltingAnnualFeedTa: candidate.smeltingAnnualFeedTa,
@@ -3106,6 +3132,7 @@ export default function SmeltingBatchCalcPage({
 
   /** 本页锁定工序，禁止与另一工序 UI/约束混用 */
   const pageLockedProcessStageId = 'cu_smelting' as CopperProcessStageId
+  const { askAssistant, setAssistantSnapshot } = useAssistantSnapshotOptional()
   const normalizedSmeltMethodId = normalizeCopperSmeltMethodId(smeltMethodId)
   const [initialActiveCaseRecord] = useState<CopperCaseRecord | null>(() => {
     const activeId = getActiveCopperCaseId()
@@ -3368,6 +3395,10 @@ export default function SmeltingBatchCalcPage({
   const [equipmentBomGenerated, setEquipmentBomGenerated] = useState<Record<EquipmentStageId, boolean>>(
     initialActiveCaseRecord?.equipmentBomGenerated ?? { smelting: false, converting: false, refining: false }
   )
+  const [equipmentBomSnapshots, setEquipmentBomSnapshots] = useState(() => normalizeEquipmentBomSnapshots(initialActiveCaseRecord?.equipmentBomSnapshots))
+  const [projectCostWorkbooks, setProjectCostWorkbooks] = useState(() => normalizeProjectCostWorkbooks(initialActiveCaseRecord?.projectCostWorkbooks))
+  const [materialPriceOverrides, setMaterialPriceOverrides] = useState<Record<string, string>>(initialActiveCaseRecord?.materialPriceOverrides ?? {})
+  const [costAnnualDays, setCostAnnualDays] = useState(initialActiveCaseRecord?.costAnnualDays ?? '')
   const [smeltingDailyFeedTd, setSmeltingDailyFeedTd] = useState(initialActiveCaseRecord?.smeltingDailyFeedTd ?? '')
   const [smeltingFeedMode, setSmeltingFeedMode] = useState<'daily' | 'annual'>(
     initialActiveCaseRecord?.smeltingFeedMode === 'annual' ? 'annual' : 'daily'
@@ -3734,6 +3765,39 @@ export default function SmeltingBatchCalcPage({
       ),
     [activeProcessStageId, feedConstraintElementKeys, productConstraintConfig.elementDistributions]
   )
+  const oxyProductDisplayStage = oxyProductDisplayStageForProcess(activeProcessStageId)
+  const constraintSuggestionScope = useMemo(
+    () =>
+      buildConstraintSuggestionScope({
+        config: productConstraintConfig,
+        stage: oxyProductDisplayStage,
+        solventColumns,
+        airColumns,
+      }),
+    [airColumns, oxyProductDisplayStage, productConstraintConfig, solventColumns]
+  )
+  const constraintTemplates = useMemo(
+    () =>
+      buildConstraintTemplates(
+        defaultOxyConstraintConfigForStage(activeProcessStageId),
+        oxyProductDisplayStage
+      ),
+    [activeProcessStageId, oxyProductDisplayStage]
+  )
+  const constraintSyntaxContext = useMemo(
+    () => ({
+      stageName: PROCESS_STAGE_SHORT_NAMES[activeProcessStageId],
+      inputNames: constraintSuggestionScope.inputs.map((entry) => entry.name),
+      productNames: constraintSuggestionScope.products.map((entry) => entry.name),
+      variableNames: constraintSuggestionScope.variables.map((entry) => entry.name),
+      customConstraintCount: productConstraintConfig.customConstraints.length,
+      exampleExprs: productConstraintConfig.customConstraints.slice(0, 3).map((entry) => entry.expr),
+    }),
+    [activeProcessStageId, constraintSuggestionScope, productConstraintConfig.customConstraints]
+  )
+  useEffect(() => {
+    setAssistantSnapshot((prev) => (prev ? { ...prev, constraintContext: constraintSyntaxContext } : prev))
+  }, [constraintSyntaxContext, setAssistantSnapshot])
   const activeCase = activeCaseId ? caseRecords.find((record) => record.id === activeCaseId) ?? null : null
   const applyCaseEquipmentStateToUi = useCallback((record: CopperCaseRecord) => {
     setAnnualHours(record.annualHours ?? '7200')
@@ -3745,6 +3809,10 @@ export default function SmeltingBatchCalcPage({
     )
     setEquipmentModelGenerated(record.equipmentModelGenerated ?? { smelting: false, converting: false, refining: false })
     setEquipmentBomGenerated(record.equipmentBomGenerated ?? { smelting: false, converting: false, refining: false })
+    setEquipmentBomSnapshots(normalizeEquipmentBomSnapshots(record.equipmentBomSnapshots))
+    setProjectCostWorkbooks(normalizeProjectCostWorkbooks(record.projectCostWorkbooks))
+    setMaterialPriceOverrides(record.materialPriceOverrides ?? {})
+    setCostAnnualDays(record.costAnnualDays ?? '')
     setSmeltingDailyFeedTd(record.smeltingDailyFeedTd ?? '')
     setSmeltingFeedMode(record.smeltingFeedMode === 'annual' ? 'annual' : 'daily')
     setSmeltingAnnualFeedTa(record.smeltingAnnualFeedTa ?? '')
@@ -7415,6 +7483,15 @@ export default function SmeltingBatchCalcPage({
     setNewCustomConstraintDraft(EMPTY_CUSTOM_CONSTRAINT_DRAFT)
   }
 
+  /** 模板只填进新增行，仍需用户确认目标值后按「+」入表 */
+  const fillCustomConstraintFromTemplate = (template: ConstraintTemplate) => {
+    setNewCustomConstraintDraft({ expr: template.expr, target: String(template.target) })
+    setWorkflowMessage(
+      workflowStepMessage(5, `已把「${template.name}」填入新增行，确认目标值后点「+」加入约束表。`),
+      'flow'
+    )
+  }
+
   const renderProductConstraintEditor = (compact = false) => {
     const border = darkMode ? 'border-gray-600' : 'border-gray-200'
     const head = darkMode ? 'bg-gray-800 text-gray-200' : 'bg-gray-50 text-gray-700'
@@ -7642,7 +7719,25 @@ export default function SmeltingBatchCalcPage({
         </div>
 
         <div className={`overflow-hidden rounded-lg border ${border}`}>
-          <div className={`px-3 py-2 text-sm font-semibold ${head}`}>自定义约束</div>
+          <div className={`flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm font-semibold ${head}`}>
+            <span>自定义约束</span>
+            <span className="flex items-center gap-2 [&_button]:px-2.5 [&_button]:py-1 [&_button]:text-xs">
+              <button
+                type="button"
+                className={btnSecondary(darkMode)}
+                onClick={() => askAssistant('自定义约束表达式怎么写？')}
+                title="让智能助手讲解约束表达式语法，并列出本页可用的流股名与产物名"
+              >
+                怎么写约束？
+              </button>
+              <ConstraintTemplatePanel
+                darkMode={darkMode}
+                templates={constraintTemplates}
+                isUsed={(expr) => constraintExprAlreadyUsed(productConstraintConfig, expr)}
+                onFill={fillCustomConstraintFromTemplate}
+              />
+            </span>
+          </div>
           <div className="overflow-auto">
             <table className="w-full min-w-[900px] table-fixed text-sm">
               <thead className={head}>
@@ -7675,22 +7770,17 @@ export default function SmeltingBatchCalcPage({
                           {rowIndex + 1}
                         </td>
                         <td className={tableCell}>
-                          <input
+                          <ConstraintExpressionInput
+                            darkMode={darkMode}
+                            scope={constraintSuggestionScope}
                             className={`${textInput} ${syntaxValid ? '' : darkMode ? 'border-red-500 text-red-200' : 'border-red-400 text-red-700'}`}
                             value={customExprValue(index, constraint.expr)}
                             title={customConstraintExpressionTitle(currentExpr, productConstraintConfig.variables)}
-                            aria-label={`约束表达式：${customConstraintExpressionTitle(currentExpr, productConstraintConfig.variables)}`}
-                            onFocus={(event) => {
-                              setCustomExprDraft(index, constraint.expr)
-                              event.currentTarget.select()
-                            }}
-                            onChange={(event) => setCustomExprDraft(index, event.target.value)}
-                            onBlur={() => commitCustomExprDraft(index, constraint.expr)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.currentTarget.blur()
-                              }
-                            }}
+                            ariaLabel={`约束表达式：${customConstraintExpressionTitle(currentExpr, productConstraintConfig.variables)}`}
+                            selectOnFocus
+                            onFocus={() => setCustomExprDraft(index, constraint.expr)}
+                            onChange={(next) => setCustomExprDraft(index, next)}
+                            onCommit={() => commitCustomExprDraft(index, constraint.expr)}
                           />
                         </td>
                         <td className={tableCell}>
@@ -7730,13 +7820,16 @@ export default function SmeltingBatchCalcPage({
                 <tr>
                   <td className={`${tableCell} text-center ${muted}`}>—</td>
                   <td className={tableCell}>
-                    <input
+                    <ConstraintExpressionInput
+                      darkMode={darkMode}
+                      scope={constraintSuggestionScope}
                       className={textInput}
                       value={newCustomConstraintDraft.expr}
                       title={newCustomConstraintDraft.expr ? displayConstraintExpression(newCustomConstraintDraft.expr) : constraintSyntaxHint}
-                      placeholder=""
-                      onChange={(event) =>
-                        setNewCustomConstraintDraft((prev) => ({ ...prev, expr: event.target.value }))
+                      ariaLabel="新增约束表达式"
+                      placeholder="输入 in 可补全 Input.，或点右上「约束模板」"
+                      onChange={(next) =>
+                        setNewCustomConstraintDraft((prev) => ({ ...prev, expr: next }))
                       }
                     />
                   </td>
@@ -7871,6 +7964,7 @@ export default function SmeltingBatchCalcPage({
 
   const generateEquipmentBom = () => {
     if (!activeEquipmentStageId || !activeEquipmentModelReady) return
+    setEquipmentBomSnapshots((prev) => ({ ...prev, [activeEquipmentStageId]: activeEquipmentBomItems.map((item) => ({ ...item })) }))
     setEquipmentBomGenerated((prev) => ({ ...prev, [activeEquipmentStageId]: true }))
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
@@ -9562,6 +9656,10 @@ export default function SmeltingBatchCalcPage({
       equipmentDimensionAdjustments: { ...equipmentDimensionAdjustments },
       equipmentModelGenerated: { ...equipmentModelGenerated },
       equipmentBomGenerated: { ...equipmentBomGenerated },
+      equipmentBomSnapshots,
+      projectCostWorkbooks,
+      materialPriceOverrides: { ...materialPriceOverrides },
+      costAnnualDays,
       smeltingDailyFeedTd: smeltingDailyFeedDisplay,
       smeltingFeedMode,
       smeltingAnnualFeedTa: smeltingAnnualFeedDisplay,
@@ -9682,6 +9780,10 @@ export default function SmeltingBatchCalcPage({
       equipmentDimensionAdjustments: { smelting: '1', converting: '1', refining: '1' },
       equipmentModelGenerated: { smelting: false, converting: false, refining: false },
       equipmentBomGenerated: { smelting: false, converting: false, refining: false },
+      equipmentBomSnapshots: {},
+      projectCostWorkbooks: {},
+      materialPriceOverrides: {},
+      costAnnualDays: '',
       smeltingDailyFeedTd: '',
       smeltingFeedMode: 'daily',
       smeltingAnnualFeedTa: '',
@@ -11142,6 +11244,7 @@ export default function SmeltingBatchCalcPage({
                   darkMode={darkMode}
                   design={smeltingDesign}
                   viewerRef={furnaceViewerRef}
+                  scopeKey={activeCaseId ?? 'unsaved'}
                 />
               )}
               {!isSmeltingEquipment && (
@@ -11293,6 +11396,8 @@ export default function SmeltingBatchCalcPage({
     const isEquipmentSizingReady = (stageId: EquipmentStageId) => {
       if (stageId === 'refining') return false
       if (!equipmentBomGenerated[stageId]) return false
+      const savedBom = equipmentBomSnapshots[stageId]
+      if (savedBom) return savedBom.length > 0
       const row = equipmentSizingRows.find((item) => item.id === stageId)
       if (!row) return false
       return (
@@ -11394,6 +11499,7 @@ export default function SmeltingBatchCalcPage({
           </div>
 
           <ProcessIsland3DOverview
+            scopeKey={activeCaseId ?? 'unsaved'}
             darkMode={darkMode}
             equipmentCompleteByStage={equipmentCompleteByStage}
             completedCount={completedCount}
@@ -11406,7 +11512,7 @@ export default function SmeltingBatchCalcPage({
 
         {stageSections.map((section) => {
           const equipmentRow = equipmentSizingRows.find((row) => row.id === section.id) ?? null
-          const bomItems =
+          const bomItems = equipmentBomSnapshots[section.id] ?? (
             equipmentRow != null
               ? buildCopperEquipmentBom(
                   section.id,
@@ -11415,7 +11521,7 @@ export default function SmeltingBatchCalcPage({
                   toNumber(equipmentDimensionAdjustments[section.id], 1),
                   section.id === 'smelting' ? smeltingDesign : null
                 )
-              : []
+              : [])
           const bomReady = Boolean(equipmentBomGenerated[section.id] && bomItems.length > 0)
           const statusLabel = section.comingSoon
             ? '待开发'
@@ -14457,6 +14563,7 @@ function CaseSummaryStageTables({
 }
 
 function ProcessIsland3DOverview({
+  scopeKey,
   darkMode,
   equipmentCompleteByStage,
   completedCount,
@@ -14465,6 +14572,7 @@ function ProcessIsland3DOverview({
   totalFeedTh,
   smeltingDesign,
 }: {
+  scopeKey: string
   darkMode: boolean
   equipmentCompleteByStage: Record<EquipmentStageId, boolean>
   completedCount: number
@@ -14525,7 +14633,7 @@ function ProcessIsland3DOverview({
             onChange={(id) => setActiveEquipmentTab(id as EquipmentStageId)}
           />
           {resolvedEquipmentTab === 'smelting' && smeltingDesign && (
-            <SmeltingFurnacePlanPanel darkMode={darkMode} design={smeltingDesign} embedded />
+            <SmeltingFurnacePlanPanel darkMode={darkMode} design={smeltingDesign} embedded scopeKey={scopeKey} />
           )}
         </div>
       ) : (
@@ -14681,18 +14789,20 @@ function buildCopperEquipmentBom(
   ]
 }
 
-/** 三维方案面板：视图占满整宽，炉型参数集中到下方横向信息总览 */
+/** 三维方案面板：左侧参数与三维视图直接并排，避免外层重复套框 */
 function SmeltingFurnacePlanPanel({
   darkMode,
   design,
   viewerRef,
   embedded = false,
+  scopeKey = 'unsaved',
 }: {
   darkMode: boolean
   design: SmeltingFurnaceDesignResult
   viewerRef?: RefObject<SmeltingFurnaceViewerHandle>
   /** 汇总总览内嵌时去掉外层卡片边框，避免双重套框 */
   embedded?: boolean
+  scopeKey?: string
 }) {
   const lengthM = Math.max(design.designLengthM || design.furnaceLengthM, 0.1)
   const widthM = Math.max(design.furnaceWidthM, 0.1)
@@ -14701,11 +14811,9 @@ function SmeltingFurnacePlanPanel({
   const body = (
     <>
       {!embedded && (
-        <div className={`flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4 ${
-          darkMode ? 'border-gray-700 bg-gray-900/70' : 'border-gray-200 bg-slate-50'
-        }`}>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className={`text-sm font-semibold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>三维熔炼炉方案</div>
+            <div className={`text-lg font-semibold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>三维熔炼炉方案</div>
           </div>
           <div className={`rounded-full px-2.5 py-1 text-xs font-medium ${
             darkMode ? 'bg-emerald-950/50 text-emerald-200' : 'bg-emerald-50 text-emerald-700'
@@ -14714,14 +14822,13 @@ function SmeltingFurnacePlanPanel({
           </div>
         </div>
       )}
-      <div className={embedded ? 'pt-1' : 'p-4'}>
-        <SmeltingFurnaceViewer ref={viewerRef ?? null} darkMode={darkMode} design={design} />
-      </div>
-      <div className={`${embedded ? 'mt-3' : 'border-t'} px-1 pb-1 pt-3 ${
+      <SmeltingFurnaceViewer ref={viewerRef ?? null} darkMode={darkMode} design={design} readOnly={embedded} scopeKey={scopeKey} />
+      <div className={`furnace-planning-summary ${embedded ? 'mt-3' : 'border-t'} px-1 pb-1 pt-3 ${
         embedded ? '' : darkMode ? 'border-gray-700 bg-gray-900/30 px-4 pb-4 pt-4' : 'border-gray-200 bg-slate-50/70 px-4 pb-4 pt-4'
       }`}>
         <div className="mb-3">
-          <div className={`text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>参数信息总览</div>
+          <div className={`text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>选型计算参考</div>
+          <p className="mt-1 text-xs">调整后的三维尺寸见左侧构件参数，以下为原始选型计算值。</p>
         </div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-8">
           <SummaryMetricCard darkMode={darkMode} label="炉床面积" value={`${formatTableDisplayValue(design.areaM2)} m²`} />
@@ -14756,9 +14863,7 @@ function SmeltingFurnacePlanPanel({
   if (embedded) return <div className="space-y-1">{body}</div>
 
   return (
-    <div className={`mt-4 overflow-hidden rounded-2xl border shadow-sm ${
-      darkMode ? 'border-gray-600 bg-gray-950/40' : 'border-gray-200 bg-white'
-    }`}>
+    <div className="mt-4 min-w-0">
       {body}
     </div>
   )

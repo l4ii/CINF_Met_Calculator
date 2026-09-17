@@ -118,7 +118,7 @@ export function CopperMaterialSelect({
       ? createPortal(
           <div
             id={listId}
-            className={menuPanelClass}
+            className={`workflow-content ${menuPanelClass}`}
             style={{
               position: 'fixed',
               top: menuStyle.top,

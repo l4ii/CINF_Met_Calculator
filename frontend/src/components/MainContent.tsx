@@ -242,7 +242,7 @@ export default function MainContent({
       </div>
 
       <div ref={mainScrollRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <div className="flex w-full max-w-none flex-1 flex-col px-3 pt-3 pb-0 xl:px-4 2xl:px-6">
+        <div className="workflow-content flex w-full max-w-none flex-1 flex-col px-3 pt-3 pb-0 xl:px-4 2xl:px-6">
           {isCopperSideBlown && (
             <ErrorBoundary>
               <Suspense fallback={<ModuleLoadingFallback darkMode={darkMode} />}>

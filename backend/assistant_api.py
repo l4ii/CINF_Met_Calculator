@@ -133,6 +133,20 @@ _MET_UI_HINT_EN = (
     "Heat balance, Furnace design in the main area."
 )
 
+# 产出计算页「自定义约束」的表达式语法。snapshot 带 constraintContext 时追加，
+# 避免模型凭空编造 abs()/if 这类求解器不支持的写法。
+_CONSTRAINT_SYNTAX_HINT_ZH = (
+    "自定义约束的语法：一条约束是「表达式 = 目标值」，表达式格里不写等号。"
+    "路径前缀只认 Input、Output、OutputE 三个，大小写敏感——写成小写 input. 不会报错但求值恒为 0。"
+    "层级为 Input.流股[.物相[.元素]]、Output.产物[.物相[.元素]]、OutputE.产物.元素（必须三段）。"
+    "只支持 + - * / 和小括号与一元负号，没有任何函数调用（abs/min/max/sqrt/sum 都不支持），也不支持比较符与条件式。"
+    "裸写的元素或化合物符号表示其摩尔/原子质量 g/mol，用于当量折算，如 OutputE.熔炼渣.Si / Si * SiO2 得到 SiO₂ 当量质量。"
+    "元素用短符号（Cu、S、Fe、SiO2、CaO），Si/Ca/Mg/Al 按对应氧化物当量折算。"
+    "Input.加料口漏风 单位是 Nm³/h，其余投入流股是 t/h。"
+    "产物名分工序，熔炼与吹炼不通用。"
+    "回答时只能使用 snapshot.constraintContext 里列出的流股名与产物名，不要编造。"
+)
+
 
 def _knowledge_dir() -> Path:
     raw = os.environ.get("CINF_ASSISTANT_KNOWLEDGE_DIR", "").strip()
@@ -860,6 +874,8 @@ def _build_system(locale: str, snapshot: Any, knowledge_text: str) -> str:
         "--- 客户端上下文 snapshot (JSON) ---",
         snap_s,
     ]
+    if isinstance(snapshot, dict) and snapshot.get("constraintContext"):
+        parts.extend(["--- 自定义约束表达式语法 ---", _CONSTRAINT_SYNTAX_HINT_ZH])
     if knowledge_text:
         parts.extend(["--- 附加知识库 ---", knowledge_text.strip()])
     return "\n\n".join(parts)

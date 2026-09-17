@@ -1,4 +1,6 @@
 import type { SheetId } from '../types'
+import type { ProjectCostWorkbookState } from './projectCostWorkbook.ts'
+import type { EquipmentBomItem } from './copperEquipmentBom.ts'
 import type { OxySideBlowConstraintConfig } from './copperConstraintConfig.ts'
 import type { OxyConstraintSolverResult } from './copperConstraintSolver.ts'
 import type { CopperChemicalHeatMode, CopperHeatBalanceResult } from './copperHeatBalance.ts'
@@ -127,6 +129,8 @@ export type CopperCaseSharedPersistedFields = {
   equipmentDimensionAdjustments?: Record<string, string>
   equipmentModelGenerated?: Record<string, boolean>
   equipmentBomGenerated?: Record<string, boolean>
+  equipmentBomSnapshots?: Record<string, EquipmentBomItem[]>
+  projectCostWorkbooks?: Record<string, ProjectCostWorkbookState>
   /** 侧吹熔炼设备选型：面积 / 设计参数 */
   smeltingDailyFeedTd?: string
   smeltingFeedMode?: 'daily' | 'annual'
@@ -177,6 +181,10 @@ export type CopperCaseSharedPersistedFields = {
   convertingJacketCountOverridden?: boolean
   convertingJacketRemainderDecision?: 'extend' | 'trim' | null
   convertingTuyereCountOverridden?: boolean
+  /** 工程造价：物料单价覆盖（行 id → 单价文本），缺省回落默认价格表 */
+  materialPriceOverrides?: Record<string, string>
+  /** 工程造价年处理天数；空则跟随本工序选型年处理天数 */
+  costAnnualDays?: string
 }
 
 const DEFAULT_OXYGEN_AIR_O2_TEXT = String(DEFAULT_COPPER_OXYGEN_AIR_SETTINGS.oxygenPct)
@@ -634,6 +642,10 @@ export function buildPersistedCaseContent(record: {
   equipmentDimensionAdjustments?: Record<string, string>
   equipmentModelGenerated?: Record<string, boolean>
   equipmentBomGenerated?: Record<string, boolean>
+  equipmentBomSnapshots?: Record<string, EquipmentBomItem[]>
+  projectCostWorkbooks?: Record<string, ProjectCostWorkbookState>
+  materialPriceOverrides?: Record<string, string>
+  costAnnualDays?: string
   smeltingDailyFeedTd?: string
   smeltingFeedMode?: 'daily' | 'annual'
   smeltingBedCapacity?: string
@@ -672,6 +684,10 @@ export function buildPersistedCaseContent(record: {
     equipmentDimensionAdjustments: record.equipmentDimensionAdjustments,
     equipmentModelGenerated: record.equipmentModelGenerated,
     equipmentBomGenerated: record.equipmentBomGenerated,
+    equipmentBomSnapshots: record.equipmentBomSnapshots ?? {},
+    projectCostWorkbooks: record.projectCostWorkbooks ?? {},
+    materialPriceOverrides: record.materialPriceOverrides ?? {},
+    costAnnualDays: record.costAnnualDays ?? '',
     smeltingDailyFeedTd: record.smeltingDailyFeedTd,
     smeltingFeedMode: record.smeltingFeedMode === 'annual' ? 'annual' : 'daily',
     smeltingAnnualFeedTa: record.smeltingAnnualFeedTa,

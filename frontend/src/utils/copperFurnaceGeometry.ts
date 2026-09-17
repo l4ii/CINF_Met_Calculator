@@ -4,6 +4,12 @@
  * 坐标系：X = 炉长方向，Y = 竖直向上，Z = 炉宽方向，原点在炉体底面中心。
  */
 import type { SmeltingFurnaceDesignResult } from './copperEquipmentSizing.ts'
+import {
+  countParameter,
+  numericParameter,
+  type ModelComponentManifest,
+  type ModelComponentOverrides,
+} from './modelComponentManifest.ts'
 
 export type FurnaceSide = 'front' | 'back'
 
@@ -95,6 +101,9 @@ export interface FurnaceBodyBox {
   lengthM: number
   widthM: number
   heightM: number
+  centerXM: number
+  centerYM: number
+  centerZM: number
 }
 
 export interface FurnaceFoundationBox {
@@ -103,6 +112,14 @@ export interface FurnaceFoundationBox {
   heightM: number
   /** 基础顶面与炉体底面齐平，中心在原点下方 */
   centerYM: number
+  centerXM: number
+  centerZM: number
+}
+
+export interface FurnaceFluePlacement extends SchematicFlueDims {
+  centerXM: number
+  centerYM: number
+  centerZM: number
 }
 
 export interface FurnaceJacketPlacement {
@@ -134,6 +151,8 @@ export interface FurnaceTuyerePlacement {
 export interface FurnaceLayout {
   body: FurnaceBodyBox
   foundation: FurnaceFoundationBox
+  flue: FurnaceFluePlacement
+  flare: SchematicBodyFlareDims
   jackets: FurnaceJacketPlacement[]
   tuyeres: FurnaceTuyerePlacement[]
   jacketCountOneSide: number
@@ -144,10 +163,20 @@ export interface FurnaceLayout {
   overallLengthM: number
   overallWidthM: number
   overallHeightM: number
+  components: ModelComponentManifest[]
 }
 
 function positiveOrFallback(value: number | null | undefined, fallback: number): number {
   return Number.isFinite(value) && (value as number) > 0 ? (value as number) : fallback
+}
+
+function overridePositive(overrides: ModelComponentOverrides | undefined, ids: string[], key: string, fallback: number): number {
+  for (const id of ids) { const value = overrides?.[id]?.[key]; if (Number.isFinite(value) && (value as number) > 0) return value as number }
+  return fallback
+}
+function overridePosition(overrides: ModelComponentOverrides | undefined, ids: string[], key: string, fallback: number): number {
+  for (const id of ids) { const value = overrides?.[id]?.[key]; if (Number.isFinite(value)) return value as number }
+  return fallback
 }
 
 function safeCount(value: number | null | undefined, limit: number): number {
@@ -193,11 +222,11 @@ export function tuyereCenterOffsetsM(count: number, usableLengthM: number): numb
   return Array.from({ length: safe }, (_, index) => startXM + index * step)
 }
 
-export function buildSmeltingFurnaceLayout(design: SmeltingFurnaceDesignResult): FurnaceLayout {
-  const lengthM = positiveOrFallback(design.designLengthM || design.furnaceLengthM, 8)
-  const widthM = positiveOrFallback(design.furnaceWidthM, 2.2)
-  const heightM = resolveFurnaceBodyHeightM(widthM)
-  const jacketPitchM = positiveOrFallback(design.jacketPitchMm, 600) / 1000
+export function buildSmeltingFurnaceLayout(design: SmeltingFurnaceDesignResult, overrides?: ModelComponentOverrides): FurnaceLayout {
+  const lengthM = overridePositive(overrides, ['smelting.primary-body'], 'lengthM', positiveOrFallback(design.designLengthM || design.furnaceLengthM, 8))
+  const widthM = overridePositive(overrides, ['smelting.primary-body'], 'widthM', positiveOrFallback(design.furnaceWidthM, 2.2))
+  const heightM = overridePositive(overrides, ['smelting.primary-body'], 'heightM', resolveFurnaceBodyHeightM(widthM))
+  const jacketPitchM = overridePositive(overrides, ['smelting.annotation.counts'], 'jacketPitchM', positiveOrFallback(design.jacketPitchMm, 600) / 1000)
   const jacketCountOneSide = safeCount(design.jacketCountOneSide, FURNACE_JACKET_RENDER_LIMIT)
   // 风口与水套 1:1：单侧个数相同，X 坐标共用同一组中心
   const tuyereCountOneSide = safeCount(
@@ -206,12 +235,14 @@ export function buildSmeltingFurnaceLayout(design: SmeltingFurnaceDesignResult):
   )
   const pairedCountOneSide = Math.min(jacketCountOneSide, tuyereCountOneSide)
 
-  const body: FurnaceBodyBox = { lengthM, widthM, heightM }
+  const body: FurnaceBodyBox = { lengthM, widthM, heightM, centerXM: overridePosition(overrides, ['smelting.primary-body'], 'centerXM', 0), centerYM: overridePosition(overrides, ['smelting.primary-body'], 'centerYM', 0), centerZM: overridePosition(overrides, ['smelting.primary-body'], 'centerZM', 0) }
   const foundation: FurnaceFoundationBox = {
-    lengthM: lengthM + FOUNDATION_MARGIN_M * 2,
-    widthM: widthM + FOUNDATION_MARGIN_M * 2,
-    heightM: FOUNDATION_HEIGHT_M,
-    centerYM: -FOUNDATION_HEIGHT_M / 2,
+    lengthM: overridePositive(overrides, ['smelting.support.foundation'], 'lengthM', lengthM + FOUNDATION_MARGIN_M * 2),
+    widthM: overridePositive(overrides, ['smelting.support.foundation'], 'widthM', widthM + FOUNDATION_MARGIN_M * 2),
+    heightM: overridePositive(overrides, ['smelting.support.foundation'], 'heightM', FOUNDATION_HEIGHT_M),
+    centerYM: overridePosition(overrides, ['smelting.support.foundation'], 'centerYM', -FOUNDATION_HEIGHT_M / 2),
+    centerXM: overridePosition(overrides, ['smelting.support.foundation'], 'centerXM', 0),
+    centerZM: overridePosition(overrides, ['smelting.support.foundation'], 'centerZM', 0),
   }
 
   const centerOffsets = jacketCenterOffsetsM(pairedCountOneSide, jacketPitchM)
@@ -223,50 +254,167 @@ export function buildSmeltingFurnaceLayout(design: SmeltingFurnaceDesignResult):
 
   const jackets: FurnaceJacketPlacement[] = []
   const tuyeres: FurnaceTuyerePlacement[] = []
-  let serial = 0
   for (const side of ['front', 'back'] as FurnaceSide[]) {
     const sign = side === 'front' ? 1 : -1
     const sideLabel = side === 'front' ? '前墙' : '后墙'
     centerOffsets.forEach((centerXM, position) => {
       const index = position + 1
-      serial += 1
+      const jacketId = `jacket-${side}-${index}`
+      const jacketManifestId = `smelting.cooling-and-injection.jacket.${side}.${String(index).padStart(2, '0')}`
       jackets.push({
-        id: `jacket-${side}-${index}`,
+        id: jacketId,
         index,
         side,
-        centerXM,
-        centerYM: jacketCenterYM,
-        centerZM: jacketZM * sign,
-        lengthM: jacketLengthM,
-        heightM: JACKET_HEIGHT_M,
-        thicknessM: JACKET_THICKNESS_M,
+        centerXM: overridePosition(overrides, [jacketManifestId, jacketId], 'centerXM', centerXM),
+        centerYM: overridePosition(overrides, [jacketManifestId, jacketId], 'centerYM', jacketCenterYM),
+        centerZM: overridePosition(overrides, [jacketManifestId, jacketId], 'centerZM', jacketZM * sign),
+        lengthM: overridePositive(overrides, [jacketManifestId, jacketId], 'lengthM', jacketLengthM),
+        heightM: overridePositive(overrides, [jacketManifestId, jacketId], 'heightM', JACKET_HEIGHT_M),
+        thicknessM: overridePositive(overrides, [jacketManifestId, jacketId], 'thicknessM', JACKET_THICKNESS_M),
         label: `水套 ${sideLabel} #${index}`,
       })
+      const tuyereId = `tuyere-${side}-${index}`
+      const tuyereManifestId = `smelting.cooling-and-injection.tuyere.${side}.${String(index).padStart(2, '0')}`
       tuyeres.push({
-        id: `tuyere-${side}-${index}`,
-        index: serial,
+        id: tuyereId,
+        index,
         side,
-        centerXM,
-        centerYM: tuyereCenterYM,
-        centerZM: tuyereZM * sign,
-        radiusM: TUYERE_RADIUS_M,
-        lengthM: TUYERE_LENGTH_M,
+        centerXM: overridePosition(overrides, [tuyereManifestId, tuyereId], 'centerXM', centerXM),
+        centerYM: overridePosition(overrides, [tuyereManifestId, tuyereId], 'centerYM', tuyereCenterYM),
+        centerZM: overridePosition(overrides, [tuyereManifestId, tuyereId], 'centerZM', tuyereZM * sign),
+        radiusM: overridePositive(overrides, [tuyereManifestId, tuyereId], 'radiusM', TUYERE_RADIUS_M),
+        lengthM: overridePositive(overrides, [tuyereManifestId, tuyereId], 'lengthM', TUYERE_LENGTH_M),
         label: `风口 ${sideLabel} #${index}`,
       })
     })
   }
 
-  return {
+  const flareBase = resolveSchematicBodyFlareDims(body)
+  const flare: SchematicBodyFlareDims = {
+    ...flareBase,
+    lowerHeightM: overridePositive(overrides, ['smelting.primary-body'], 'flareLowerHeightM', flareBase.lowerHeightM),
+    upperHeightM: overridePositive(overrides, ['smelting.primary-body'], 'flareUpperHeightM', flareBase.upperHeightM),
+    topWidthM: overridePositive(overrides, ['smelting.primary-body'], 'topWidthM', flareBase.topWidthM),
+  }
+  const flueBase = resolveSchematicFlueDims(body)
+  const flue: FurnaceFluePlacement = {
+    ...flueBase,
+    lengthM: overridePositive(overrides, ['smelting.process-connection.flue'], 'lengthM', flueBase.lengthM),
+    widthM: overridePositive(overrides, ['smelting.process-connection.flue'], 'widthM', flueBase.widthM),
+    heightM: overridePositive(overrides, ['smelting.process-connection.flue'], 'heightM', flueBase.heightM),
+    centerXM: overridePosition(overrides, ['smelting.process-connection.flue'], 'centerXM', body.centerXM),
+    centerYM: overridePosition(overrides, ['smelting.process-connection.flue'], 'centerYM', body.centerYM + body.heightM + flueBase.heightM / 2),
+    centerZM: overridePosition(overrides, ['smelting.process-connection.flue'], 'centerZM', body.centerZM),
+  }
+  const bounds = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, minZ: Infinity, maxZ: -Infinity }
+  const includeBox = (x: number, y: number, z: number, l: number, h: number, w: number) => { bounds.minX = Math.min(bounds.minX, x - l / 2); bounds.maxX = Math.max(bounds.maxX, x + l / 2); bounds.minY = Math.min(bounds.minY, y - h / 2); bounds.maxY = Math.max(bounds.maxY, y + h / 2); bounds.minZ = Math.min(bounds.minZ, z - w / 2); bounds.maxZ = Math.max(bounds.maxZ, z + w / 2) }
+  includeBox(body.centerXM, body.centerYM + flare.lowerHeightM / 2, body.centerZM, flare.bottomLengthM, flare.lowerHeightM, flare.bottomWidthM)
+  includeBox(body.centerXM, body.centerYM + flare.lowerHeightM + flare.upperHeightM / 2, body.centerZM, flare.topLengthM, flare.upperHeightM, flare.topWidthM)
+  includeBox(foundation.centerXM, foundation.centerYM, foundation.centerZM, foundation.lengthM, foundation.heightM, foundation.widthM)
+  includeBox(flue.centerXM, flue.centerYM, flue.centerZM, flue.lengthM, flue.heightM, flue.widthM)
+  for (const jacket of jackets) includeBox(jacket.centerXM, jacket.centerYM, jacket.centerZM, jacket.lengthM, jacket.heightM, jacket.thicknessM)
+  for (const tuyere of tuyeres) includeBox(tuyere.centerXM, tuyere.centerYM, tuyere.centerZM, tuyere.lengthM, tuyere.radiusM * 2, tuyere.radiusM * 2)
+  const layout: FurnaceLayout = {
     body,
     foundation,
+    flue,
+    flare,
     jackets,
     tuyeres,
     jacketCountOneSide: pairedCountOneSide,
     jacketCountTotal: pairedCountOneSide * 2,
     jacketPitchM,
     tuyereCountTotal: pairedCountOneSide * 2,
-    overallLengthM: foundation.lengthM,
-    overallWidthM: Math.max(foundation.widthM, widthM + TUYERE_LENGTH_M * 2),
-    overallHeightM: heightM + resolveSchematicFlueDims({ lengthM, widthM, heightM }).heightM + FOUNDATION_HEIGHT_M,
+    overallLengthM: bounds.maxX - bounds.minX,
+    overallWidthM: bounds.maxZ - bounds.minZ,
+    overallHeightM: bounds.maxY - bounds.minY,
+    components: [],
   }
+  layout.components = buildSmeltingFurnaceComponentManifest(layout)
+  return layout
+}
+
+/** Build stable, hand-off friendly component metadata from a computed layout. */
+export function buildSmeltingFurnaceComponentManifest(layout: FurnaceLayout): ModelComponentManifest[] {
+  const components: ModelComponentManifest[] = []
+  const bodyId = 'smelting.primary-body'
+  components.push({
+    id: bodyId, model: 'smelting-furnace', group: 'primary-body', category: 'furnace-body',
+    role: '侧吹熔炼炉主体炉壳', kind: 'box',
+    params: {
+      lengthM: numericParameter(layout.body.lengthM, 'm', { editable: true, source: 'calculation', label: '炉长' }),
+      widthM: numericParameter(layout.body.widthM, 'm', { editable: true, source: 'calculation', label: '炉宽' }),
+      heightM: numericParameter(layout.body.heightM, 'm', { editable: true, source: 'geometry', label: '炉高' }),
+      centerXM: numericParameter(layout.body.centerXM, 'm', { editable: true, source: 'geometry', label: 'X' }),
+      centerYM: numericParameter(layout.body.centerYM, 'm', { editable: true, source: 'geometry', label: 'Y' }),
+      centerZM: numericParameter(layout.body.centerZM, 'm', { editable: true, source: 'geometry', label: 'Z' }),
+    },
+  })
+  const flue = layout.flue
+  components.push({
+    id: 'smelting.process-connection.flue', model: 'smelting-furnace', group: 'process-connection', category: 'flue',
+    role: '炉顶烟道', kind: 'box',
+    params: {
+      lengthM: numericParameter(flue.lengthM, 'm', { editable: true, source: 'geometry', label: '烟道长度' }),
+      widthM: numericParameter(flue.widthM, 'm', { editable: true, source: 'geometry', label: '烟道宽度' }),
+      heightM: numericParameter(flue.heightM, 'm', { editable: true, source: 'geometry', label: '烟道高度' }),
+      centerXM: numericParameter(flue.centerXM, 'm', { editable: true, source: 'geometry', label: 'X' }),
+      centerYM: numericParameter(flue.centerYM, 'm', { editable: true, source: 'geometry', label: 'Y' }),
+      centerZM: numericParameter(flue.centerZM, 'm', { editable: true, source: 'geometry', label: 'Z' }),
+    },
+  })
+  components.push({
+    id: 'smelting.support.foundation', model: 'smelting-furnace', group: 'support', category: 'foundation',
+    role: '设备基础', kind: 'box',
+    params: {
+      lengthM: numericParameter(layout.foundation.lengthM, 'm', { editable: true, source: 'geometry', label: '基础长度' }),
+      widthM: numericParameter(layout.foundation.widthM, 'm', { editable: true, source: 'geometry', label: '基础宽度' }),
+      heightM: numericParameter(layout.foundation.heightM, 'm', { editable: true, source: 'geometry', label: '基础高度' }),
+      centerXM: numericParameter(layout.foundation.centerXM, 'm', { editable: true, source: 'geometry', label: 'X' }),
+      centerYM: numericParameter(layout.foundation.centerYM, 'm', { editable: true, source: 'geometry', label: 'Y' }),
+      centerZM: numericParameter(layout.foundation.centerZM, 'm', { editable: true, source: 'geometry', label: 'Z' }),
+    },
+  })
+  for (const jacket of layout.jackets) {
+    const serial = String(jacket.index).padStart(2, '0')
+    components.push({
+      id: `smelting.cooling-and-injection.jacket.${jacket.side}.${serial}`,
+      model: 'smelting-furnace', group: 'cooling-and-injection', category: 'water-jacket',
+      role: `水套 ${jacket.side === 'front' ? '前墙' : '后墙'} #${jacket.index}`, kind: 'box', geometryId: jacket.id,
+      params: {
+        lengthM: numericParameter(jacket.lengthM, 'm', { editable: true, source: 'geometry', label: '水套长度' }),
+        heightM: numericParameter(jacket.heightM, 'm', { editable: true, source: 'geometry', label: '水套高度' }),
+        thicknessM: numericParameter(jacket.thicknessM, 'm', { editable: true, source: 'geometry', label: '水套厚度' }),
+        centerXM: numericParameter(jacket.centerXM, 'm', { editable: false, source: 'geometry' }),
+        centerYM: numericParameter(jacket.centerYM, 'm', { editable: true, source: 'geometry', label: 'Y' }),
+        centerZM: numericParameter(jacket.centerZM, 'm', { editable: true, source: 'geometry', label: 'Z' }),
+      },
+    })
+  }
+  for (const tuyere of layout.tuyeres) {
+    const serial = String(tuyere.index).padStart(2, '0')
+    components.push({
+      id: `smelting.cooling-and-injection.tuyere.${tuyere.side}.${serial}`,
+      model: 'smelting-furnace', group: 'cooling-and-injection', category: 'tuyere',
+      role: `风口 ${tuyere.side === 'front' ? '前墙' : '后墙'} #${tuyere.index}`, kind: 'cylinder', geometryId: tuyere.id,
+      params: {
+        radiusM: numericParameter(tuyere.radiusM, 'm', { editable: true, source: 'geometry', label: '风口半径' }),
+        lengthM: numericParameter(tuyere.lengthM, 'm', { editable: true, source: 'geometry', label: '风口长度' }),
+        centerXM: numericParameter(tuyere.centerXM, 'm', { editable: true, source: 'geometry', label: 'X' }),
+        centerYM: numericParameter(tuyere.centerYM, 'm', { editable: true, source: 'geometry', label: 'Y' }),
+        centerZM: numericParameter(tuyere.centerZM, 'm', { editable: true, source: 'geometry', label: 'Z' }),
+      },
+    })
+  }
+  components.push({
+    id: 'smelting.annotation.counts', model: 'smelting-furnace', group: 'annotation', category: 'layout-summary',
+    role: '布置数量汇总', kind: 'metadata',
+    params: {
+      jacketCountOneSide: countParameter(layout.jacketCountOneSide),
+      jacketCountTotal: countParameter(layout.jacketCountTotal),
+      tuyereCountTotal: countParameter(layout.tuyereCountTotal),
+      jacketPitchM: numericParameter(layout.jacketPitchM, 'm', { editable: true, source: 'calculation', label: '水套间距' }),
+    },
+  })
+  return components
 }

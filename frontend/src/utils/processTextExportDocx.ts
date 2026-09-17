@@ -4,6 +4,7 @@ import {
   Document,
   ExternalHyperlink,
   HeightRule,
+  ImageRun,
   PageOrientation,
   Packer,
   Paragraph,
@@ -19,6 +20,7 @@ import {
   type ITableCellOptions,
 } from 'docx'
 import { APP_NAME_ZH, APP_ORG_NAME_ZH, APP_TAGLINE_ZH } from '../constants/appCopy.ts'
+import { exportLogoPngBytes } from './exportBrandLogo.ts'
 import {
   prepareReferenceBatchSheets,
   type PreparedReferenceBatchSheet,
@@ -44,6 +46,9 @@ const LANDSCAPE_PAGE_HEIGHT = A4_PORTRAIT_WIDTH
 const LANDSCAPE_TABLE_WIDTH = A4_PORTRAIT_HEIGHT - PAGE_MARGIN * 2
 const TABLE6_LANDSCAPE_TABLE_WIDTH = A3_LANDSCAPE_PAGE_WIDTH - PAGE_MARGIN * 2
 const DOCX_COLUMN_UNIT_DXA = 120
+
+/** 封面标识边长（像素，docx 按 96 DPI 折算为 EMU），96 px 约合 1 英寸。 */
+const LOGO_DISPLAY_SIZE = 96
 
 const EXCEL_HEADER_ROW_HEIGHT = 420
 const EXCEL_SUBHEADER_ROW_HEIGHT = 340
@@ -478,7 +483,19 @@ function titlePageChildren(meta: ProcessTextExportMeta) {
   return [
     new Paragraph({
       alignment: AlignmentType.CENTER,
-      spacing: { before: 480, after: 180 },
+      spacing: { before: 240, after: 120 },
+      children: [
+        new ImageRun({
+          type: 'png',
+          data: exportLogoPngBytes(),
+          transformation: { width: LOGO_DISPLAY_SIZE, height: LOGO_DISPLAY_SIZE },
+          altText: { name: APP_NAME_ZH, title: APP_NAME_ZH, description: APP_NAME_ZH },
+        }),
+      ],
+    }),
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 120, after: 180 },
       children: [documentRun('冶金计算报告', 36, true, true)],
     }),
     new Paragraph({

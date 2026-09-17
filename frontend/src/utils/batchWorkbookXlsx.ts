@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs'
+import { EXPORT_LOGO_PNG_BASE64 } from './exportBrandLogo.ts'
 import {
   prepareReferenceBatchSheets,
   type PreparedReferenceBatchSheet,
@@ -16,6 +17,10 @@ const HEADER_FILL_COLOR = 'FFDCE6F1'
 const SUBHEADER_FILL_COLOR = 'FFEDF2F7'
 const SECTION_FILL_COLOR = 'FFF4F6F8'
 const TOTAL_FILL_COLOR = 'FFF7F8FA'
+
+/** 标识行行高（磅）与图片边长（像素）；42 磅约合 56 像素，图片略小以免压到下一行标题。 */
+const LOGO_ROW_HEIGHT = 42
+const LOGO_IMAGE_SIZE = 52
 
 const centerAlignment: Partial<ExcelJS.Alignment> = {
   horizontal: 'center',
@@ -278,14 +283,23 @@ export async function buildReferenceBatchWorkbookXlsx(
 
   const stageName = options.stageName?.trim() ?? ''
   const maxColumns = Math.max(1, ...preparedSheets.map((sheet) => sheet.columns.length + 1))
-  const titleRow = worksheet.getRow(1)
+
+  worksheet.getRow(1).height = LOGO_ROW_HEIGHT
+  const logoId = workbook.addImage({ base64: EXPORT_LOGO_PNG_BASE64, extension: 'png' })
+  worksheet.addImage(logoId, {
+    tl: { col: 0, row: 0 },
+    ext: { width: LOGO_IMAGE_SIZE, height: LOGO_IMAGE_SIZE },
+    editAs: 'oneCell',
+  })
+
+  const titleRow = worksheet.getRow(2)
   titleRow.height = 20
   titleRow.getCell(1).value = stageName ? `[${stageName}]计算` : '冶金计算'
   titleRow.getCell(1).font = { name: FONT_NAME, size: 11, bold: false, color: { argb: 'FFFF0000' } }
   titleRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' }
-  if (maxColumns > 1) worksheet.mergeCells(1, 1, 1, maxColumns)
+  if (maxColumns > 1) worksheet.mergeCells(2, 1, 2, maxColumns)
 
-  let rowIndex = 3
+  let rowIndex = 4
   for (const sheet of preparedSheets) {
     rowIndex = writeSheetBlock(worksheet, sheet, rowIndex, stageName)
   }

@@ -11006,6 +11006,7 @@ export default function SmeltingBatchCalcPage({
                   darkMode={darkMode}
                   design={smeltingDesign}
                   viewerRef={furnaceViewerRef}
+                  scopeKey={activeCaseId ?? 'unsaved'}
                 />
               )}
               {!isSmeltingEquipment && (
@@ -11258,6 +11259,7 @@ export default function SmeltingBatchCalcPage({
           </div>
 
           <ProcessIsland3DOverview
+            scopeKey={activeCaseId ?? 'unsaved'}
             darkMode={darkMode}
             equipmentCompleteByStage={equipmentCompleteByStage}
             completedCount={completedCount}
@@ -14321,6 +14323,7 @@ function CaseSummaryStageTables({
 }
 
 function ProcessIsland3DOverview({
+  scopeKey,
   darkMode,
   equipmentCompleteByStage,
   completedCount,
@@ -14329,6 +14332,7 @@ function ProcessIsland3DOverview({
   totalFeedTh,
   smeltingDesign,
 }: {
+  scopeKey: string
   darkMode: boolean
   equipmentCompleteByStage: Record<EquipmentStageId, boolean>
   completedCount: number
@@ -14389,7 +14393,7 @@ function ProcessIsland3DOverview({
             onChange={(id) => setActiveEquipmentTab(id as EquipmentStageId)}
           />
           {resolvedEquipmentTab === 'smelting' && smeltingDesign && (
-            <SmeltingFurnacePlanPanel darkMode={darkMode} design={smeltingDesign} embedded />
+            <SmeltingFurnacePlanPanel darkMode={darkMode} design={smeltingDesign} embedded scopeKey={scopeKey} />
           )}
         </div>
       ) : (
@@ -14545,18 +14549,20 @@ function buildAntimonyEquipmentBom(
   ]
 }
 
-/** 三维方案面板：视图占满整宽，炉型参数集中到下方横向信息总览 */
+/** 三维方案面板：左侧参数与三维视图直接并排，避免外层重复套框 */
 function SmeltingFurnacePlanPanel({
   darkMode,
   design,
   viewerRef,
   embedded = false,
+  scopeKey = 'unsaved',
 }: {
   darkMode: boolean
   design: SmeltingFurnaceDesignResult
   viewerRef?: RefObject<SmeltingFurnaceViewerHandle>
   /** 汇总总览内嵌时去掉外层卡片边框，避免双重套框 */
   embedded?: boolean
+  scopeKey?: string
 }) {
   const lengthM = Math.max(design.designLengthM || design.furnaceLengthM, 0.1)
   const widthM = Math.max(design.furnaceWidthM, 0.1)
@@ -14565,11 +14571,9 @@ function SmeltingFurnacePlanPanel({
   const body = (
     <>
       {!embedded && (
-        <div className={`flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4 ${
-          darkMode ? 'border-gray-700 bg-gray-900/70' : 'border-gray-200 bg-slate-50'
-        }`}>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className={`text-sm font-semibold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>三维熔炼炉方案</div>
+            <div className={`text-lg font-semibold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>三维熔炼炉方案</div>
           </div>
           <div className={`rounded-full px-2.5 py-1 text-xs font-medium ${
             darkMode ? 'bg-emerald-950/50 text-emerald-200' : 'bg-emerald-50 text-emerald-700'
@@ -14578,14 +14582,13 @@ function SmeltingFurnacePlanPanel({
           </div>
         </div>
       )}
-      <div className={embedded ? 'pt-1' : 'p-4'}>
-        <SmeltingFurnaceViewer ref={viewerRef ?? null} darkMode={darkMode} design={design} />
-      </div>
-      <div className={`${embedded ? 'mt-3' : 'border-t'} px-1 pb-1 pt-3 ${
+      <SmeltingFurnaceViewer ref={viewerRef ?? null} darkMode={darkMode} design={design} readOnly={embedded} scopeKey={scopeKey} />
+      <div className={`furnace-planning-summary ${embedded ? 'mt-3' : 'border-t'} px-1 pb-1 pt-3 ${
         embedded ? '' : darkMode ? 'border-gray-700 bg-gray-900/30 px-4 pb-4 pt-4' : 'border-gray-200 bg-slate-50/70 px-4 pb-4 pt-4'
       }`}>
         <div className="mb-3">
-          <div className={`text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>参数信息总览</div>
+          <div className={`text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>选型计算参考</div>
+          <p className="mt-1 text-xs">调整后的三维尺寸见左侧构件参数，以下为原始选型计算值。</p>
         </div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-8">
           <SummaryMetricCard darkMode={darkMode} label="炉床面积" value={`${formatTableDisplayValue(design.areaM2)} m²`} />
@@ -14620,9 +14623,7 @@ function SmeltingFurnacePlanPanel({
   if (embedded) return <div className="space-y-1">{body}</div>
 
   return (
-    <div className={`mt-4 overflow-hidden rounded-2xl border shadow-sm ${
-      darkMode ? 'border-gray-600 bg-gray-950/40' : 'border-gray-200 bg-white'
-    }`}>
+    <div className="mt-4 min-w-0">
       {body}
     </div>
   )

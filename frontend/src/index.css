@@ -2,6 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Workflow text stays readable without enlarging formula scripts or navigation. */
+.workflow-content { font-size: 14px; line-height: 1.5; }
+.workflow-content :is(.text-xs, .text-\[10px\], .text-\[11px\], .text-\[13px\]):not([aria-hidden="true"]):not(.katex *) {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.workflow-content :is(h2, h3, h4):is(.text-xs, .text-sm) {
+  font-size: 16px;
+  line-height: 1.5;
+}
+.workflow-content .island-label { font-size: 14px; }
+
 html, body {
   margin: 0;
   height: 100%;
@@ -197,6 +209,91 @@ code {
   user-select: none;
 }
 
+.furnace-viewer-stage-with-tools {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+}
+.furnace-viewer-stage-with-tools .furnace-viewer-canvas-host { position: relative; inset: auto; grid-column: 2; grid-row: 1; min-width: 0; }
+
+.furnace-viewer-tools {
+  position: relative;
+  z-index: 3;
+  overflow: auto;
+  padding: 0.85rem 0.8rem;
+  color: #334155;
+  background: rgba(248, 250, 252, 0.96);
+  border-right: 1px solid rgba(148, 163, 184, 0.45);
+}
+
+.furnace-viewer-stage-dark .furnace-viewer-tools {
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.96);
+  border-right-color: rgba(71, 85, 105, 0.6);
+}
+
+.furnace-viewer-tools-title { margin: 0.35rem 0 0.55rem; font-size: 12px; font-weight: 700; }
+.furnace-viewer-tools-section { margin-bottom: 0.9rem; }
+.furnace-viewer-field { display: flex; align-items: center; justify-content: space-between; gap: 0.35rem; margin-bottom: 0.4rem; font-size: 11px; }
+.furnace-viewer-field input { width: 70px; border: 1px solid #cbd5e1; border-radius: 0.35rem; padding: 0.18rem 0.3rem; text-align: right; font-size: 11px; }
+.furnace-viewer-tool-check { display: flex; gap: 0.4rem; align-items: center; margin: 0.45rem 0; font-size: 11px; }
+.furnace-viewer-reset { font-size: 10px; text-decoration: underline; opacity: 0.8; }
+.furnace-viewer-layer-toggles-left { position: absolute; z-index: 4; top: 0.75rem; right: 0.75rem; left: auto; }
+.furnace-viewer-stage-with-tools .furnace-viewer-hint { left: calc(220px + 50%); }
+
+.furnace-workbench { display: grid; grid-template-columns: 320px minmax(0, 1fr); width: 100%; height: clamp(600px, 72vh, 860px); overflow: hidden; border: 1px solid rgba(148,163,184,.36); border-radius: 1rem; background: #f1f5f9; }
+.furnace-workbench-dark { background: #020617; border-color: rgba(71,85,105,.6); }
+.furnace-workbench-sidebar { position: relative; z-index: 3; overflow-y: scroll; overflow-x: hidden; scrollbar-gutter: stable; padding: 1rem; border-right: 1px solid rgba(148,163,184,.45); background: rgba(248,250,252,.98); color: #334155; font-size: 14px; line-height: 1.6; }
+.furnace-workbench-dark .furnace-workbench-sidebar { background: rgba(15,23,42,.98); color: #e2e8f0; border-color: rgba(71,85,105,.6); }
+.furnace-workbench-viewport { min-width: 0; height: 100%; border: 0; border-radius: 0; }
+.furnace-sidebar-heading { margin-bottom: .7rem; font-weight: 800; font-size: 16px; }
+.furnace-workbench-sidebar details { padding: .7rem 0 .9rem; border-bottom: 1px solid rgba(148,163,184,.36); }
+.furnace-workbench-sidebar summary { cursor: pointer; font-weight: 700; font-size: 15px; margin-bottom: .65rem; }
+.furnace-parameter-field { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 104px; align-items: center; gap: .5rem; margin: .5rem 0; }
+.furnace-parameter-field small { margin-left: .3rem; font-size: 14px; font-style: normal; color: #475569; }
+.furnace-parameter-field input, .furnace-control-label select { min-width: 0; width: 100%; min-height: 36px; border: 1px solid #cbd5e1; border-radius: .4rem; background: white; color: #0f172a; padding: .3rem .4rem; font-size: 14px; }
+.furnace-control-label { display: block; margin: .6rem 0; font-size: 14px; }
+.furnace-control-label select { margin-top: .25rem; }
+.furnace-control-label input[type=range] { width: 100%; }
+.furnace-control-check { display: flex; gap: .5rem; align-items: center; margin: .6rem 0; font-size: 14px; }
+.furnace-control-check input { width: 16px; height: 16px; accent-color: #2563eb; }
+.furnace-readonly-field { display: flex; justify-content: space-between; gap: .5rem; margin: .45rem 0; font-size: 14px; }
+.furnace-workbench-sidebar button { cursor: pointer; min-height: 36px; margin: .25rem .25rem .25rem 0; border: 1px solid #cbd5e1; border-radius: .4rem; padding: .35rem .65rem; background: rgba(255,255,255,.7); font-size: 14px; }
+.furnace-workbench-dark .furnace-workbench-sidebar button { border-color: #475569; background: #1e293b; color: #e2e8f0; }
+.furnace-segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin-bottom: .2rem; padding: 3px; border: 1px solid #cbd5e1; border-radius: .6rem; background: #e2e8f0; }
+.furnace-workbench-sidebar .furnace-segmented button { margin: 0; border-color: transparent; background: transparent; font-size: 15px; font-weight: 600; }
+.furnace-export-button { width: 100%; margin-top: .7rem !important; }
+.furnace-tool-note { margin: .6rem 0; color: #475569; font-size: 14px; line-height: 1.6; }
+.furnace-field-error { color: #b91c1c; font-size: 14px; grid-column: 1 / -1; }
+.furnace-workbench-dark .furnace-tool-note, .furnace-workbench-dark .furnace-parameter-field small { color: #cbd5e1; }
+.furnace-workbench-dark .furnace-segmented { background: #1e293b; border-color: #475569; }
+.furnace-workbench-dark .furnace-parameter-field input, .furnace-workbench-dark .furnace-control-label select { background: #0f172a; color: #f1f5f9; border-color: #64748b; }
+.furnace-workbench-dark .furnace-field-error { color: #fca5a5; }
+.furnace-part-tooltip { position: absolute; z-index: 3; pointer-events: none; padding: .3rem .6rem; border-radius: .4rem; background: rgba(15,23,42,.94); color: white; font-size: 14px; }
+.furnace-workbench .furnace-viewer-hint { font-size: 14px; }
+.furnace-workbench input:focus-visible, .furnace-workbench select:focus-visible, .furnace-workbench button:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.furnace-workbench-sidebar .furnace-segmented button[aria-pressed=true] { background: #2563eb; color: white; border-color: #2563eb; }
+.furnace-section-fields { min-width: 0; border: 0; padding: 0; margin: 0; }
+.furnace-section-fields:disabled { opacity: .65; }
+.furnace-history-actions { display: flex; gap: .4rem; }
+.furnace-history-actions button { flex: 1; }
+.furnace-workbench-sidebar button:disabled { opacity: .45; cursor: not-allowed; }
+.furnace-history-list { padding-left: 1.5rem; list-style: decimal; font-size: 14px; }
+.furnace-axis-indicator { position: absolute; z-index: 2; left: 0; bottom: 0; width: 120px; height: 112.5px; background: transparent; color: #334155; pointer-events: none; }
+.furnace-axis-indicator [role=button] { cursor: pointer; outline: none; pointer-events: auto; }
+.furnace-axis-indicator text { fill: currentColor; }
+.furnace-axis-indicator [role=button]:is(:hover, :focus-visible) { filter: drop-shadow(0 0 2px #f59e0b); }
+.furnace-workbench-dark .furnace-axis-indicator { color: #e2e8f0; }
+.furnace-workbench .furnace-viewer-hint { max-width: calc(100% - 172px); left: calc(50% + 70px); }
+.furnace-planning-summary { font-size: 14px; }
+.furnace-planning-summary .text-xs, .furnace-planning-summary .text-\[11px\], .furnace-planning-summary .text-\[10px\] { font-size: 14px; line-height: 1.6; }
+
+@media (max-width: 720px) {
+  .furnace-viewer-stage-with-tools { grid-template-columns: 170px minmax(0, 1fr); }
+  .furnace-viewer-tools { padding: 0.65rem 0.55rem; }
+  .furnace-viewer-stage-with-tools .furnace-viewer-hint { left: calc(170px + 50%); }
+  .furnace-workbench { grid-template-columns: 260px minmax(280px, 1fr); height: min(820px, 82vh); overflow-x: auto; }
+}
+
 .furnace-viewer-stage-dark {
   border-color: rgba(71, 85, 105, 0.6);
   background:
@@ -207,6 +304,13 @@ code {
 .furnace-viewer-canvas-host {
   position: absolute;
   inset: 0;
+}
+.furnace-viewer-stage-with-tools .furnace-viewer-canvas-host {
+  position: relative;
+  inset: auto;
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
 }
 
 .furnace-viewer-canvas-host canvas {
