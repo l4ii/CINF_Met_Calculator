@@ -71,5 +71,9 @@ export function disposeModel(root: THREE.Object3D) {
     if (drawable.material) (Array.isArray(drawable.material) ? drawable.material : [drawable.material]).forEach(item => materials.add(item))
   })
   geometries.forEach(item => item.dispose())
-  materials.forEach(item => item.dispose())
+  materials.forEach(item => {
+    const mapped = item as THREE.Material & { map?: THREE.Texture | null }
+    mapped.map?.dispose()
+    item.dispose()
+  })
 }

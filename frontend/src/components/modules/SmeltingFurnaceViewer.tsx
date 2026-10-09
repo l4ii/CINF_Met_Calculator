@@ -1,14 +1,25 @@
-import { forwardRef, useCallback, useMemo } from 'react'
+import { forwardRef, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import type { SmeltingFurnaceDesignResult } from '../../utils/copperEquipmentSizing.ts'
 import { buildSmeltingFurnaceLayout } from '../../utils/copperFurnaceGeometry.ts'
 import ParametricFurnaceViewport, { type FurnaceViewportHandle } from './ParametricFurnaceViewport.tsx'
-import { buildSmeltingModelScene } from '../../utils/furnaceModelScene.ts'
+import { buildSmeltingModelScene, type FlowSolverFrames, type SmeltingFlowDecoration } from '../../utils/furnaceModelScene.ts'
 import { useFurnaceModelEdits } from './useFurnaceModelEdits.ts'
 
 export type SmeltingFurnaceViewerHandle = FurnaceViewportHandle
-type Props = { darkMode: boolean; design: SmeltingFurnaceDesignResult; readOnly?: boolean; scopeKey?: string }
+export type { SmeltingFlowDecoration }
+type Props = {
+  darkMode: boolean
+  design: SmeltingFurnaceDesignResult
+  readOnly?: boolean
+  scopeKey?: string
+  /** 数值仿真时传入；炉体方案不传，外观与原来一致。 */
+  flow?: SmeltingFlowDecoration | null
+  flowPlaying?: boolean
+  simulationSidebar?: ReactNode
+  solverFramesRef?: { current: FlowSolverFrames | null }
+}
 
-const SmeltingFurnaceViewer = forwardRef<SmeltingFurnaceViewerHandle, Props>(function SmeltingFurnaceViewer({ darkMode, design, readOnly = false, scopeKey = 'default' }, ref) {
+const SmeltingFurnaceViewer = forwardRef<SmeltingFurnaceViewerHandle, Props>(function SmeltingFurnaceViewer({ darkMode, design, readOnly = false, scopeKey = 'default', flow = null, flowPlaying = false, simulationSidebar, solverFramesRef }, ref) {
   const { overrides, save, reset, storageError, historyControls } = useFurnaceModelEdits('smelting', scopeKey, readOnly)
   const layout = useMemo(() => buildSmeltingFurnaceLayout(design, overrides), [design, overrides])
   const onComponentChange = useCallback((id: string, params: Record<string, number>) => save({ ...overrides, [id]: { ...(overrides[id] ?? {}), ...params } }, `${Object.keys(params).every(key => key.startsWith('center')) ? '移动' : '调整尺寸'}：${layout.components.find(item => item.id === id)?.role ?? '构件'}`), [overrides, save, layout.components])
@@ -23,7 +34,10 @@ const SmeltingFurnaceViewer = forwardRef<SmeltingFurnaceViewerHandle, Props>(fun
     { key: 'widthM', label: '炉宽', value: layout.body.widthM, unit: 'm', min: 0.5, max: 50 },
     { key: 'jacketPitchMm', label: '水套间距', value: layout.jacketPitchM * 1000, unit: 'mm', min: 50, max: 5000 },
   ], [layout])
-  const buildModel = useCallback(() => buildSmeltingModelScene(layout, darkMode), [layout, darkMode])
-  return <ParametricFurnaceViewport ref={ref} darkMode={darkMode} modelName="侧吹熔炼炉" components={layout.components} buildModel={buildModel} readOnly={readOnly} globalFields={globalFields} onGlobalChange={onGlobalChange} onComponentChange={onComponentChange} onResetComponent={resetComponent} onReset={reset} storageError={storageError} historyControls={historyControls} />
+  const flowKey = flow ? `${flow.field}:${flow.perTuyereNm3h}:${flow.liquidLevelM}:${flow.lanceHeightM}:${flow.openTuyereIds.join('|')}` : ''
+  const flowSnapshot = useRef(flow)
+  flowSnapshot.current = flow
+  const buildModel = useCallback(() => buildSmeltingModelScene(layout, darkMode, flowSnapshot.current), [layout, darkMode, flowKey])
+  return <ParametricFurnaceViewport ref={ref} darkMode={darkMode} modelName="侧吹熔炼炉" components={layout.components} buildModel={buildModel} readOnly={readOnly} globalFields={globalFields} onGlobalChange={onGlobalChange} onComponentChange={onComponentChange} onResetComponent={resetComponent} onReset={reset} storageError={storageError} historyControls={historyControls} simulationSidebar={simulationSidebar} solverFramesRef={solverFramesRef} flowField={flow?.field ?? ''} flowPlaying={Boolean(flow) && flowPlaying} />
 })
 export default SmeltingFurnaceViewer

@@ -365,7 +365,8 @@ import {
 import type { ProductElementTableProduct } from '../../CopperBatchProductElementTable.tsx'
 import { CopperProductionResultTable } from '../../CopperProductionResultTable.tsx'
 import { CopperHeatBalancePlaceholderTables, HeatAuxiliaryParamsStrip } from '../../CopperHeatBalancePlaceholderTables.tsx'
-import SmeltingFurnaceViewer, { type SmeltingFurnaceViewerHandle } from '../../SmeltingFurnaceViewer.tsx'
+import SmeltingFurnaceViewer, { type FlowSolverFrames, type SmeltingFlowDecoration, type SmeltingFurnaceViewerHandle } from '../../SmeltingFurnaceViewer.tsx'
+import FurnaceFlowShowcase from '../smelting/FurnaceFlowShowcase.tsx'
 import { ListPaginationBar } from '../../../ListPaginationBar.tsx'
 import { DEFAULT_LIST_PAGE_SIZE, pageCountFor } from '../../../../utils/pagination.ts'
 
@@ -11239,7 +11240,7 @@ export default function CopperOxySideBlowSession({
                   </div>
                   <div className={`${hintText(darkMode)} mt-1`}>
                     {isSmeltingEquipment
-                      ? '三维炉体方案可旋转查看；参数汇总在视图下方，确认后生成 BOM。'
+                      ? '三维炉体方案可旋转查看。数值仿真在左侧调节氧气量、间距和风口，炉内为示意流动。'
                       : '先查看三维方案与关键参数，再复核炉型匹配明细；确认后生成 BOM 设备清单。'}
                   </div>
                 </div>
@@ -14639,7 +14640,7 @@ function ProcessIsland3DOverview({
         <div>
           <div className={`text-sm font-semibold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>三维设备方案</div>
           <div className={`${hintText(darkMode)} mt-1`}>
-            按工序切换查看单台设备三维模型（含 XYZ 坐标轴）；仅显示已生成方案的工序。
+            按工序切换查看单台设备三维模型（含 XYZ 坐标轴）。熔炼炉可在面板内切换数值仿真。仅显示已生成方案的工序。
           </div>
         </div>
         <div className={`rounded-full border px-3 py-1 text-xs font-medium ${
@@ -14831,31 +14832,66 @@ function SmeltingFurnacePlanPanel({
   embedded?: boolean
   scopeKey?: string
 }) {
+  const [planView, setPlanView] = useState<'furnace' | 'flow'>('furnace')
+  const [flowDecoration, setFlowDecoration] = useState<(SmeltingFlowDecoration & { playing: boolean }) | null>(null)
+  const solverFramesRef = useRef<FlowSolverFrames | null>(null)
+
   const lengthM = Math.max(design.designLengthM || design.furnaceLengthM, 0.1)
   const widthM = Math.max(design.furnaceWidthM, 0.1)
   const heightM = resolveFurnaceBodyHeightM(widthM)
+  const viewTabClass = (selected: boolean) =>
+    `rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+      selected
+        ? 'bg-blue-600 text-white'
+        : darkMode
+          ? 'text-gray-300 hover:bg-gray-800'
+          : 'text-gray-600 hover:bg-white'
+    }`
 
   const body = (
     <>
-      {!embedded && (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className={`text-lg font-semibold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>三维熔炼炉方案</div>
-          </div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div
+          role="tablist"
+          aria-label="熔炼炉方案视图"
+          className={`inline-flex rounded-lg border p-0.5 ${darkMode ? 'border-gray-600 bg-gray-900' : 'border-gray-200 bg-gray-50'}`}
+        >
+          <button type="button" role="tab" aria-selected={planView === 'furnace'} className={viewTabClass(planView === 'furnace')} onClick={() => setPlanView('furnace')}>
+            炉体方案
+          </button>
+          <button type="button" role="tab" aria-selected={planView === 'flow'} className={viewTabClass(planView === 'flow')} onClick={() => setPlanView('flow')}>
+            数值仿真
+          </button>
+        </div>
+        {!embedded && (
           <div className={`rounded-full px-2.5 py-1 text-xs font-medium ${
             darkMode ? 'bg-emerald-950/50 text-emerald-200' : 'bg-emerald-50 text-emerald-700'
           }`}>
             方案已生成
           </div>
-        </div>
-      )}
-      <SmeltingFurnaceViewer ref={viewerRef ?? null} darkMode={darkMode} design={design} readOnly={embedded} scopeKey={scopeKey} />
+        )}
+      </div>
+      <SmeltingFurnaceViewer
+        ref={viewerRef ?? null}
+        darkMode={darkMode}
+        design={design}
+        readOnly={embedded}
+        scopeKey={scopeKey}
+        flow={planView === 'flow' ? flowDecoration : null}
+        flowPlaying={planView === 'flow' && (flowDecoration?.playing ?? false)}
+        solverFramesRef={solverFramesRef}
+        simulationSidebar={planView === 'flow' ? (
+          <FurnaceFlowShowcase darkMode={darkMode} design={design} scopeKey={scopeKey} readOnly={embedded} framesRef={solverFramesRef} onDecorationChange={setFlowDecoration} />
+        ) : undefined}
+      />
       <div className={`furnace-planning-summary ${embedded ? 'mt-3' : 'border-t'} px-1 pb-1 pt-3 ${
         embedded ? '' : darkMode ? 'border-gray-700 bg-gray-900/30 px-4 pb-4 pt-4' : 'border-gray-200 bg-slate-50/70 px-4 pb-4 pt-4'
       }`}>
         <div className="mb-3">
           <div className={`text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>选型计算参考</div>
-          <p className="mt-1 text-xs">调整后的三维尺寸见左侧构件参数，以下为原始选型计算值。</p>
+          <p className="mt-1 text-xs">
+            {planView === 'furnace' ? '调整后的三维尺寸见左侧构件参数，以下为原始选型计算值。' : '以下为原始选型计算值。'}
+          </p>
         </div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-8">
           <SummaryMetricCard darkMode={darkMode} label="炉床面积" value={`${formatTableDisplayValue(design.areaM2)} m²`} />

@@ -1,0 +1,26 @@
+{
+  "json.schemaDownload.enable": true,
+  "css.lint.unknownAtRules": "ignore",
+  "scss.lint.unknownAtRules": "ignore",
+  "less.lint.unknownAtRules": "ignore",
+  // package.json 的官方 schema 会引用 nodemon.json。拉取该地址时 TLS 握手会断开，
+  // 于是在 package.json 第 1 行出现 “Unable to load schema”。本地登记同名 schema 后不再请求。
+  "json.schemas": [
+    {
+      "schema": {
+        "id": "https://json.schemastore.org/nodemon.json",
+        "$id": "https://json.schemastore.org/nodemon.json",
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "schema": {
+        "id": "https://www.schemastore.org/nodemon.json",
+        "$id": "https://www.schemastore.org/nodemon.json",
+        "type": "object",
+        "additionalProperties": true
+      }
+    }
+  ]
+}

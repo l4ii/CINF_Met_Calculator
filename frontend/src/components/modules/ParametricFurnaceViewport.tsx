@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
@@ -24,6 +24,11 @@ type Props = {
   onReset: () => void
   storageError?: string | null
   historyControls: { undo: () => void; redo: () => void; canUndo: boolean; canRedo: boolean; undoLabel: string; redoLabel: string; recent: string[] }
+  /** 数值仿真时替换左侧几何参数区 */
+  simulationSidebar?: ReactNode
+  flowPlaying?: boolean
+  solverFramesRef?: { current: { serial: number } | null }
+  flowField?: string
 }
 
 const groupLabels: Record<string, string> = {
@@ -81,7 +86,7 @@ function fitModel(camera: THREE.PerspectiveCamera, orbit: OrbitControls, box: TH
 }
 
 const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(function ParametricFurnaceViewport(props, ref) {
-  const { darkMode, modelName, components, buildModel, readOnly = false, globalFields, onGlobalChange, onComponentChange, onResetComponent, onReset, storageError, historyControls } = props
+  const { darkMode, modelName, components, buildModel, readOnly = false, globalFields, onGlobalChange, onComponentChange, onResetComponent, onReset, storageError, historyControls, simulationSidebar, solverFramesRef, flowField = '' } = props
   const hostRef = useRef<HTMLDivElement>(null)
   const axesRef = useRef<SVGSVGElement>(null)
   const runtime = useRef<{ renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.PerspectiveCamera; orbit: OrbitControls; transform: TransformControls; root: THREE.Group | null; grid: THREE.GridHelper | null; box: THREE.Box3; dirty: boolean } | null>(null)
@@ -98,8 +103,8 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
   const [hiddenGroups, setHiddenGroups] = useState<string[]>([])
   const [hiddenParts, setHiddenParts] = useState<string[]>([])
   const [hover, setHover] = useState<{ name: string; x: number; y: number } | null>(null)
-  const live = useRef({ components, onComponentChange, readOnly, moveMode, section, sectionPosition, sectionKeep })
-  live.current = { components, onComponentChange, readOnly, moveMode, section, sectionPosition, sectionKeep }
+  const live = useRef({ components, onComponentChange, readOnly, moveMode, section, sectionPosition, sectionKeep, solverFrames: solverFramesRef, flowField })
+  live.current = { components, onComponentChange, readOnly, moveMode, section, sectionPosition, sectionKeep, solverFrames: solverFramesRef, flowField }
   const physical = components.filter(item => item.kind !== 'metadata')
   const selected = physical.find(item => item.id === selectedId)
   const groups = [...new Set(physical.map(item => item.group))]
@@ -224,6 +229,19 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
     let frame = 0
     const render = () => {
       frame = requestAnimationFrame(render)
+      const flowNode = state.root?.getObjectByName('flow-schematic')
+      const frames = live.current.solverFrames?.current
+      if (flowNode && frames && flowNode.userData.paintedSerial !== frames.serial) {
+        flowNode.userData.field = live.current.flowField
+        const paint = flowNode.userData.paint as ((value: typeof frames) => void) | undefined
+        paint?.(frames)
+        flowNode.userData.paintedSerial = frames.serial
+        state.dirty = true
+      } else if (flowNode && flowNode.userData.field !== live.current.flowField) {
+        flowNode.userData.field = live.current.flowField
+        flowNode.userData.paintedSerial = -1
+        state.dirty = true
+      }
       if (orbit.update() || state.dirty) {
         renderer.render(scene, camera)
         const inverse = camera.quaternion.clone().invert()
@@ -325,7 +343,9 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
       }
     }}>
     <aside className="furnace-workbench-sidebar" aria-label="模型左侧工具栏">
-      <div className="furnace-sidebar-heading">{readOnly ? '模型查看' : '三维几何参数调节'}</div>
+      <div className="furnace-sidebar-heading">{simulationSidebar ? '数值仿真参数调节' : readOnly ? '模型查看' : '三维几何参数调节'}</div>
+      {simulationSidebar}
+      {!simulationSidebar && <>
       {!readOnly && <div className="furnace-history-actions"><button type="button" disabled={!historyControls.canUndo} title={`撤销：${historyControls.undoLabel}（Ctrl+Z）`} onClick={historyControls.undo}>撤销</button><button type="button" disabled={!historyControls.canRedo} title={`重做：${historyControls.redoLabel}（Ctrl+Shift+Z）`} onClick={historyControls.redo}>重做</button></div>}
       {storageError && <p role="alert" className="furnace-field-error">{storageError}</p>}
       {!readOnly && <>
@@ -373,6 +393,7 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
       <details data-section="groups"><summary>组件分组显隐</summary>{groups.map(group => <label className="furnace-control-check" key={group}><input type="checkbox" checked={!hiddenGroups.includes(group)} onChange={event => setHiddenGroups(current => event.target.checked ? current.filter(id => id !== group) : [...current, group])} />{groupLabels[group] ?? group}</label>)}</details>
       {!readOnly && <details data-section="history"><summary>操作历史与快捷键</summary><p className="furnace-tool-note">点击模型后：Ctrl+Z 撤销；Ctrl+Shift+Z 或 Ctrl+Y 重做。输入框中保留文字编辑快捷键。</p><p className="furnace-tool-note">本次打开期间最多回退 50 步，记录尺寸调整、移动和恢复操作；切换案例或重新打开后重新计步。</p><ol className="furnace-history-list">{historyControls.recent.map((label, index) => <li key={index}>{label}</li>)}</ol></details>}
       <button type="button" className="furnace-export-button" onClick={exportManifest}>导出构件参数</button>
+      </>}
     </aside>
     <div className={`furnace-viewer-stage furnace-workbench-viewport ${darkMode ? 'furnace-viewer-stage-dark' : ''}`} onContextMenu={event => event.preventDefault()}>
       <div ref={hostRef} className="furnace-viewer-canvas-host" />
