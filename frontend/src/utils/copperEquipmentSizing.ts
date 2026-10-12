@@ -1,3 +1,4 @@
+import { buildOxygenAirPhaseColumn } from './copperPhaseTableCalc.ts'
 import { calculateGasMixtureStandardVolumeNm3h } from './copperProductPhaseCalc.ts'
 import { materialWaterWeight, type CopperMaterialColumn } from './copperWorkflowCalc.ts'
 
@@ -266,6 +267,16 @@ export function findOxygenAirColumn(
   return (
     airColumns.find((column) => column.airRole === 'oxygen' || column.name === '氧气') ?? null
   )
+}
+
+/** 配料氧气列的 O₂ 体积分数，与投入物相表的体积百分数同一口径。 */
+export function oxygenStreamVolumeFraction(column: CopperMaterialColumn | null | undefined): number {
+  if (!column) return 0.996
+  const dry = Math.max(0, column.weight ?? 0)
+  const water = materialWaterWeight(column)
+  const phase = buildOxygenAirPhaseColumn(column.ratios, dry > 0 || water > 0 ? dry : 100, water)
+  if (!(phase.volumePct.O2 > 0)) return 0.996
+  return Math.min(1, phase.volumePct.O2 / 100)
 }
 
 export function calculateSmeltingFurnaceDesign(input: SmeltingFurnaceDesignInput): SmeltingFurnaceDesignResult {

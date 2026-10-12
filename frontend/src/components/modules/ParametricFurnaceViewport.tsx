@@ -3,14 +3,14 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import type { ModelComponentManifest } from '../../utils/modelComponentManifest.ts'
-import { applyModelDisplay, disposeModel, furnaceBodyBounds, sectionPlane, type ModelDisplayMode, type ModelSectionAxis, type ModelSectionKeep } from '../../utils/furnaceViewTools.ts'
+import { applyModelDisplay, disposeModel, exportFurnaceStl, furnaceBodyBounds, sectionPlane, type ModelDisplayMode, type ModelSectionAxis, type ModelSectionKeep } from '../../utils/furnaceViewTools.ts'
 
 export type FurnaceViewportHandle = {
   capturePngDataUrl: () => string | null
   getComponentManifest: () => ModelComponentManifest[]
 }
 
-export type FurnaceGlobalField = { key: string; label: string; value: number; unit: string; min?: number; max?: number }
+export type FurnaceGlobalField = { key: string; label: string; value: number; unit: string; min?: number; max?: number; tone?: 'plain' | 'gray' }
 type Props = {
   darkMode: boolean
   modelName: string
@@ -28,6 +28,7 @@ type Props = {
   simulationSidebar?: ReactNode
   flowPlaying?: boolean
   solverFramesRef?: { current: { serial: number } | null }
+  meshWireRef?: { current: Float32Array | null }
   flowField?: string
 }
 
@@ -42,8 +43,8 @@ const parameterLabels: Record<string, string> = {
 }
 
 /** Commit only valid finished numbers; users can clear and type decimals without geometry jumping. */
-function NumericField({ label, value, unit, min = 0.001, max = 1000, onChange, resetToken, disabled = false }: {
-  label: string; value: number; unit: string; min?: number; max?: number; onChange: (value: number) => void; resetToken?: unknown; disabled?: boolean
+function NumericField({ label, value, unit, min = 0.001, max = 1000, onChange, resetToken, disabled = false, tone = 'plain' }: {
+  label: string; value: number; unit: string; min?: number; max?: number; onChange: (value: number) => void; resetToken?: unknown; disabled?: boolean; tone?: 'plain' | 'gray'
 }) {
   const [draft, setDraft] = useState(String(Number(value.toFixed(4))))
   const [error, setError] = useState('')
@@ -58,7 +59,7 @@ function NumericField({ label, value, unit, min = 0.001, max = 1000, onChange, r
     setError('')
     onChange(parsed)
   }
-  return <label className="furnace-parameter-field">
+  return <label className={`furnace-parameter-field${tone === 'gray' ? ' furnace-sim-gray-field' : ''}`}>
     <span>{label}<small>{unit}</small></span>
     <input type="number" step="any" min={min} max={max} value={draft} disabled={disabled} aria-invalid={Boolean(error)}
       onChange={event => { setDraft(event.target.value); setError('') }} onBlur={commit}
@@ -86,10 +87,10 @@ function fitModel(camera: THREE.PerspectiveCamera, orbit: OrbitControls, box: TH
 }
 
 const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(function ParametricFurnaceViewport(props, ref) {
-  const { darkMode, modelName, components, buildModel, readOnly = false, globalFields, onGlobalChange, onComponentChange, onResetComponent, onReset, storageError, historyControls, simulationSidebar, solverFramesRef, flowField = '' } = props
+  const { darkMode, modelName, components, buildModel, readOnly = false, globalFields, onGlobalChange, onComponentChange, onResetComponent, onReset, storageError, historyControls, simulationSidebar, solverFramesRef, meshWireRef, flowField = '' } = props
   const hostRef = useRef<HTMLDivElement>(null)
   const axesRef = useRef<SVGSVGElement>(null)
-  const runtime = useRef<{ renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.PerspectiveCamera; orbit: OrbitControls; transform: TransformControls; root: THREE.Group | null; grid: THREE.GridHelper | null; box: THREE.Box3; dirty: boolean } | null>(null)
+  const runtime = useRef<{ renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.PerspectiveCamera; orbit: OrbitControls; transform: TransformControls; root: THREE.Group | null; grid: THREE.GridHelper | null; box: THREE.Box3; dirty: boolean; meshLines: THREE.LineSegments | null; meshWireBuffer: Float32Array | null } | null>(null)
   const [failure, setFailure] = useState(false)
   const [mode, setMode] = useState<ModelDisplayMode>('solid')
   const [section, setSection] = useState<ModelSectionAxis>('none')
@@ -103,8 +104,8 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
   const [hiddenGroups, setHiddenGroups] = useState<string[]>([])
   const [hiddenParts, setHiddenParts] = useState<string[]>([])
   const [hover, setHover] = useState<{ name: string; x: number; y: number } | null>(null)
-  const live = useRef({ components, onComponentChange, readOnly, moveMode, section, sectionPosition, sectionKeep, solverFrames: solverFramesRef, flowField })
-  live.current = { components, onComponentChange, readOnly, moveMode, section, sectionPosition, sectionKeep, solverFrames: solverFramesRef, flowField }
+  const live = useRef({ components, onComponentChange, readOnly, moveMode, section, sectionPosition, sectionKeep, solverFrames: solverFramesRef, meshWire: meshWireRef, flowField })
+  live.current = { components, onComponentChange, readOnly, moveMode, section, sectionPosition, sectionKeep, solverFrames: solverFramesRef, meshWire: meshWireRef, flowField }
   const physical = components.filter(item => item.kind !== 'metadata')
   const selected = physical.find(item => item.id === selectedId)
   const groups = [...new Set(physical.map(item => item.group))]
@@ -169,7 +170,7 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
     fill.position.set(-15, 12, -8)
     lights.add(key, fill)
     scene.add(lights)
-    const state = { renderer, scene, camera, orbit, transform, root: null as THREE.Group | null, grid: null as THREE.GridHelper | null, box: new THREE.Box3(), dirty: true }
+    const state = { renderer, scene, camera, orbit, transform, root: null as THREE.Group | null, grid: null as THREE.GridHelper | null, box: new THREE.Box3(), dirty: true, meshLines: null as THREE.LineSegments | null, meshWireBuffer: null as Float32Array | null }
     runtime.current = state
     const markDirty = () => { state.dirty = true }
     orbit.addEventListener('change', markDirty)
@@ -229,6 +230,26 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
     let frame = 0
     const render = () => {
       frame = requestAnimationFrame(render)
+      const wire = live.current.meshWire?.current ?? null
+      if (wire !== state.meshWireBuffer || (wire && !state.meshLines?.parent)) {
+        if (state.meshLines) {
+          state.scene.remove(state.meshLines)
+          state.meshLines.geometry.dispose()
+          ;(state.meshLines.material as THREE.Material).dispose()
+          state.meshLines = null
+        }
+        state.meshWireBuffer = wire
+        if (wire && wire.length >= 6) {
+          const geometry = new THREE.BufferGeometry()
+          geometry.setAttribute('position', new THREE.BufferAttribute(wire, 3))
+          const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: 0x64748b, transparent: true, opacity: 0.7 }))
+          lines.name = 'flow-mesh-wire'
+          lines.renderOrder = 2
+          state.scene.add(lines)
+          state.meshLines = lines
+        }
+        state.dirty = true
+      }
       const flowNode = state.root?.getObjectByName('flow-schematic')
       const frames = live.current.solverFrames?.current
       if (flowNode && frames && flowNode.userData.paintedSerial !== frames.serial) {
@@ -240,6 +261,14 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
       } else if (flowNode && flowNode.userData.field !== live.current.flowField) {
         flowNode.userData.field = live.current.flowField
         flowNode.userData.paintedSerial = -1
+        state.dirty = true
+      }
+      const horizontalNode = state.root?.getObjectByName('flow-horizontal-slice')
+      const longitudinalNode = state.root?.getObjectByName('flow-longitudinal-slice')
+      if ((horizontalNode && horizontalNode.userData.field !== live.current.flowField) || (longitudinalNode && longitudinalNode.userData.field !== live.current.flowField)) {
+        if (horizontalNode) horizontalNode.userData.field = live.current.flowField
+        if (longitudinalNode) longitudinalNode.userData.field = live.current.flowField
+        if (flowNode) flowNode.userData.paintedSerial = -1
         state.dirty = true
       }
       if (orbit.update() || state.dirty) {
@@ -272,6 +301,7 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
       renderer.domElement.removeEventListener('pointerleave', pointerLeave)
       // three 0.169's dispose calls a removed traverse method; clean its helper directly.
       transform.detach(); transform.disconnect(); disposeModel(transform.getHelper()); orbit.dispose()
+      if (state.meshLines) disposeModel(state.meshLines)
       if (state.root) disposeModel(state.root)
       if (state.grid) disposeModel(state.grid)
       renderer.dispose(); renderer.domElement.remove(); runtime.current = null
@@ -330,6 +360,10 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${modelName}-构件参数.json`; anchor.click()
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
+  const exportStl = () => {
+    const root = runtime.current?.root
+    if (root) exportFurnaceStl(root, `${modelName}.stl`)
+  }
   const fit = () => { const state = runtime.current; if (state) { fitModel(state.camera, state.orbit, state.box); state.dirty = true } }
   return <div className={`furnace-workbench ${darkMode ? 'furnace-workbench-dark' : ''}`} tabIndex={0} aria-label={`${modelName}三维工作区`}
     onPointerDownCapture={event => { if (event.target instanceof HTMLCanvasElement) event.currentTarget.focus({ preventScroll: true }) }}
@@ -345,13 +379,21 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
     <aside className="furnace-workbench-sidebar" aria-label="模型左侧工具栏">
       <div className="furnace-sidebar-heading">{simulationSidebar ? '数值仿真参数调节' : readOnly ? '模型查看' : '三维几何参数调节'}</div>
       {simulationSidebar}
+      {simulationSidebar && (
+        <details open data-section="view"><summary>视图显示</summary>
+          <div className="furnace-segmented" role="group" aria-label="显示模式">
+            <button type="button" aria-pressed={mode === 'wireframe'} onClick={() => setMode('wireframe')}>线框</button>
+            <button type="button" aria-pressed={mode === 'solid'} onClick={() => setMode('solid')}>实体</button>
+          </div>
+        </details>
+      )}
       {!simulationSidebar && <>
       {!readOnly && <div className="furnace-history-actions"><button type="button" disabled={!historyControls.canUndo} title={`撤销：${historyControls.undoLabel}（Ctrl+Z）`} onClick={historyControls.undo}>撤销</button><button type="button" disabled={!historyControls.canRedo} title={`重做：${historyControls.redoLabel}（Ctrl+Shift+Z）`} onClick={historyControls.redo}>重做</button></div>}
       {storageError && <p role="alert" className="furnace-field-error">{storageError}</p>}
       {!readOnly && <>
         <details open data-section="dimensions"><summary>整体尺寸</summary>
           {globalFields.map(({ key, ...field }) => <NumericField key={key} {...field} resetToken={components} onChange={value => onGlobalChange(key, value)} />)}
-          <button type="button" onClick={onReset}>恢复全部计算值</button>
+          <button type="button" onClick={onReset}>恢复默认</button>
         </details>
       </>}
       <details open data-section="view"><summary>视图显示</summary>
@@ -392,7 +434,9 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
       </details>
       <details data-section="groups"><summary>组件分组显隐</summary>{groups.map(group => <label className="furnace-control-check" key={group}><input type="checkbox" checked={!hiddenGroups.includes(group)} onChange={event => setHiddenGroups(current => event.target.checked ? current.filter(id => id !== group) : [...current, group])} />{groupLabels[group] ?? group}</label>)}</details>
       {!readOnly && <details data-section="history"><summary>操作历史与快捷键</summary><p className="furnace-tool-note">点击模型后：Ctrl+Z 撤销；Ctrl+Shift+Z 或 Ctrl+Y 重做。输入框中保留文字编辑快捷键。</p><p className="furnace-tool-note">本次打开期间最多回退 50 步，记录尺寸调整、移动和恢复操作；切换案例或重新打开后重新计步。</p><ol className="furnace-history-list">{historyControls.recent.map((label, index) => <li key={index}>{label}</li>)}</ol></details>}
+      <button type="button" className="furnace-export-button" onClick={exportStl}>导出 STL 模型</button>
       <button type="button" className="furnace-export-button" onClick={exportManifest}>导出构件参数</button>
+      <p className="furnace-tool-note">STL 为三角面外壳，单位 m，坐标 X 炉长、Y 向上、Z 炉宽。Fluent、OpenFOAM、scFLOW 可导入。当前不是 STEP 或 scdox 实体。</p>
       </>}
     </aside>
     <div className={`furnace-viewer-stage furnace-workbench-viewport ${darkMode ? 'furnace-viewer-stage-dark' : ''}`} onContextMenu={event => event.preventDefault()}>

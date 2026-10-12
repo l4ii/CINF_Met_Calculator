@@ -266,6 +266,7 @@ import {
   DEFAULT_SMELTING_TUYERE_OXYGEN_NM3H,
   findOxygenAirColumn,
   normalizeScaleWanTpa,
+  oxygenStreamVolumeFraction,
   sumRawWetThroughputTh,
   type JacketRemainderDecision,
   type SmeltingFurnaceDesignResult,
@@ -4547,6 +4548,10 @@ export default function CopperOxySideBlowSession({
         ? calculatedHeatBalance.finalAirColumns
         : airColumns,
     [calculatedHeatBalance, airColumns]
+  )
+  const smeltingOxygenVolumeFraction = useMemo(
+    () => oxygenStreamVolumeFraction(findOxygenAirColumn(smeltingEquipmentAirColumns)),
+    [smeltingEquipmentAirColumns]
   )
   const smeltingGasDetailRows = useMemo(
     () =>
@@ -11240,7 +11245,7 @@ export default function CopperOxySideBlowSession({
                   </div>
                   <div className={`${hintText(darkMode)} mt-1`}>
                     {isSmeltingEquipment
-                      ? '三维炉体方案可旋转查看。数值仿真在左侧调节氧气量、间距和风口，炉内为示意流动。'
+                      ? '三维炉体方案可旋转查看。数值仿真在左侧调节气量、间距、液面和氧枪，炉宽截面按粗网格计算。'
                       : '先查看三维方案与关键参数，再复核炉型匹配明细；确认后生成 BOM 设备清单。'}
                   </div>
                 </div>
@@ -11251,6 +11256,7 @@ export default function CopperOxySideBlowSession({
                   design={smeltingDesign}
                   viewerRef={furnaceViewerRef}
                   scopeKey={activeCaseId ?? 'unsaved'}
+                  oxygenVolumeFraction={smeltingOxygenVolumeFraction}
                 />
               )}
               {!isSmeltingEquipment && (
@@ -11535,6 +11541,7 @@ export default function CopperOxySideBlowSession({
             annualHours={annualHoursValue}
             totalFeedTh={overviewFeedTh}
             smeltingDesign={equipmentModelGenerated.smelting ? smeltingDesign : null}
+            oxygenVolumeFraction={smeltingOxygenVolumeFraction}
           />
         </div>
 
@@ -14599,6 +14606,7 @@ function ProcessIsland3DOverview({
   annualHours,
   totalFeedTh,
   smeltingDesign,
+  oxygenVolumeFraction = 0.996,
 }: {
   scopeKey: string
   darkMode: boolean
@@ -14608,6 +14616,7 @@ function ProcessIsland3DOverview({
   annualHours: number
   totalFeedTh: number
   smeltingDesign: SmeltingFurnaceDesignResult | null
+  oxygenVolumeFraction?: number
 }) {
   const equipmentTabs = useMemo(() => {
     const tabs: Array<{ id: EquipmentStageId; label: string }> = []
@@ -14661,7 +14670,7 @@ function ProcessIsland3DOverview({
             onChange={(id) => setActiveEquipmentTab(id as EquipmentStageId)}
           />
           {resolvedEquipmentTab === 'smelting' && smeltingDesign && (
-            <SmeltingFurnacePlanPanel darkMode={darkMode} design={smeltingDesign} embedded scopeKey={scopeKey} />
+            <SmeltingFurnacePlanPanel darkMode={darkMode} design={smeltingDesign} embedded scopeKey={scopeKey} oxygenVolumeFraction={oxygenVolumeFraction} />
           )}
         </div>
       ) : (
@@ -14824,6 +14833,7 @@ function SmeltingFurnacePlanPanel({
   viewerRef,
   embedded = false,
   scopeKey = 'unsaved',
+  oxygenVolumeFraction = 0.996,
 }: {
   darkMode: boolean
   design: SmeltingFurnaceDesignResult
@@ -14831,10 +14841,12 @@ function SmeltingFurnacePlanPanel({
   /** 汇总总览内嵌时去掉外层卡片边框，避免双重套框 */
   embedded?: boolean
   scopeKey?: string
+  oxygenVolumeFraction?: number
 }) {
   const [planView, setPlanView] = useState<'furnace' | 'flow'>('furnace')
   const [flowDecoration, setFlowDecoration] = useState<(SmeltingFlowDecoration & { playing: boolean }) | null>(null)
   const solverFramesRef = useRef<FlowSolverFrames | null>(null)
+  const meshWireRef = useRef<Float32Array | null>(null)
 
   const lengthM = Math.max(design.designLengthM || design.furnaceLengthM, 0.1)
   const widthM = Math.max(design.furnaceWidthM, 0.1)
@@ -14880,8 +14892,9 @@ function SmeltingFurnacePlanPanel({
         flow={planView === 'flow' ? flowDecoration : null}
         flowPlaying={planView === 'flow' && (flowDecoration?.playing ?? false)}
         solverFramesRef={solverFramesRef}
+        meshWireRef={meshWireRef}
         simulationSidebar={planView === 'flow' ? (
-          <FurnaceFlowShowcase darkMode={darkMode} design={design} scopeKey={scopeKey} readOnly={embedded} framesRef={solverFramesRef} onDecorationChange={setFlowDecoration} />
+          <FurnaceFlowShowcase darkMode={darkMode} design={design} scopeKey={scopeKey} oxygenVolumeFraction={oxygenVolumeFraction} readOnly={embedded} framesRef={solverFramesRef} meshWireRef={meshWireRef} onDecorationChange={setFlowDecoration} />
         ) : undefined}
       />
       <div className={`furnace-planning-summary ${embedded ? 'mt-3' : 'border-t'} px-1 pb-1 pt-3 ${

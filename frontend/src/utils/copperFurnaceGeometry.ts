@@ -1,7 +1,8 @@
 /**
  * 侧吹熔炼炉三维布置：由选型计算结果推导炉体尺寸与水套/风口坐标。
  * 纯函数、不依赖 three.js，便于单测与复用。
- * 坐标系：X = 炉长方向，Y = 竖直向上，Z = 炉宽方向，原点在炉体底面中心。
+ * 坐标系：X = 炉长方向，Y = 竖直向上，Z = 炉宽方向，原点在炉体原平底中心。
+ * 炉底中心按弧线切进底座，底座顶面仍与原炉底齐平，不进入流体域。
  */
 import type { SmeltingFurnaceDesignResult } from './copperEquipmentSizing.ts'
 import {
@@ -32,8 +33,21 @@ const FOUNDATION_HEIGHT_M = 1.6
 const FOUNDATION_MARGIN_M = 0.9
 
 /**
+ * 炉底沿炉宽下凹。侧墙仍接在原平底标高，中心切进底座，不把底座整体下移。
+ * 下凹深度限制在底座高度以内，避免弧底穿出底座底面。
+ */
+export const HEARTH_SAG_RATIO = 0.16
+
+export function hearthSagM(bottomWidthM: number, foundationHeightM = FOUNDATION_HEIGHT_M): number {
+  const width = Number.isFinite(bottomWidthM) && bottomWidthM > 0 ? bottomWidthM : 2.2
+  const foundation = Number.isFinite(foundationHeightM) && foundationHeightM > 0 ? foundationHeightM : FOUNDATION_HEIGHT_M
+  const sag = Math.max(0.02, width * HEARTH_SAG_RATIO)
+  return Math.min(sag, foundation * 0.72)
+}
+
+/**
  * 示意炉壳倒梯形外扩：自 50% 炉高起两侧斜面连续外扩（各 25% 炉宽），顶宽 = 底宽 + 两侧外扩。
- * 仅影响三维外观；炉床面积 / 水套 / 风口布置仍按未扩张炉宽计算。
+ * 炉床面积 / 水套 / 风口个数仍按未扩张炉宽计算；三维内腔跟随此外扩。
  */
 export const BODY_FLARE_START_RATIO = 0.5
 export const BODY_FLARE_SIDE_OVERHANG_WIDTH_RATIO = 0.25
@@ -158,6 +172,10 @@ export interface FurnaceLayout {
   jacketCountOneSide: number
   jacketCountTotal: number
   jacketPitchM: number
+  /** 仿真和三维共用的喷枪内径 m。切口端面是入口。 */
+  lanceDiameterM: number
+  /** 喷枪从内壁伸入炉内的深度 m。筒壁是障碍，伸入端是风口入口。 */
+  lanceInsertionM: number
   tuyereCountTotal: number
   /** 供相机自动 fit 使用的整体包围尺寸 */
   overallLengthM: number
@@ -236,11 +254,13 @@ export function buildSmeltingFurnaceLayout(design: SmeltingFurnaceDesignResult, 
   const pairedCountOneSide = Math.min(jacketCountOneSide, tuyereCountOneSide)
 
   const body: FurnaceBodyBox = { lengthM, widthM, heightM, centerXM: overridePosition(overrides, ['smelting.primary-body'], 'centerXM', 0), centerYM: overridePosition(overrides, ['smelting.primary-body'], 'centerYM', 0), centerZM: overridePosition(overrides, ['smelting.primary-body'], 'centerZM', 0) }
+  const foundationHeightM = overridePositive(overrides, ['smelting.support.foundation'], 'heightM', FOUNDATION_HEIGHT_M)
+  const sagM = hearthSagM(widthM, foundationHeightM)
   const foundation: FurnaceFoundationBox = {
     lengthM: overridePositive(overrides, ['smelting.support.foundation'], 'lengthM', lengthM + FOUNDATION_MARGIN_M * 2),
     widthM: overridePositive(overrides, ['smelting.support.foundation'], 'widthM', widthM + FOUNDATION_MARGIN_M * 2),
-    heightM: overridePositive(overrides, ['smelting.support.foundation'], 'heightM', FOUNDATION_HEIGHT_M),
-    centerYM: overridePosition(overrides, ['smelting.support.foundation'], 'centerYM', -FOUNDATION_HEIGHT_M / 2),
+    heightM: foundationHeightM,
+    centerYM: overridePosition(overrides, ['smelting.support.foundation'], 'centerYM', body.centerYM - foundationHeightM / 2),
     centerXM: overridePosition(overrides, ['smelting.support.foundation'], 'centerXM', 0),
     centerZM: overridePosition(overrides, ['smelting.support.foundation'], 'centerZM', 0),
   }
@@ -297,18 +317,21 @@ export function buildSmeltingFurnaceLayout(design: SmeltingFurnaceDesignResult, 
     topWidthM: overridePositive(overrides, ['smelting.primary-body'], 'topWidthM', flareBase.topWidthM),
   }
   const flueBase = resolveSchematicFlueDims(body)
+  const flueLengthM = overridePositive(overrides, ['smelting.process-connection.flue'], 'lengthM', flueBase.lengthM)
+  const flueWidthM = overridePositive(overrides, ['smelting.process-connection.flue'], 'widthM', flueBase.widthM)
+  const flueHeightM = overridePositive(overrides, ['smelting.process-connection.flue'], 'heightM', flueBase.heightM)
   const flue: FurnaceFluePlacement = {
-    ...flueBase,
-    lengthM: overridePositive(overrides, ['smelting.process-connection.flue'], 'lengthM', flueBase.lengthM),
-    widthM: overridePositive(overrides, ['smelting.process-connection.flue'], 'widthM', flueBase.widthM),
-    heightM: overridePositive(overrides, ['smelting.process-connection.flue'], 'heightM', flueBase.heightM),
+    lengthM: flueLengthM,
+    widthM: flueWidthM,
+    heightM: flueHeightM,
     centerXM: overridePosition(overrides, ['smelting.process-connection.flue'], 'centerXM', body.centerXM),
-    centerYM: overridePosition(overrides, ['smelting.process-connection.flue'], 'centerYM', body.centerYM + body.heightM + flueBase.heightM / 2),
+    centerYM: overridePosition(overrides, ['smelting.process-connection.flue'], 'centerYM', body.centerYM + body.heightM + flueHeightM / 2),
     centerZM: overridePosition(overrides, ['smelting.process-connection.flue'], 'centerZM', body.centerZM),
   }
   const bounds = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, minZ: Infinity, maxZ: -Infinity }
   const includeBox = (x: number, y: number, z: number, l: number, h: number, w: number) => { bounds.minX = Math.min(bounds.minX, x - l / 2); bounds.maxX = Math.max(bounds.maxX, x + l / 2); bounds.minY = Math.min(bounds.minY, y - h / 2); bounds.maxY = Math.max(bounds.maxY, y + h / 2); bounds.minZ = Math.min(bounds.minZ, z - w / 2); bounds.maxZ = Math.max(bounds.maxZ, z + w / 2) }
   includeBox(body.centerXM, body.centerYM + flare.lowerHeightM / 2, body.centerZM, flare.bottomLengthM, flare.lowerHeightM, flare.bottomWidthM)
+  bounds.minY = Math.min(bounds.minY, body.centerYM - sagM)
   includeBox(body.centerXM, body.centerYM + flare.lowerHeightM + flare.upperHeightM / 2, body.centerZM, flare.topLengthM, flare.upperHeightM, flare.topWidthM)
   includeBox(foundation.centerXM, foundation.centerYM, foundation.centerZM, foundation.lengthM, foundation.heightM, foundation.widthM)
   includeBox(flue.centerXM, flue.centerYM, flue.centerZM, flue.lengthM, flue.heightM, flue.widthM)
@@ -324,6 +347,8 @@ export function buildSmeltingFurnaceLayout(design: SmeltingFurnaceDesignResult, 
     jacketCountOneSide: pairedCountOneSide,
     jacketCountTotal: pairedCountOneSide * 2,
     jacketPitchM,
+    lanceDiameterM: overridePositive(overrides, ['smelting.annotation.counts'], 'lanceDiameterM', 0.04),
+    lanceInsertionM: Math.max(0, overridePosition(overrides, ['smelting.annotation.counts'], 'lanceInsertionM', 0.1)),
     tuyereCountTotal: pairedCountOneSide * 2,
     overallLengthM: bounds.maxX - bounds.minX,
     overallWidthM: bounds.maxZ - bounds.minZ,
@@ -348,19 +373,6 @@ export function buildSmeltingFurnaceComponentManifest(layout: FurnaceLayout): Mo
       centerXM: numericParameter(layout.body.centerXM, 'm', { editable: true, source: 'geometry', label: 'X' }),
       centerYM: numericParameter(layout.body.centerYM, 'm', { editable: true, source: 'geometry', label: 'Y' }),
       centerZM: numericParameter(layout.body.centerZM, 'm', { editable: true, source: 'geometry', label: 'Z' }),
-    },
-  })
-  const flue = layout.flue
-  components.push({
-    id: 'smelting.process-connection.flue', model: 'smelting-furnace', group: 'process-connection', category: 'flue',
-    role: '炉顶烟道', kind: 'box',
-    params: {
-      lengthM: numericParameter(flue.lengthM, 'm', { editable: true, source: 'geometry', label: '烟道长度' }),
-      widthM: numericParameter(flue.widthM, 'm', { editable: true, source: 'geometry', label: '烟道宽度' }),
-      heightM: numericParameter(flue.heightM, 'm', { editable: true, source: 'geometry', label: '烟道高度' }),
-      centerXM: numericParameter(flue.centerXM, 'm', { editable: true, source: 'geometry', label: 'X' }),
-      centerYM: numericParameter(flue.centerYM, 'm', { editable: true, source: 'geometry', label: 'Y' }),
-      centerZM: numericParameter(flue.centerZM, 'm', { editable: true, source: 'geometry', label: 'Z' }),
     },
   })
   components.push({

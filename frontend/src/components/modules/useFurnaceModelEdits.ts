@@ -37,7 +37,7 @@ export function useFurnaceModelEdits(model: ModelGeometryKind, scopeKey: string,
     }
   }, [model, scopeKey, readOnly])
   const save = useCallback((next: ModelComponentOverrides, label = '调整构件') => persist(recordModelEdit(current.current, next, label)), [persist])
-  const reset = useCallback(() => save({}, '恢复全部计算值'), [save])
+  const reset = useCallback(() => save({}, '恢复默认'), [save])
   const undo = useCallback(() => persist(stepModelHistory(current.current, 'undo')), [persist])
   const redo = useCallback(() => persist(stepModelHistory(current.current, 'redo')), [persist])
   return {
