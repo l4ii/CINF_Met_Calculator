@@ -1,8 +1,8 @@
 import * as THREE from 'three'
 import { mergeVertices, toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { hearthSagM, type FurnaceLayout } from './copperFurnaceGeometry.ts'
-import { clampLanceInsertionM, furnaceWallHalfWidthM, horizontalInteriorSection, longitudinalCenterProfile } from './furnaceFluidDomain.ts'
-import type { TetFlowFrame } from './furnaceTetSolver.ts'
+import { clampLanceInsertionM, furnaceWallHalfWidthM, horizontalInteriorSection } from './furnaceFluidDomain.ts'
+import type { FlowPostFrame } from './furnaceSim/protocol.ts'
 import type { LeadKivcetGeometry, LeadKivcetGeometryPart } from './leadKivcetGeometry.ts'
 import type { ModelComponentManifest } from './modelComponentManifest.ts'
 
@@ -232,185 +232,22 @@ function markFlowShell(mesh: THREE.Mesh, opacity: number) {
   mesh.userData.flowShellOpacity = opacity
 }
 
-export type FlowFieldKind = 'interface' | 'injectedGas' | 'lvf' | 'velocity' | 'pressure' | 'k' | 'epsilon' | 'nuT' | 'temperature'
-export type FlowViewMode = 'section' | 'volume'
-export type FlowSolverFrames = TetFlowFrame
+export type FlowSolverFrames = FlowPostFrame
 
+/** 数值仿真视图下的炉体装饰：开启风口着色、风口尺寸与位置、初始液面。流场几何由后处理帧另行绘制。 */
 export type SmeltingFlowDecoration = {
-  field: FlowFieldKind
   openTuyereIds: readonly string[]
-  perTuyereNm3h: number
   /** 当前仿真入口直径 m；同时用于三维风口显示 */
   tuyereDiameterM: number
   liquidLevelM: number
   lanceHeightM: number
   /** 风口自炉内壁面向炉内的入炉深度 m */
   lanceInsertionM: number
-  /** 为 false 时不画流场切片。未传时仍显示。 */
+  /** 已有计算结果时为 true，此时不再画初始液面标记 */
   showField?: boolean
-  viewMode: FlowViewMode
-  /** 喷枪口高度附近的水平截面，自原平底标高起算；关闭时为 null */
-  horizontalSliceM: number | null
-  showHorizontalSlice: boolean
-  /** 沿炉长、过炉宽中心的纵剖面 */
-  showLongitudinalSlice: boolean
-  showArrows: boolean
 }
 
 const FLOW_SHELL_OPACITY = 0.28
-const flowUp = new THREE.Vector3(0, 1, 0)
-const flowDirection = new THREE.Vector3()
-
-type Sample = { phi: number; speed: number; pressure: number; injectedGas: number; u: number; v: number; w: number; missing: boolean }
-type SampleIndex = {
-  reach2: number
-  originX: number
-  originY: number
-  originZ: number
-  step: number
-  bins: Map<string, number[]>
-  centroids: Float32Array
-  count: number
-}
-type FlowPlane = {
-  texture: THREE.DataTexture
-  pixels: Uint8Array
-  columns: number
-  rows: number
-  arrows: THREE.Object3D[]
-  sample: (column: number, row: number) => { x: number; y: number; z: number }
-  placeArrow: (arrow: THREE.Object3D, x: number, y: number, z: number, direction: THREE.Vector3) => void
-}
-
-function fieldColor(field: FlowFieldKind, sample: Sample, pressureScale: number, speedScale: number, out: Uint8Array, offset: number) {
-  if (sample.missing || field === 'k' || field === 'epsilon' || field === 'nuT' || field === 'temperature') {
-    out[offset] = 80
-    out[offset + 1] = 90
-    out[offset + 2] = 100
-    out[offset + 3] = 0
-    return
-  }
-  const liquid = sample.phi
-  if (field === 'injectedGas') {
-    const gas = sample.injectedGas
-    if (gas < 0.03) {
-      out[offset + 3] = 0
-      return
-    }
-    out[offset] = Math.round(14 + 30 * gas)
-    out[offset + 1] = Math.round(170 + 70 * gas)
-    out[offset + 2] = 235
-    out[offset + 3] = Math.round(90 + 165 * gas)
-  } else if (field === 'lvf') {
-    out[offset] = Math.round(255 * liquid)
-    out[offset + 1] = Math.round(255 * 4 * liquid * (1 - liquid))
-    out[offset + 2] = Math.round(255 * (1 - liquid))
-    out[offset + 3] = liquid > 0.04 && liquid < 0.96 ? 120 : 210
-  } else if (field === 'pressure') {
-    const normalized = Math.max(-1, Math.min(1, sample.pressure / pressureScale))
-    const t = 0.5 + 0.5 * normalized
-    out[offset] = Math.round(35 + 220 * t)
-    out[offset + 1] = Math.round(75 + 120 * (1 - Math.abs(normalized)))
-    out[offset + 2] = Math.round(220 * (1 - t))
-    out[offset + 3] = 205
-  } else if (field === 'velocity') {
-    const t = Math.min(1, sample.speed / speedScale)
-    out[offset] = Math.round(40 + 215 * t)
-    out[offset + 1] = Math.round(80 + 140 * (1 - Math.abs(t - 0.5) * 2))
-    out[offset + 2] = Math.round(220 * (1 - t))
-    out[offset + 3] = Math.round(70 + 160 * t)
-  } else {
-    const band = Math.exp(-((liquid - 0.5) ** 2) / 0.012)
-    out[offset] = Math.round(80 + 150 * liquid + 25 * band)
-    out[offset + 1] = Math.round(40 * (1 - liquid) + 180 * band)
-    out[offset + 2] = Math.round(30 * (1 - liquid))
-    out[offset + 3] = Math.round(liquid > 0.5 ? 150 : 30 + 225 * band)
-  }
-}
-
-function buildSampleIndex(frame: FlowSolverFrames): SampleIndex {
-  const count = Math.max(0, frame.count)
-  const dx = Math.max(frame.maxX - frame.minX, 0.2)
-  const dy = Math.max(frame.maxY - frame.minY, 0.2)
-  const dz = Math.max(frame.maxZ - frame.minZ, 0.2)
-  const step = Math.max(0.05, Math.cbrt((dx * dy * dz) / Math.max(count, 1)) * 1.35)
-  const bins = new Map<string, number[]>()
-  for (let index = 0; index < count; index += 1) {
-    const ix = Math.floor((frame.centroids[index * 3] - frame.minX) / step)
-    const iy = Math.floor((frame.centroids[index * 3 + 1] - frame.minY) / step)
-    const iz = Math.floor((frame.centroids[index * 3 + 2] - frame.minZ) / step)
-    const key = `${ix},${iy},${iz}`
-    const list = bins.get(key)
-    if (list) list.push(index)
-    else bins.set(key, [index])
-  }
-  return { reach2: (step * 1.8) ** 2, originX: frame.minX, originY: frame.minY, originZ: frame.minZ, step, bins, centroids: frame.centroids, count }
-}
-
-function nearestSample(index: SampleIndex, frame: FlowSolverFrames, x: number, y: number, z: number): Sample {
-  const ix = Math.floor((x - index.originX) / index.step)
-  const iy = Math.floor((y - index.originY) / index.step)
-  const iz = Math.floor((z - index.originZ) / index.step)
-  let best = -1
-  let bestDistance = index.reach2
-  for (let dz = -1; dz <= 1; dz += 1) {
-    for (let dy = -1; dy <= 1; dy += 1) {
-      for (let dx = -1; dx <= 1; dx += 1) {
-        const list = index.bins.get(`${ix + dx},${iy + dy},${iz + dz}`)
-        if (!list) continue
-        for (const id of list) {
-          const ox = index.centroids[id * 3] - x
-          const oy = index.centroids[id * 3 + 1] - y
-          const oz = index.centroids[id * 3 + 2] - z
-          const distance = ox * ox + oy * oy + oz * oz
-          if (distance < bestDistance) {
-            bestDistance = distance
-            best = id
-          }
-        }
-      }
-    }
-  }
-  if (best < 0) return { phi: 0, speed: 0, pressure: 0, injectedGas: 0, u: 0, v: 0, w: 0, missing: true }
-  return {
-    phi: frame.phi[best] ?? 0,
-    speed: frame.speed[best] ?? 0,
-    pressure: frame.pressure[best] ?? 0,
-    injectedGas: frame.injectedGas[best] ?? 0,
-    u: frame.u[best] ?? 0,
-    v: frame.v[best] ?? 0,
-    w: frame.w[best] ?? 0,
-    missing: false,
-  }
-}
-
-function makeArrow(): THREE.Group {
-  const arrow = new THREE.Group()
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.12, 5), new THREE.MeshBasicMaterial({ color: 0xf8fafc }))
-  shaft.position.y = 0.05
-  const head = new THREE.Mesh(new THREE.ConeGeometry(0.028, 0.05, 6), new THREE.MeshBasicMaterial({ color: 0xf8fafc }))
-  head.position.y = 0.12
-  arrow.add(shaft, head)
-  arrow.visible = false
-  return arrow
-}
-
-function planeMaterial(texture: THREE.DataTexture): THREE.MeshBasicMaterial {
-  return new THREE.MeshBasicMaterial({
-    map: texture, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false,
-  })
-}
-
-function makeTexture(columns: number, rows: number): { texture: THREE.DataTexture; pixels: Uint8Array } {
-  const pixels = new Uint8Array(columns * rows * 4)
-  const texture = new THREE.DataTexture(pixels, columns, rows)
-  texture.colorSpace = THREE.SRGBColorSpace
-  texture.magFilter = THREE.LinearFilter
-  texture.minFilter = THREE.LinearFilter
-  texture.flipY = false
-  texture.needsUpdate = true
-  return { texture, pixels }
-}
 
 function horizontalGeometry(lengthM: number, widthM: number): THREE.BufferGeometry {
   const hx = lengthM / 2
@@ -424,232 +261,48 @@ function horizontalGeometry(lengthM: number, widthM: number): THREE.BufferGeomet
   return geometry
 }
 
-function longitudinalGeometry(lengthM: number, heightM: number): THREE.BufferGeometry {
-  const hx = lengthM / 2
-  const hy = heightM / 2
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute([
-    -hx, -hy, 0, hx, -hy, 0, hx, hy, 0, -hx, hy, 0,
-  ], 3))
-  geometry.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2))
-  geometry.setIndex([0, 1, 2, 0, 2, 3])
-  return geometry
-}
-
-function buildSectionGroup(name: string, geometry: THREE.BufferGeometry, columns: number, rows: number, showArrows: boolean, arrowCount: number): { group: THREE.Group; plane: FlowPlane } {
-  const { texture, pixels } = makeTexture(columns, rows)
-  const mesh = new THREE.Mesh(geometry, planeMaterial(texture))
-  mesh.renderOrder = 4
-  const arrows: THREE.Object3D[] = []
-  if (showArrows) {
-    for (let index = 0; index < arrowCount; index += 1) {
-      const arrow = makeArrow()
-      mesh.add(arrow)
-      arrows.push(arrow)
-    }
-  }
+/** 后处理帧转成场景对象：等值面、流线、截面。返回的组放在场景根下，不随炉体模型重建。 */
+export function buildFlowPostGroup(frame: FlowPostFrame): THREE.Group {
   const group = new THREE.Group()
-  group.name = name
-  group.add(mesh)
-  return {
-    group,
-    plane: {
-      texture,
-      pixels,
-      columns,
-      rows,
-      arrows,
-      sample: () => ({ x: 0, y: 0, z: 0 }),
-      placeArrow: () => undefined,
-    },
+  group.name = 'flow-post'
+  if (frame.iso && frame.iso.indices.length > 0) {
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.BufferAttribute(frame.iso.positions, 3))
+    geometry.setAttribute('normal', new THREE.BufferAttribute(frame.iso.normals, 3))
+    geometry.setAttribute('color', new THREE.BufferAttribute(frame.iso.colors, 3))
+    geometry.setIndex(new THREE.BufferAttribute(frame.iso.indices, 1))
+    const surface = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+      vertexColors: true, side: THREE.DoubleSide, roughness: 0.55, metalness: 0.05, transparent: true, opacity: 0.88,
+    }))
+    surface.name = 'flow-iso'
+    surface.renderOrder = 5
+    group.add(surface)
   }
-}
-
-function paintPlanes(field: FlowFieldKind, frame: FlowSolverFrames, index: SampleIndex, planes: FlowPlane[]) {
-  let pressureScale = 1
-  let speedScale = Math.max(frame.inletSpeedMs, 0.5)
-  for (let id = 0; id < frame.count; id += 1) {
-    pressureScale = Math.max(pressureScale, Math.abs(frame.pressure[id] ?? 0))
-    speedScale = Math.max(speedScale, frame.speed[id] ?? 0)
+  if (frame.lines && frame.lines.positions.length > 0) {
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.BufferAttribute(frame.lines.positions, 3))
+    geometry.setAttribute('color', new THREE.BufferAttribute(frame.lines.colors, 3))
+    const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95 }))
+    lines.name = 'flow-streamlines'
+    lines.renderOrder = 6
+    group.add(lines)
   }
-  for (const plane of planes) {
-    for (let row = 0; row < plane.rows; row += 1) {
-      for (let column = 0; column < plane.columns; column += 1) {
-        const point = plane.sample(column, row)
-        const sample = nearestSample(index, frame, point.x, point.y, point.z)
-        fieldColor(field, sample, pressureScale, speedScale, plane.pixels, (column + row * plane.columns) * 4)
-      }
-    }
-    plane.texture.needsUpdate = true
-    for (const arrow of plane.arrows) arrow.visible = false
-    if (field !== 'velocity') continue
-    let arrowIndex = 0
-    const columnStep = Math.max(1, Math.floor(plane.columns / 8))
-    const rowStep = Math.max(1, Math.floor(plane.rows / 6))
-    for (let row = 1; row < plane.rows - 1 && arrowIndex < plane.arrows.length; row += rowStep) {
-      for (let column = 1; column < plane.columns - 1 && arrowIndex < plane.arrows.length; column += columnStep) {
-        const point = plane.sample(column, row)
-        const sample = nearestSample(index, frame, point.x, point.y, point.z)
-        if (sample.missing || sample.speed < speedScale * 0.08) continue
-        const arrow = plane.arrows[arrowIndex]
-        flowDirection.set(sample.u, sample.v, sample.w)
-        if (flowDirection.lengthSq() < 1e-8) continue
-        flowDirection.normalize()
-        plane.placeArrow(arrow, point.x, point.y, point.z, flowDirection)
-        arrow.visible = true
-        arrowIndex += 1
-      }
-    }
-  }
-}
-
-function placeSectionMesh(built: { group: THREE.Group; plane: FlowPlane }, position: THREE.Vector3): THREE.Mesh {
-  const mesh = built.group.children[0] as THREE.Mesh
-  mesh.position.copy(position)
-  return mesh
-}
-
-function buildFlowField(layout: FurnaceLayout, flow: SmeltingFlowDecoration): THREE.Group {
-  const group = new THREE.Group()
-  group.name = 'flow-schematic'
-  group.userData.field = flow.field
-  const planes: FlowPlane[] = []
-  const profile = longitudinalCenterProfile(layout)
-  const showSections = flow.viewMode !== 'volume'
-
-  if (showSections && flow.showHorizontalSlice && flow.horizontalSliceM != null) {
-    const columns = 72
-    const rows = 48
-    const y = layout.body.centerYM + flow.horizontalSliceM
-    const section = horizontalInteriorSection(layout, y)
-    if (section) {
-      const built = buildSectionGroup('flow-horizontal-slice', horizontalGeometry(section.lengthM, section.widthM), columns, rows, flow.showArrows, 36)
-      built.group.position.set(section.centerXM, y, section.centerZM)
-      built.plane.sample = (column, row) => ({
-        x: section.centerXM - section.lengthM / 2 + ((column + 0.5) / columns) * section.lengthM,
-        y,
-        z: section.centerZM - section.widthM / 2 + ((row + 0.5) / rows) * section.widthM,
-      })
-      built.plane.placeArrow = (arrow, x, _y, z, direction) => {
-        arrow.position.set(x - section.centerXM, 0.02, z - section.centerZM)
-        flowDirection.set(direction.x, 0, direction.z)
-        if (flowDirection.lengthSq() > 1e-8) arrow.quaternion.setFromUnitVectors(flowUp, flowDirection.normalize())
-      }
-      group.add(built.group)
-      planes.push(built.plane)
-    }
-  }
-
-  if (showSections && flow.showLongitudinalSlice) {
-    const slice = new THREE.Group()
-    slice.name = 'flow-longitudinal-slice'
-    const columns = 72
-    const rows = 64
-    const bodyHeight = Math.max(profile.shellTopYM - profile.nadirYM, 0.2)
-    const midY = (profile.shellTopYM + profile.nadirYM) / 2
-    const body = buildSectionGroup('flow-longitudinal-body', longitudinalGeometry(profile.lengthM, bodyHeight), columns, rows, flow.showArrows, 28)
-    body.plane.sample = (column, row) => ({
-      x: profile.centerXM - profile.lengthM / 2 + ((column + 0.5) / columns) * profile.lengthM,
-      y: profile.nadirYM + ((row + 0.5) / rows) * bodyHeight,
-      z: profile.centerZM,
-    })
-    body.plane.placeArrow = (arrow, x, y, _z, direction) => {
-      arrow.position.set(x - profile.centerXM, y - midY, 0.02)
-      flowDirection.set(direction.x, direction.y, 0)
-      if (flowDirection.lengthSq() > 1e-8) arrow.quaternion.setFromUnitVectors(flowUp, flowDirection.normalize())
-    }
-    slice.add(placeSectionMesh(body, new THREE.Vector3(profile.centerXM, midY, profile.centerZM)))
-    planes.push(body.plane)
-    if (profile.flue) {
-      const flue = profile.flue
-      const flueHeight = Math.max(flue.y1 - flue.y0, 0.05)
-      const flueLength = Math.max(flue.x1 - flue.x0, 0.05)
-      const flueMidY = (flue.y0 + flue.y1) / 2
-      const flueMidX = (flue.x0 + flue.x1) / 2
-      const cap = buildSectionGroup('flow-longitudinal-flue', longitudinalGeometry(flueLength, flueHeight), 36, 24, flow.showArrows, 8)
-      cap.plane.sample = (column, row) => ({
-        x: flue.x0 + ((column + 0.5) / 36) * flueLength,
-        y: flue.y0 + ((row + 0.5) / 24) * flueHeight,
-        z: profile.centerZM,
-      })
-      cap.plane.placeArrow = (arrow, x, y, _z, direction) => {
-        arrow.position.set(x - flueMidX, y - flueMidY, 0.02)
-        flowDirection.set(direction.x, direction.y, 0)
-        if (flowDirection.lengthSq() > 1e-8) arrow.quaternion.setFromUnitVectors(flowUp, flowDirection.normalize())
-      }
-      slice.add(placeSectionMesh(cap, new THREE.Vector3(flueMidX, flueMidY, profile.centerZM)))
-      planes.push(cap.plane)
-    }
+  for (const item of frame.slices) {
+    if (item.indices.length === 0) continue
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.BufferAttribute(item.positions, 3))
+    geometry.setAttribute('color', new THREE.BufferAttribute(item.colors, 3))
+    geometry.setIndex(new THREE.BufferAttribute(item.indices, 1))
+    const slice = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+      vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.92, depthWrite: false,
+    }))
+    slice.name = `flow-slice-${item.id}`
+    slice.renderOrder = 4
     group.add(slice)
-  }
-
-  if (!showSections) {
-    const volume = new THREE.Group()
-    volume.name = 'flow-volume'
-    const bands = 10
-    const columns = 36
-    const rows = 24
-    const top = Math.max(profile.shellTopYM, profile.flue?.y1 ?? profile.shellTopYM)
-    for (let band = 0; band < bands; band += 1) {
-      const y = profile.nadirYM + ((band + 0.5) / bands) * (top - profile.nadirYM)
-      const section = horizontalInteriorSection(layout, y)
-      if (!section) continue
-      const { texture, pixels } = makeTexture(columns, rows)
-      const mesh = new THREE.Mesh(horizontalGeometry(section.lengthM, section.widthM), planeMaterial(texture))
-      mesh.position.set(section.centerXM, y, section.centerZM)
-      mesh.renderOrder = 3
-      volume.add(mesh)
-      const plane: FlowPlane = {
-        texture,
-        pixels,
-        columns,
-        rows,
-        arrows: [],
-        sample: (column, row) => ({
-          x: section.centerXM - section.lengthM / 2 + ((column + 0.5) / columns) * section.lengthM,
-          y,
-          z: section.centerZM - section.widthM / 2 + ((row + 0.5) / rows) * section.widthM,
-        }),
-        placeArrow: () => undefined,
-      }
-      planes.push(plane)
-    }
-    if (flow.showArrows) {
-      for (let index = 0; index < 40; index += 1) volume.add(makeArrow())
-    }
-    const volumeArrows = volume.children.filter((child) => child instanceof THREE.Group)
-    group.add(volume)
-    group.userData.volumeArrows = volumeArrows
-  }
-
-  group.userData.paint = (frame: FlowSolverFrames) => {
-    const field = (group.userData.field as FlowFieldKind) ?? flow.field
-    const cached = group.userData.sampleIndex as SampleIndex | undefined
-    const index = !cached || cached.count !== frame.count || group.userData.meshId !== frame.meshId
-      ? buildSampleIndex(frame)
-      : cached
-    group.userData.sampleIndex = index
-    group.userData.meshId = frame.meshId
-    paintPlanes(field, frame, index, planes)
-    const arrows = (group.userData.volumeArrows as THREE.Object3D[] | undefined) ?? []
-    for (const arrow of arrows) arrow.visible = false
-    if (field !== 'velocity' || arrows.length === 0 || frame.count === 0) return
-    const stride = Math.max(1, Math.floor(frame.count / arrows.length))
-    let arrowIndex = 0
-    for (let id = 0; id < frame.count && arrowIndex < arrows.length; id += stride) {
-      const speed = frame.speed[id] ?? 0
-      if (speed < Math.max(frame.inletSpeedMs, 0.5) * 0.12) continue
-      const arrow = arrows[arrowIndex]
-      arrow.position.set(frame.centroids[id * 3], frame.centroids[id * 3 + 1], frame.centroids[id * 3 + 2])
-      flowDirection.set(frame.u[id] ?? 0, frame.v[id] ?? 0, frame.w[id] ?? 0)
-      if (flowDirection.lengthSq() < 1e-8) continue
-      arrow.quaternion.setFromUnitVectors(flowUp, flowDirection.normalize())
-      arrow.visible = true
-      arrowIndex += 1
-    }
   }
   return group
 }
+
 function addManifestMesh(root: THREE.Group, mesh: THREE.Mesh, manifest: ModelComponentManifest, position: THREE.Vector3) {
   mesh.position.copy(position)
   groupFor(root, manifest).add(mesh)
@@ -763,8 +416,7 @@ export function buildSmeltingModelScene(layout: FurnaceLayout, darkMode: boolean
     const centerZ = wallZ + inward * (placedInsertion - tuyere.lengthM / 2)
     addManifestMesh(root, mesh, manifest, new THREE.Vector3(tuyere.centerXM, placedY, centerZ))
   }
-  if (flow) addLiquidMarker(root, layout, flow)
-  if (flow && flow.showField !== false) root.add(buildFlowField(layout, flow))
+  if (flow && !flow.showField) addLiquidMarker(root, layout, flow)
   return root
 }
 

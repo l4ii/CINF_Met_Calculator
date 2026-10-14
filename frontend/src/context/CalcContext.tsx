@@ -2,9 +2,9 @@
  * 共享计算数据：原料、混料结果、元素分布
  * 配料计算页写入，产物/热平衡页可读取（悬浮面板）
  */
-import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react'
+import { createContext, useContext, useState, useMemo, type ReactNode } from 'react'
 import type { ElementRatios } from '../config/rawMaterialConfig'
-import { phaseAnalysis, type ElementWeights } from '../utils/phaseAnalysis'
+import type { ElementWeights } from '../utils/phaseAnalysis'
 import { atomicMass, COMPOUND_MOLAR_MASS } from '../utils/atomicMass.ts'
 
 export interface MaterialEntry {

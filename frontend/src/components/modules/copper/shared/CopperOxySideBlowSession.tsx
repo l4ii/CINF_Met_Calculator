@@ -10859,6 +10859,12 @@ export default function CopperOxySideBlowSession({
     const canEnterCaseSummary = activeEquipmentBomReady
     return (
       <div className="flex min-h-0 flex-1 flex-col gap-4">
+        <WorkflowMessageToast
+          darkMode={darkMode}
+          message={workflowMessage?.text ?? null}
+          tone={workflowMessage?.tone ?? 'flow'}
+          onClose={() => setWorkflowMessage(null)}
+        />
         <div ref={stagePageTopRef} className={stagePageTopShellClass(darkMode, stageEnterHighlight)}>
           <StageSheetTabs
             darkMode={darkMode}
@@ -11257,6 +11263,7 @@ export default function CopperOxySideBlowSession({
                   viewerRef={furnaceViewerRef}
                   scopeKey={activeCaseId ?? 'unsaved'}
                   oxygenVolumeFraction={smeltingOxygenVolumeFraction}
+                  onNotice={setWorkflowMessage}
                 />
               )}
               {!isSmeltingEquipment && (
@@ -11481,6 +11488,12 @@ export default function CopperOxySideBlowSession({
 
     return (
       <div className="flex min-h-0 flex-1 flex-col gap-4">
+        <WorkflowMessageToast
+          darkMode={darkMode}
+          message={workflowMessage?.text ?? null}
+          tone={workflowMessage?.tone ?? 'flow'}
+          onClose={() => setWorkflowMessage(null)}
+        />
         <div ref={stagePageTopRef} className={stagePageTopShellClass(darkMode, stageEnterHighlight)}>
           <StageSheetTabs
             darkMode={darkMode}
@@ -14670,7 +14683,7 @@ function ProcessIsland3DOverview({
             onChange={(id) => setActiveEquipmentTab(id as EquipmentStageId)}
           />
           {resolvedEquipmentTab === 'smelting' && smeltingDesign && (
-            <SmeltingFurnacePlanPanel darkMode={darkMode} design={smeltingDesign} embedded scopeKey={scopeKey} oxygenVolumeFraction={oxygenVolumeFraction} />
+            <SmeltingFurnacePlanPanel darkMode={darkMode} design={smeltingDesign} embedded scopeKey={scopeKey} oxygenVolumeFraction={oxygenVolumeFraction} onNotice={setWorkflowMessage} />
           )}
         </div>
       ) : (
@@ -14834,6 +14847,7 @@ function SmeltingFurnacePlanPanel({
   embedded = false,
   scopeKey = 'unsaved',
   oxygenVolumeFraction = 0.996,
+  onNotice,
 }: {
   darkMode: boolean
   design: SmeltingFurnaceDesignResult
@@ -14842,6 +14856,7 @@ function SmeltingFurnacePlanPanel({
   embedded?: boolean
   scopeKey?: string
   oxygenVolumeFraction?: number
+  onNotice?: (message: string, tone: 'flow' | 'warning' | 'error') => void
 }) {
   const [planView, setPlanView] = useState<'furnace' | 'flow'>('furnace')
   const [flowDecoration, setFlowDecoration] = useState<(SmeltingFlowDecoration & { playing: boolean }) | null>(null)
@@ -14894,7 +14909,7 @@ function SmeltingFurnacePlanPanel({
         solverFramesRef={solverFramesRef}
         meshWireRef={meshWireRef}
         simulationSidebar={planView === 'flow' ? (
-          <FurnaceFlowShowcase darkMode={darkMode} design={design} scopeKey={scopeKey} oxygenVolumeFraction={oxygenVolumeFraction} readOnly={embedded} framesRef={solverFramesRef} meshWireRef={meshWireRef} onDecorationChange={setFlowDecoration} />
+          <FurnaceFlowShowcase darkMode={darkMode} design={design} scopeKey={scopeKey} oxygenVolumeFraction={oxygenVolumeFraction} readOnly={embedded} framesRef={solverFramesRef} meshWireRef={meshWireRef} onDecorationChange={setFlowDecoration} onNotice={onNotice} />
         ) : undefined}
       />
       <div className={`furnace-planning-summary ${embedded ? 'mt-3' : 'border-t'} px-1 pb-1 pt-3 ${

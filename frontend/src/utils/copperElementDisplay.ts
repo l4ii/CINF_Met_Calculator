@@ -57,11 +57,10 @@ const OXIDE_DECOMPOSE: Array<{
   metalLabel: string
   metalElement?: string
   composition: FormulaComposition
-  metalCount?: number
 }> = [
   { compoundKey: 'SiO₂(二氧化硅)', metalLabel: 'Si', composition: { Si: 1, O: 2 } },
   { compoundKey: 'CaO(氧化钙)', metalLabel: 'Ca', composition: { Ca: 1, O: 1 } },
-  { compoundKey: 'Al₂O₃(三氧化二铝)', metalLabel: 'Al', composition: { Al: 2, O: 3 }, metalCount: 2 },
+  { compoundKey: 'Al₂O₃(三氧化二铝)', metalLabel: 'Al', composition: { Al: 2, O: 3 } },
 ]
 
 const MG_OXIDE_KEY = 'MgO(氧化镁)' as CopperElementKey
@@ -245,7 +244,7 @@ export function decomposePhaseElementMasses(
   const out: Record<string, number> = {}
   const consumed = new Set<string>()
 
-  for (const { compoundKey, metalLabel, metalElement = metalLabel, composition, metalCount = 1 } of OXIDE_DECOMPOSE) {
+  for (const { compoundKey, metalLabel, metalElement = metalLabel, composition } of OXIDE_DECOMPOSE) {
     const compoundMass = elements[compoundKey] ?? 0
     if (compoundMass <= 0) continue
     consumed.add(compoundKey)

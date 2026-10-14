@@ -2,13 +2,13 @@ import { FURNACE_SIM_CONFIG, type FurnaceSimConfig } from '../../config/furnaceS
 import { FACE_INLET, FACE_NORMAL, type SimMesh } from './mesh.ts'
 import { predictMomentum } from './momentum.ts'
 import { createPressureSolver } from './pressure.ts'
-import { createDirections, type FlowInputs, type FlowState } from './state.ts'
+import { createDirections, type FlowInputs, type FlowState, type SteadyDetector } from './state.ts'
 import { updateCellVelocities, updateEffectiveViscosity, updateTurbulence, updateWallFunctions } from './turbulence.ts'
 import { advectVof } from './vof.ts'
 
 export type { FlowInputs, FlowState } from './state.ts'
 
-export type FlowPhase = 'running' | 'steady' | 'unconverged' | 'diverged' | 'limit'
+export type FlowPhase = 'running' | 'steady' | 'complete' | 'unconverged' | 'diverged' | 'limit'
 
 export type FlowStatus = {
   phase: FlowPhase
@@ -22,6 +22,8 @@ export type FlowStatus = {
   gasHoldup: number
   maxSpeed: number
   hasAverage: boolean
+  /** 时均窗口起点。未达准稳态时为 0。 */
+  averageFromS: number
 }
 
 /** 后处理使用的单元场。pressure 为相对出口的静压 Pa。 */
@@ -45,7 +47,11 @@ function inletTurbulence(state: FlowState) {
 
 function applyInletVelocity(state: FlowState) {
   const w = state.dirs[2].vel
-  for (const inlet of state.mesh.inlets) w[inlet.face] = inlet.dir * Math.max(0, state.inputs.inletSpeedMs)
+  const speed = Math.max(0, state.inputs.inletSpeedMs)
+  for (const inlet of state.mesh.inlets) {
+    const open = state.mesh.lances[inlet.lance]?.open !== false
+    w[inlet.face] = open ? inlet.dir * speed : 0
+  }
 }
 
 /** 密度、层流粘度与交错控制体密度。 */
@@ -170,7 +176,7 @@ export function createFlowState(mesh: SimMesh, inputs: FlowInputs, config: Furna
       k: new Float64Array(n),
       p: new Float64Array(n),
     },
-    steady: { windowStart: 0, windowSum: 0, windowTime: 0, previousMean: -1, hits: 0, reached: false },
+    steady: { windowStart: 0, windowSum: 0, windowTime: 0, previousMean: -1, hits: 0, reached: false, reachedAtS: 0 },
   }
   computeWallGeometry(state)
   resetFlowState(state)
@@ -206,11 +212,10 @@ export function resetFlowState(state: FlowState) {
   const average = state.average
   average.timeS = 0
   for (const array of [average.alpha, average.uc, average.vc, average.wc, average.k, average.p]) array.fill(0)
-  Object.assign(state.steady, { windowStart: 0, windowSum: 0, windowTime: 0, previousMean: -1, hits: 0, reached: false })
+  Object.assign(state.steady, { windowStart: 0, windowSum: 0, windowTime: 0, previousMean: -1, hits: 0, reached: false, reachedAtS: 0 })
   inletTurbulence(state)
   applyInletVelocity(state)
   updateDensity(state)
-  for (const dir of state.dirs) dir.rfOld.set(dir.rf)
   updateEffectiveViscosity(state)
   let liquid = 0
   for (let c = 0; c < mesh.cellCount; c += 1) liquid += state.alpha[c] * mesh.vol[c]
@@ -396,23 +401,47 @@ function accumulateAverage(state: FlowState, dt: number) {
   average.timeS += dt
 }
 
-function updateSteady(state: FlowState, dt: number) {
-  const { warmupS, steadyWindowS, steadyTolerance } = state.config.numerics
-  const steady = state.steady
-  if (state.timeS < warmupS) return
-  steady.windowSum += state.monitors.kineticEnergy * dt
-  steady.windowTime += dt
-  if (steady.windowTime < steadyWindowS) return
-  const mean = steady.windowSum / steady.windowTime
-  if (steady.previousMean >= 0) {
-    const change = Math.abs(mean - steady.previousMean) / Math.max(mean, steady.previousMean, 1e-12)
-    steady.hits = change < steadyTolerance ? steady.hits + 1 : 0
-    if (steady.hits >= 2) steady.reached = true
+export type SteadyNumerics = { warmupS: number; steadyWindowS: number; steadyTolerance: number }
+
+/** 用一个时间步更新准稳态判据。首次判定为真时返回 true。 */
+export function advanceSteadyDetector(detector: SteadyDetector, timeS: number, energy: number, dt: number, numerics: SteadyNumerics): boolean {
+  if (detector.reached || timeS < numerics.warmupS) return false
+  detector.windowSum += energy * dt
+  detector.windowTime += dt
+  if (detector.windowTime < numerics.steadyWindowS) return false
+  const mean = detector.windowSum / detector.windowTime
+  let justReached = false
+  if (detector.previousMean >= 0) {
+    const change = Math.abs(mean - detector.previousMean) / Math.max(mean, detector.previousMean, 1e-12)
+    detector.hits = change < numerics.steadyTolerance ? detector.hits + 1 : 0
+    if (detector.hits >= 2) {
+      detector.reached = true
+      detector.reachedAtS = timeS
+      justReached = true
+    }
   }
-  steady.previousMean = mean
-  steady.windowSum = 0
-  steady.windowTime = 0
-  steady.windowStart = state.timeS
+  detector.previousMean = mean
+  detector.windowSum = 0
+  detector.windowTime = 0
+  detector.windowStart = timeS
+  return justReached
+}
+
+function clearAverage(state: FlowState) {
+  const { average } = state
+  average.timeS = 0
+  average.alpha.fill(0)
+  average.uc.fill(0)
+  average.vc.fill(0)
+  average.wc.fill(0)
+  average.k.fill(0)
+  average.p.fill(0)
+}
+
+/** 已达准稳态，并且准稳态后的时均累计够了。 */
+export function flowComplete(state: FlowState): boolean {
+  const { reached, reachedAtS } = state.steady
+  return reached && state.timeS - reachedAtS >= state.config.numerics.averageAfterSteadyS
 }
 
 let staticScratch: Float64Array | null = null
@@ -432,7 +461,6 @@ export function staticPressure(state: FlowState, out?: Float64Array): Float64Arr
 export function stepFlow(state: FlowState): boolean {
   const dt = state.nextDtS
   state.rhoOld.set(state.rho)
-  for (const dir of state.dirs) dir.rfOld.set(dir.rf)
   advectVof(state, dt)
   updateDensity(state)
   updateWallFunctions(state)
@@ -452,7 +480,7 @@ export function stepFlow(state: FlowState): boolean {
   updateMonitors(state)
   if (!Number.isFinite(monitors.maxSpeed) || monitors.maxSpeed > state.config.numerics.divergenceVelocityMs || !Number.isFinite(monitors.liquidVolume)) return false
   if (state.timeS >= state.config.numerics.warmupS) accumulateAverage(state, dt)
-  updateSteady(state, dt)
+  if (advanceSteadyDetector(state.steady, state.timeS, monitors.kineticEnergy, dt, state.config.numerics)) clearAverage(state)
   state.nextDtS = computeTimeStep(state)
   return true
 }
@@ -466,6 +494,7 @@ export function flowStatus(state: FlowState, diverged = false): FlowStatus {
   if (diverged) phase = 'diverged'
   else if (state.timeS >= config.numerics.maxPhysicalTimeS) phase = 'limit'
   else if (!monitors.pressureConverged) phase = 'unconverged'
+  else if (flowComplete(state)) phase = 'complete'
   else if (state.steady.reached) phase = 'steady'
   return {
     phase,
@@ -479,6 +508,7 @@ export function flowStatus(state: FlowState, diverged = false): FlowStatus {
     gasHoldup: monitors.gasHoldup,
     maxSpeed: monitors.maxSpeed,
     hasAverage: state.average.timeS > 0,
+    averageFromS: state.steady.reached ? state.steady.reachedAtS : 0,
   }
 }
 

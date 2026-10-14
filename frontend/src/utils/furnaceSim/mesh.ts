@@ -1,4 +1,4 @@
-import { FURNACE_SIM_CONFIG, type FurnaceSimConfig, type MeshLevel } from '../../config/furnaceSimConfig.ts'
+import { FURNACE_SIM_CONFIG, resolveTargetCells, type FurnaceSimConfig } from '../../config/furnaceSimConfig.ts'
 import type { FluidDomain } from '../furnaceFluidDomain.ts'
 
 /**
@@ -11,6 +11,7 @@ export const FACE_INLET = 1
 export const FACE_OUTLET = 2
 
 export type MeshLance = {
+  id: string
   centerXM: number
   centerYM: number
   radiusM: number
@@ -18,6 +19,7 @@ export type MeshLance = {
   tipZM: number
   /** 吹入方向 Z 分量，±1 */
   inwardZ: number
+  open: boolean
 }
 
 /** 入口为 z 面，cell 是炉内一侧的流体单元 */
@@ -35,6 +37,10 @@ export type MeshStats = {
   maxRatio: number
   nozzleCellM: number
   bathLayers: number
+  /** 风口带与液面带内的竖向层厚 m，0 表示没有加密带 */
+  bandCellM: number
+  /** 两条加密带内的流体层数 */
+  bandLayers: number
   componentsBeforeCleanup: number
   removedCells: number
   connected: boolean
@@ -86,6 +92,8 @@ export type MeshSpec = {
   liquidSurfaceYM?: number
   targetCells?: number
   baseSizeM?: number
+  /** 竖向加密带。统计带内层厚与层数。 */
+  bands?: RefineZone[]
   config?: FurnaceSimConfig
 }
 
@@ -407,8 +415,8 @@ export function buildSimMesh(spec: MeshSpec): SimMesh {
       const j = Math.floor(item.face / nx) % ny
       const faceArea = dx[i] * dy[j]
       const aperture = Math.min(1, (nozzleArea * item.weight) / Math.max(total, 1e-30) / faceArea)
-      az[item.face] = aperture
-      kindZ[item.face] = FACE_INLET
+      az[item.face] = lance.open ? aperture : 0
+      if (lance.open) kindZ[item.face] = FACE_INLET
       inlets.push({ lance: lanceIndex, face: item.face, cell: item.cell, aperture, dir })
     }
   })
@@ -455,6 +463,7 @@ export function buildSimMesh(spec: MeshSpec): SimMesh {
   let inletArea = 0
   let nozzleCell = 0
   for (const inlet of inlets) {
+    if (!spec.lances[inlet.lance].open) continue
     const i = inlet.face % nx
     const j = Math.floor(inlet.face / nx) % ny
     inletArea += inlet.aperture * dx[i] * dy[j]
@@ -468,6 +477,19 @@ export function buildSimMesh(spec: MeshSpec): SimMesh {
   }
   let bathLayers = 0
   if (spec.liquidSurfaceYM != null) for (let j = 0; j < ny; j += 1) if (yc[j] < spec.liquidSurfaceYM) bathLayers += 1
+  let bandLayers = 0
+  let bandCell = 0
+  for (let j = 0; j < ny; j += 1) {
+    const inside = (spec.bands ?? []).some((band) => ys[j] >= band.a - 1e-9 && ys[j + 1] <= band.b + 1e-9)
+    if (!inside) continue
+    let fluidRow = false
+    for (let k = 0; k < nz && !fluidRow; k += 1) {
+      for (let i = 0; i < nx; i += 1) if (vf[i + nx * (j + ny * k)] > 0) fluidRow = true
+    }
+    if (!fluidRow) continue
+    bandLayers += 1
+    bandCell = Math.max(bandCell, dy[j])
+  }
 
   const mesh: SimMesh = {
     nx, ny, nz, cellCount, xs, ys, zs, dx, dy, dz, xc, yc, zc, vf, vol, ax, ay, az, kindY, kindZ, inlets, outlets,
@@ -483,6 +505,8 @@ export function buildSimMesh(spec: MeshSpec): SimMesh {
       maxRatio: Math.max(axisRatio(xs), axisRatio(ys), axisRatio(zs)),
       nozzleCellM: nozzleCell,
       bathLayers,
+      bandCellM: bandCell,
+      bandLayers,
       componentsBeforeCleanup: sizes.length,
       removedCells,
       connected: true,
@@ -575,7 +599,7 @@ function buildMeshWire(mesh: SimMesh, limit: number): Float32Array {
 }
 
 export type FurnaceMeshOptions = {
-  level?: MeshLevel
+  /** 显式目标单元数，仅测试用小网格。不传时取后台配置，且不低于下限。 */
   targetCells?: number
   liquidSurfaceYM?: number
   config?: FurnaceSimConfig
@@ -585,6 +609,8 @@ function furnaceLances(domain: FluidDomain, tuyereSize: number): MeshLance[] {
   return domain.lances.map((lance) => {
     const insertion = Math.abs(lance.tipZM - lance.wallZM)
     return {
+      id: lance.id,
+      open: lance.open,
       centerXM: lance.centerXM,
       centerYM: lance.centerYM,
       radiusM: lance.radiusM,
@@ -595,10 +621,11 @@ function furnaceLances(domain: FluidDomain, tuyereSize: number): MeshLance[] {
   })
 }
 
-function furnaceAxes(domain: FluidDomain, h: number, surface: number | undefined, config: FurnaceSimConfig) {
-  const { growthRatio, tuyereCellRatio, tuyereMinDiameters, surfaceCellRatio, surfaceBandCells } = config.mesh
+function furnaceAxes(domain: FluidDomain, h: number, surface: number | undefined, config: FurnaceSimConfig, refineBands: boolean) {
+  const { growthRatio, tuyereCellRatio, tuyereMinDiameters, tuyereBandM, surfaceBandM, bandCellDiameters } = config.mesh
   const diameter = domain.lances.reduce((value, lance) => Math.max(value, lance.radiusM * 2), 0)
   const tuyereSize = Math.min(h, Math.max(diameter * tuyereMinDiameters, h * tuyereCellRatio))
+  const bandSize = diameter > 0 ? Math.min(h, diameter * bandCellDiameters) : h
   const lances = furnaceLances(domain, tuyereSize)
   const { bounds, anchors } = domain
   const xZones: RefineZone[] = []
@@ -617,19 +644,25 @@ function furnaceAxes(domain: FluidDomain, h: number, surface: number | undefined
     zZones.push({ a: lance.tipZM - tuyereSize, b: lance.tipZM + tuyereSize, size: tuyereSize })
     zAnchors.push(lance.tipZM)
   }
-  if (lances.length > 0) {
+  if (refineBands && lances.length > 0) {
     const y = lances[0].centerYM
-    yZones.push({ a: y - tuyereSize / 2, b: y + tuyereSize / 2, size: tuyereSize })
+    yZones.push({ a: y - tuyereBandM, b: y + tuyereBandM, size: bandSize })
+    yAnchors.push(y - tuyereBandM, y + tuyereBandM)
   }
   if (surface != null && surface > bounds.minY && surface < bounds.maxY) {
-    yZones.push({ a: surface - surfaceBandCells * h, b: surface + surfaceBandCells * h, size: h * surfaceCellRatio })
     yAnchors.push(surface)
+    if (refineBands) {
+      yZones.push({ a: surface - surfaceBandM, b: surface + surfaceBandM, size: bandSize })
+      yAnchors.push(surface - surfaceBandM, surface + surfaceBandM)
+    }
   }
   return {
     xs: gradedAxis(bounds.minX, bounds.maxX, h, xZones, xAnchors, growthRatio),
     ys: gradedAxis(bounds.minY, bounds.maxY, h, yZones, yAnchors, growthRatio),
     zs: gradedAxis(bounds.minZ, bounds.maxZ, h, zZones, zAnchors, growthRatio),
     lances,
+    yZones,
+    bandSize,
   }
 }
 
@@ -645,10 +678,19 @@ function countFluidCells(domain: FluidDomain, xs: number[], ys: number[], zs: nu
   return count
 }
 
-/** 按档位反推基础尺寸，使流体单元数接近目标，再生成切割单元网格。 */
+export function setLanceOpening(mesh: SimMesh, openIds: ReadonlySet<string>, velocity: Float64Array | null, inletSpeedMs: number) {
+  for (const lance of mesh.lances) lance.open = openIds.has(lance.id)
+  const speed = Math.max(0, inletSpeedMs)
+  for (const inlet of mesh.inlets) {
+    const isOpen = mesh.lances[inlet.lance].open
+    mesh.kindZ[inlet.face] = isOpen ? FACE_INLET : FACE_NORMAL
+    mesh.az[inlet.face] = isOpen ? inlet.aperture : 0
+    if (velocity) velocity[inlet.face] = isOpen ? inlet.dir * speed : 0
+  }
+}
 export function buildFurnaceMesh(domain: FluidDomain, options: FurnaceMeshOptions = {}): SimMesh {
   const config = options.config ?? FURNACE_SIM_CONFIG
-  const target = Math.max(500, Math.round(options.targetCells ?? config.mesh.levels[options.level ?? config.mesh.defaultLevel]))
+  const target = Math.max(500, Math.round(options.targetCells ?? resolveTargetCells(config)))
   const { bounds } = domain
   const boxVolume = (bounds.maxX - bounds.minX) * (bounds.maxY - bounds.minY) * (bounds.maxZ - bounds.minZ)
   let insideSamples = 0
@@ -668,7 +710,7 @@ export function buildFurnaceMesh(domain: FluidDomain, options: FurnaceMeshOption
   let h = Math.cbrt(fluidVolume / target)
   let best = { h, error: Infinity }
   for (let iteration = 0; iteration < 8; iteration += 1) {
-    const axes = furnaceAxes(domain, h, options.liquidSurfaceYM, config)
+    const axes = furnaceAxes(domain, h, options.liquidSurfaceYM, config, false)
     const count = countFluidCells(domain, axes.xs, axes.ys, axes.zs)
     const error = Math.abs(count / target - 1)
     if (error < best.error) best = { h, error }
@@ -676,7 +718,7 @@ export function buildFurnaceMesh(domain: FluidDomain, options: FurnaceMeshOption
     h *= Math.min(1.6, Math.max(0.6, Math.cbrt(count / target)))
   }
   h = best.h
-  const axes = furnaceAxes(domain, h, options.liquidSurfaceYM, config)
+  const axes = furnaceAxes(domain, h, options.liquidSurfaceYM, config, true)
   return buildSimMesh({
     xs: axes.xs,
     ys: axes.ys,
@@ -687,6 +729,7 @@ export function buildFurnaceMesh(domain: FluidDomain, options: FurnaceMeshOption
     liquidSurfaceYM: options.liquidSurfaceYM,
     targetCells: target,
     baseSizeM: h,
+    bands: axes.yZones,
     config,
   })
 }

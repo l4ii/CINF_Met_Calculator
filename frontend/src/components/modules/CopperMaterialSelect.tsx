@@ -8,7 +8,6 @@ export function CopperMaterialSelect({
   value,
   options,
   placeholder = '请选择',
-  status = 'none',
   title,
   triggerClassName,
   onChange,
@@ -17,7 +16,6 @@ export function CopperMaterialSelect({
   value: string
   options: CopperMaterialSelectOption[]
   placeholder?: string
-  status?: 'none' | 'pending' | 'resolved'
   title?: string
   triggerClassName: string
   onChange: (id: string) => void

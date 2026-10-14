@@ -4,6 +4,60 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import type { ModelComponentManifest } from '../../utils/modelComponentManifest.ts'
 import { applyModelDisplay, disposeModel, exportFurnaceStl, furnaceBodyBounds, sectionPlane, type ModelDisplayMode, type ModelSectionAxis, type ModelSectionKeep } from '../../utils/furnaceViewTools.ts'
+import { buildFlowPostGroup } from '../../utils/furnaceModelScene.ts'
+import type { FlowPostFrame } from '../../utils/furnaceSim/protocol.ts'
+import { turbo } from '../../utils/furnaceSim/post.ts'
+
+const TURBO_GRADIENT = `linear-gradient(to right, ${Array.from({ length: 9 }, (_, index) => {
+  const [r, g, b] = turbo(index / 8)
+  return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}) ${index * 12.5}%`
+}).join(', ')})`
+
+function formatLegendValue(value: number): string {
+  if (!Number.isFinite(value)) return '—'
+  const abs = Math.abs(value)
+  if (abs >= 100) return value.toFixed(0)
+  if (abs >= 1) return value.toFixed(2)
+  if (abs === 0) return '0'
+  return value.toPrecision(3)
+}
+
+/** 色标叠层直接写 DOM，帧更新不触发 React 渲染。 */
+function renderFlowLegend(host: HTMLDivElement | null, frame: FlowPostFrame | null) {
+  if (!host) return
+  host.replaceChildren()
+  if (!frame || frame.legends.length === 0) {
+    host.hidden = true
+    return
+  }
+  host.hidden = false
+  for (const legend of frame.legends) {
+    const item = document.createElement('div')
+    item.className = 'furnace-flow-legend-item'
+    const title = document.createElement('div')
+    title.className = 'furnace-flow-legend-title'
+    title.textContent = legend.unit ? `${legend.label}（${legend.unit}）` : legend.label
+    const bar = document.createElement('div')
+    bar.className = 'furnace-flow-legend-bar'
+    bar.style.background = TURBO_GRADIENT
+    const scale = document.createElement('div')
+    scale.className = 'furnace-flow-legend-scale'
+    const min = document.createElement('span')
+    min.textContent = formatLegendValue(legend.min)
+    const max = document.createElement('span')
+    max.textContent = formatLegendValue(legend.max)
+    scale.append(min, max)
+    item.append(title, bar, scale)
+    host.append(item)
+  }
+  const notes: string[] = []
+  if (frame.iso) notes.push(`等值面 LVF = ${formatLegendValue(frame.iso.value)}`)
+  notes.push(frame.historyIndex != null ? `回放 · t = ${frame.timeS.toFixed(2)} s` : `t = ${frame.timeS.toFixed(2)} s`)
+  const caption = document.createElement('div')
+  caption.className = 'furnace-flow-legend-caption'
+  caption.textContent = notes.join(' · ')
+  host.append(caption)
+}
 
 export type FurnaceViewportHandle = {
   capturePngDataUrl: () => string | null
@@ -27,9 +81,9 @@ type Props = {
   /** 数值仿真时替换左侧几何参数区 */
   simulationSidebar?: ReactNode
   flowPlaying?: boolean
-  solverFramesRef?: { current: { serial: number } | null }
+  /** 最新后处理帧；只在数值仿真视图传入 */
+  solverFramesRef?: { current: FlowPostFrame | null }
   meshWireRef?: { current: Float32Array | null }
-  flowField?: string
 }
 
 const groupLabels: Record<string, string> = {
@@ -75,7 +129,7 @@ function fitModel(camera: THREE.PerspectiveCamera, orbit: OrbitControls, box: TH
   const radius = Math.max(size.length() / 2, 0.5)
   const halfFov = THREE.MathUtils.degToRad(camera.fov / 2)
   const angle = Math.min(halfFov, Math.atan(Math.tan(halfFov) * camera.aspect))
-  const distance = radius / Math.sin(angle) * 1.12
+  const distance = radius / Math.sin(angle) * 0.72
   camera.position.copy(center).add(new THREE.Vector3(0.95, 0.65, 1).normalize().multiplyScalar(distance))
   camera.near = Math.max(distance / 2000, 0.01)
   camera.far = distance * 40
@@ -87,10 +141,11 @@ function fitModel(camera: THREE.PerspectiveCamera, orbit: OrbitControls, box: TH
 }
 
 const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(function ParametricFurnaceViewport(props, ref) {
-  const { darkMode, modelName, components, buildModel, readOnly = false, globalFields, onGlobalChange, onComponentChange, onResetComponent, onReset, storageError, historyControls, simulationSidebar, solverFramesRef, meshWireRef, flowField = '' } = props
+  const { darkMode, modelName, components, buildModel, readOnly = false, globalFields, onGlobalChange, onComponentChange, onResetComponent, onReset, storageError, historyControls, simulationSidebar, solverFramesRef, meshWireRef } = props
   const hostRef = useRef<HTMLDivElement>(null)
   const axesRef = useRef<SVGSVGElement>(null)
-  const runtime = useRef<{ renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.PerspectiveCamera; orbit: OrbitControls; transform: TransformControls; root: THREE.Group | null; grid: THREE.GridHelper | null; box: THREE.Box3; dirty: boolean; meshLines: THREE.LineSegments | null; meshWireBuffer: Float32Array | null } | null>(null)
+  const legendRef = useRef<HTMLDivElement>(null)
+  const runtime = useRef<{ renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.PerspectiveCamera; orbit: OrbitControls; transform: TransformControls; root: THREE.Group | null; grid: THREE.GridHelper | null; box: THREE.Box3; dirty: boolean; meshLines: THREE.LineSegments | null; meshWireBuffer: Float32Array | null; flowGroup: THREE.Group | null; flowFrame: FlowPostFrame | null } | null>(null)
   const [failure, setFailure] = useState(false)
   const [mode, setMode] = useState<ModelDisplayMode>('solid')
   const [section, setSection] = useState<ModelSectionAxis>('none')
@@ -104,8 +159,8 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
   const [hiddenGroups, setHiddenGroups] = useState<string[]>([])
   const [hiddenParts, setHiddenParts] = useState<string[]>([])
   const [hover, setHover] = useState<{ name: string; x: number; y: number } | null>(null)
-  const live = useRef({ components, onComponentChange, readOnly, moveMode, section, sectionPosition, sectionKeep, solverFrames: solverFramesRef, meshWire: meshWireRef, flowField })
-  live.current = { components, onComponentChange, readOnly, moveMode, section, sectionPosition, sectionKeep, solverFrames: solverFramesRef, meshWire: meshWireRef, flowField }
+  const live = useRef({ components, onComponentChange, readOnly, moveMode, section, sectionPosition, sectionKeep, solverFrames: solverFramesRef, meshWire: meshWireRef })
+  live.current = { components, onComponentChange, readOnly, moveMode, section, sectionPosition, sectionKeep, solverFrames: solverFramesRef, meshWire: meshWireRef }
   const physical = components.filter(item => item.kind !== 'metadata')
   const selected = physical.find(item => item.id === selectedId)
   const groups = [...new Set(physical.map(item => item.group))]
@@ -170,7 +225,7 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
     fill.position.set(-15, 12, -8)
     lights.add(key, fill)
     scene.add(lights)
-    const state = { renderer, scene, camera, orbit, transform, root: null as THREE.Group | null, grid: null as THREE.GridHelper | null, box: new THREE.Box3(), dirty: true, meshLines: null as THREE.LineSegments | null, meshWireBuffer: null as Float32Array | null }
+    const state = { renderer, scene, camera, orbit, transform, root: null as THREE.Group | null, grid: null as THREE.GridHelper | null, box: new THREE.Box3(), dirty: true, meshLines: null as THREE.LineSegments | null, meshWireBuffer: null as Float32Array | null, flowGroup: null as THREE.Group | null, flowFrame: null as FlowPostFrame | null }
     runtime.current = state
     const markDirty = () => { state.dirty = true }
     orbit.addEventListener('change', markDirty)
@@ -250,25 +305,19 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
         }
         state.dirty = true
       }
-      const flowNode = state.root?.getObjectByName('flow-schematic')
-      const frames = live.current.solverFrames?.current
-      if (flowNode && frames && flowNode.userData.paintedSerial !== frames.serial) {
-        flowNode.userData.field = live.current.flowField
-        const paint = flowNode.userData.paint as ((value: typeof frames) => void) | undefined
-        paint?.(frames)
-        flowNode.userData.paintedSerial = frames.serial
-        state.dirty = true
-      } else if (flowNode && flowNode.userData.field !== live.current.flowField) {
-        flowNode.userData.field = live.current.flowField
-        flowNode.userData.paintedSerial = -1
-        state.dirty = true
-      }
-      const horizontalNode = state.root?.getObjectByName('flow-horizontal-slice')
-      const longitudinalNode = state.root?.getObjectByName('flow-longitudinal-slice')
-      if ((horizontalNode && horizontalNode.userData.field !== live.current.flowField) || (longitudinalNode && longitudinalNode.userData.field !== live.current.flowField)) {
-        if (horizontalNode) horizontalNode.userData.field = live.current.flowField
-        if (longitudinalNode) longitudinalNode.userData.field = live.current.flowField
-        if (flowNode) flowNode.userData.paintedSerial = -1
+      const postFrame = live.current.solverFrames?.current ?? null
+      if (postFrame !== state.flowFrame) {
+        if (state.flowGroup) {
+          state.scene.remove(state.flowGroup)
+          disposeModel(state.flowGroup)
+          state.flowGroup = null
+        }
+        state.flowFrame = postFrame
+        if (postFrame) {
+          state.flowGroup = buildFlowPostGroup(postFrame)
+          state.scene.add(state.flowGroup)
+        }
+        renderFlowLegend(legendRef.current, postFrame)
         state.dirty = true
       }
       if (orbit.update() || state.dirty) {
@@ -302,6 +351,7 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
       // three 0.169's dispose calls a removed traverse method; clean its helper directly.
       transform.detach(); transform.disconnect(); disposeModel(transform.getHelper()); orbit.dispose()
       if (state.meshLines) disposeModel(state.meshLines)
+      if (state.flowGroup) disposeModel(state.flowGroup)
       if (state.root) disposeModel(state.root)
       if (state.grid) disposeModel(state.grid)
       renderer.dispose(); renderer.domElement.remove(); runtime.current = null
@@ -393,7 +443,7 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
       {!readOnly && <>
         <details open data-section="dimensions"><summary>整体尺寸</summary>
           {globalFields.map(({ key, ...field }) => <NumericField key={key} {...field} resetToken={components} onChange={value => onGlobalChange(key, value)} />)}
-          <button type="button" onClick={onReset}>恢复默认</button>
+          <div className="furnace-sim-actions"><button type="button" onClick={onReset}>恢复默认</button></div>
         </details>
       </>}
       <details open data-section="view"><summary>视图显示</summary>
@@ -409,8 +459,10 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
           <label className="furnace-control-label">切割方向<select aria-label="切割方向" value={sectionAxis} onChange={event => changeSection(event.target.value as ModelSectionAxis)}>
             <option value="top">水平切割 · 按高度 Y</option><option value="side">竖直纵切 · 按炉宽 Z</option><option value="end">竖直横切 · 按炉长 X</option>
           </select></label>
-          <NumericField label={`${controlCoordinate.toUpperCase()} 切割位置`} value={sectionPosition} unit="m" min={sectionMin} max={sectionMax} disabled={section === 'none'} onChange={setSectionPosition} />
-          <label className="furnace-control-label">移动切割面<input aria-label="剖切位置" type="range" min="0" max="1000" step="1" value={sectionMax > sectionMin ? Math.round((sectionPosition - sectionMin) / (sectionMax - sectionMin) * 1000) : 0} onChange={event => setSectionPosition(THREE.MathUtils.lerp(sectionMin, sectionMax, Number(event.target.value) / 1000))} /></label>
+          <div className="furnace-range-field">
+            <NumericField label={`${controlCoordinate.toUpperCase()} 切割位置`} value={sectionPosition} unit="m" min={sectionMin} max={sectionMax} disabled={section === 'none'} onChange={setSectionPosition} />
+            <input className="furnace-range" aria-label="剖切位置" type="range" min="0" max="1000" step="1" disabled={section === 'none'} value={sectionMax > sectionMin ? Math.round((sectionPosition - sectionMin) / (sectionMax - sectionMin) * 1000) : 0} onChange={event => setSectionPosition(THREE.MathUtils.lerp(sectionMin, sectionMax, Number(event.target.value) / 1000))} />
+          </div>
           <p className="furnace-tool-note">坐标 {Number(sectionMin.toFixed(4))} ～ {Number(sectionMax.toFixed(4))} m · 总跨度 {Number((sectionMax - sectionMin).toFixed(4))} m</p>
           <label className="furnace-control-label">保留部分<select aria-label="保留部分" value={sectionKeep} onChange={event => setSectionKeep(event.target.value as ModelSectionKeep)}>
             <option value="lower">{controlAxis === 'top' ? '下方' : `${controlCoordinate.toUpperCase()} 坐标较小的一侧`}</option><option value="upper">{controlAxis === 'top' ? '上方' : `${controlCoordinate.toUpperCase()} 坐标较大的一侧`}</option>
@@ -428,7 +480,7 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
           {Object.entries(selected.params).filter(([, param]) => typeof param.value === 'number').map(([key, param]) => readOnly || !param.editable
             ? <div className="furnace-readonly-field" key={key}><span>{param.label ?? parameterLabels[key] ?? key}</span><span>{Number(Number(param.value).toFixed(4))} {param.unit}</span></div>
             : <NumericField key={`${selected.id}.${key}`} label={param.label ?? parameterLabels[key] ?? key} value={Number(param.value)} unit={param.unit ?? ''} resetToken={components} min={key.startsWith('center') ? -10000 : 0.001} max={key.startsWith('center') ? 10000 : key.toLowerCase().includes('ratio') ? 0.99 : 1000} onChange={value => onComponentChange(selected.id, { [key]: value })} />)}
-          {!readOnly && <><button type="button" onClick={() => onResetComponent(selected.id)}>恢复此构件</button><p className="furnace-tool-note">X 炉长 · Y 向上 · Z 炉宽。移动会改变装配位置，工艺计算输入保持独立。Ctrl+Z 可撤回最近一次调整。</p></>}
+          {!readOnly && <><div className="furnace-sim-actions"><button type="button" onClick={() => onResetComponent(selected.id)}>恢复此构件</button></div><p className="furnace-tool-note">X 炉长 · Y 向上 · Z 炉宽。移动会改变装配位置，工艺计算输入保持独立。Ctrl+Z 可撤回最近一次调整。</p></>}
           <label className="furnace-control-check"><input type="checkbox" checked={!hiddenParts.includes(selected.id)} onChange={event => setHiddenParts(current => event.target.checked ? current.filter(id => id !== selected.id) : [...current, selected.id])} />显示此构件</label>
         </>}
       </details>
@@ -443,6 +495,8 @@ const ParametricFurnaceViewport = forwardRef<FurnaceViewportHandle, Props>(funct
       <div ref={hostRef} className="furnace-viewer-canvas-host" />
       {failure && <div className="furnace-viewer-notice">当前环境无法启动三维显示。左侧仍可查看和导出构件参数。</div>}
       {hover && <div className="furnace-part-tooltip" style={{ left: hover.x, top: hover.y }}>{hover.name}</div>}
+      <div ref={legendRef} className={`furnace-flow-legend ${darkMode ? 'furnace-flow-legend-dark' : ''}`} aria-live="polite" hidden />
+
       <svg ref={axesRef} className="furnace-axis-indicator" viewBox="0 0 160 150" role="group" aria-label="模型视角：点击坐标轴切换视角，点击原点适应模型">
         {([
           { axis: 'x', x: 139, y: 108, labelX: 148, labelY: 123, color: '#ef4444' },

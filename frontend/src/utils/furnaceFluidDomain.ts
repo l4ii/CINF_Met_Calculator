@@ -6,7 +6,8 @@ import {
 
 /**
  * 仿真内腔：炉体与烟道连通，炉底为沿炉宽下凹的浅弧。
- * 底座不在域内。开启的喷枪按水平圆柱从内腔中挖去，切口端面是入口。
+ * 底座不在域内。每支喷枪都按水平圆柱从内腔中挖去，切口端面可作入口。
+ * 开闭只决定该端面是否进气，不改变网格。
  */
 
 export type FluidLance = {
@@ -21,6 +22,8 @@ export type FluidLance = {
   radiusM: number
   /** 气体吹入方向的 Z 分量，前墙为 -1，后墙为 +1 */
   inwardZ: number
+  /** 关闭时端面是壁面，网格保持不变 */
+  open: boolean
 }
 
 export type FluidDomainOptions = {
@@ -166,7 +169,6 @@ export function buildFluidDomain(layout: FurnaceLayout, options: FluidDomainOpti
   const insertionM = clampLanceInsertionM(layout, options.lanceHeightM, options.lanceDiameterM, options.lanceInsertionM)
   const lances: FluidLance[] = []
   for (const tuyere of layout.tuyeres) {
-    if (!open.has(tuyere.id)) continue
     const wallHalf = halfWidthAt(layout, lanceYM)
     const wallZM = layout.body.centerZM + (tuyere.side === 'front' ? wallHalf : -wallHalf)
     const inwardZ = tuyere.side === 'front' ? -1 : 1
@@ -179,6 +181,7 @@ export function buildFluidDomain(layout: FurnaceLayout, options: FluidDomainOpti
       tipZM: wallZM + inwardZ * insertionM,
       radiusM,
       inwardZ,
+      open: open.has(tuyere.id),
     })
   }
 

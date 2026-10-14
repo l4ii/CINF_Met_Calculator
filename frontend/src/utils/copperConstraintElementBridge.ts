@@ -90,13 +90,6 @@ const OXIDE_EQUIVALENT_OXYGEN_FRACTIONS: Partial<Record<CopperElementKey, number
   'FeO(氧化亚铁)': 1 - atomicMass('Fe') / COMPOUND_MOLAR_MASS.FeO,
 }
 
-const INPUT_OXIDE_EQUIVALENT_KEYS: CopperElementKey[] = [
-  'SiO₂(二氧化硅)',
-  'CaO(氧化钙)',
-  'MgO(氧化镁)',
-  'Al₂O₃(三氧化二铝)',
-]
-
 function finitePositive(value: number | undefined): number {
   return Number.isFinite(value) ? Math.max(0, Number(value)) : 0
 }

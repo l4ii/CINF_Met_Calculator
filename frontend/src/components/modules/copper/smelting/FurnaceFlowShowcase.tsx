@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { createPortal } from 'react-dom'
+import { FURNACE_SIM_CONFIG } from '../../../../config/furnaceSimConfig.ts'
 import { calculateTuyereOxygenPerTuyereNm3h, type SmeltingFurnaceDesignResult } from '../../../../utils/copperEquipmentSizing.ts'
-import { buildSmeltingFurnaceLayout, type FurnaceTuyerePlacement } from '../../../../utils/copperFurnaceGeometry.ts'
-import { clampLanceInsertionM, furnaceWallHalfWidthM } from '../../../../utils/furnaceFluidDomain.ts'
-import type { FlowFieldKind, FlowSolverFrames, FlowViewMode, SmeltingFlowDecoration } from '../../../../utils/furnaceModelScene.ts'
-import { inletSpeedMs } from '../../../../utils/furnaceSideBlowSolver.ts'
+import { buildSmeltingFurnaceLayout, type FurnaceLayout, type FurnaceTuyerePlacement } from '../../../../utils/copperFurnaceGeometry.ts'
+import { buildFluidDomain, clampLanceInsertionM, type FluidDomain } from '../../../../utils/furnaceFluidDomain.ts'
+import { inletSpeedMs } from '../../../../utils/furnaceGasInlet.ts'
+import type { FlowSolverFrames, SmeltingFlowDecoration } from '../../../../utils/furnaceModelScene.ts'
+import type { MeshStats } from '../../../../utils/furnaceSim/mesh.ts'
+import type { PostScalar, PostSliceRequest, SliceAxis } from '../../../../utils/furnaceSim/post.ts'
+import type { FlowPhysics, FlowPostFrame, FlowView, WorkerRequest, WorkerResponse } from '../../../../utils/furnaceSim/protocol.ts'
+import type { FlowStatus } from '../../../../utils/furnaceSim/solver.ts'
 import { useFurnaceModelEdits } from '../../useFurnaceModelEdits.ts'
 import { btnPrimary, btnSecondary } from '../../../../theme/uiTheme.ts'
 
@@ -12,23 +17,41 @@ type Props = {
   darkMode: boolean
   design: SmeltingFurnaceDesignResult
   scopeKey: string
-  /** 配料氧气列 O₂ 体积分数，0–1。标态流量已含该组成，速度只做温压换算。 */
+  /** 配料氧气列 O₂ 体积分数，0–1 */
   oxygenVolumeFraction?: number
   readOnly?: boolean
   framesRef: MutableRefObject<FlowSolverFrames | null>
   meshWireRef?: MutableRefObject<Float32Array | null>
   onDecorationChange: (decoration: SmeltingFlowDecoration & { playing: boolean }) => void
+  onNotice?: (message: string, tone: 'flow' | 'warning' | 'error') => void
 }
 
 type TuyereMode = 'all' | 'alternate' | 'staggered' | 'custom'
+type MeshPhase = 'empty' | 'building' | 'ready' | 'stale'
 
-const FIELDS: Array<{ id: FlowFieldKind; label: string }> = [
-  { id: 'injectedGas', label: '进气示踪' },
-  { id: 'interface', label: '气液界面' },
-  { id: 'lvf', label: '液相分数' },
-  { id: 'velocity', label: '速度场' },
-  { id: 'pressure', label: '压力' },
+const SLICE_AXES: Array<{ id: SliceAxis; label: string }> = [
+  { id: 'x', label: '横截面' },
+  { id: 'y', label: '水平面' },
+  { id: 'z', label: '纵截面' },
 ]
+
+const SLICE_FIELDS: Array<{ id: PostScalar; label: string }> = [
+  { id: 'alpha', label: 'LVF' },
+  { id: 'speed', label: '速度' },
+  { id: 'k', label: '湍动能' },
+  { id: 'pressure', label: '静压' },
+]
+
+const MAX_SLICES = 6
+
+type SliceDraft = {
+  id: string
+  axis: SliceAxis
+  /** X/Z 相对炉体中心，Y 为距炉底最低点的高度，单位 m */
+  positionM: number
+  field: PostScalar
+  visible: boolean
+}
 
 const DEFAULT_BATH_DENSITY_KG_M3 = 3500
 
@@ -47,9 +70,8 @@ function formatGas(value: number): string {
   return value.toFixed(2)
 }
 
-function formatMm(valueM: number, digits = 0): string {
-  if (!Number.isFinite(valueM)) return '0'
-  return (valueM * 1000).toFixed(digits)
+function formatMm(valueM: number): string {
+  return Number.isFinite(valueM) ? (valueM * 1000).toFixed(0) : '0'
 }
 
 /** 两点式俯视示意：沿炉长按实际间距摆位风口，可用键盘/点击逐个切换。 */
@@ -100,6 +122,40 @@ function idsForMode(tuyeres: FurnaceTuyerePlacement[], mode: Exclude<TuyereMode,
   return tuyeres.filter((tuyere) => (tuyere.side === 'front' ? tuyere.index % 2 === 1 : tuyere.index % 2 === 0)).map((tuyere) => tuyere.id)
 }
 
+function RangeNumberField({ label, value, min, max, step, digits = 0, unit, disabled, onChange }: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  digits?: number
+  unit?: string
+  disabled?: boolean
+  onChange: (value: number) => void
+}) {
+  const shown = Number.isFinite(value) ? value.toFixed(digits) : ''
+  const [draft, setDraft] = useState(shown)
+  useEffect(() => { setDraft(shown) }, [shown])
+  const commit = () => {
+    const parsed = Number(draft)
+    if (!Number.isFinite(parsed)) {
+      setDraft(shown)
+      return
+    }
+    onChange(Math.min(max, Math.max(min, parsed)))
+  }
+  const slider = Math.min(max, Math.max(min, Number.isFinite(value) ? value : min))
+  return (
+    <div className="furnace-range-field">
+      <label className="furnace-parameter-field">
+        <span>{label}{unit ? <small>{unit}</small> : null}</span>
+        <input type="number" aria-label={label} min={min} max={max} step={step} value={draft} disabled={disabled} onChange={(event) => setDraft(event.target.value)} onBlur={commit} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }} />
+      </label>
+      <input className="furnace-range" type="range" aria-label={`${label}滑块`} min={min} max={max} step={step} value={slider} disabled={disabled} onChange={(event) => onChange(Number(event.target.value))} />
+    </div>
+  )
+}
+
 function SidebarNumber({ label, unit, value, min, max, disabled, tone = 'plain', onChange }: {
   label: string
   unit: string
@@ -128,11 +184,70 @@ function SidebarNumber({ label, unit, value, min, max, disabled, tone = 'plain',
   )
 }
 
-function inletSpeedHint(speedMs: number, oxygenVolumeFraction: number): string {
-  return `按圆形风口面积 A = πd²/4 换算入口速度：${formatGas(speedMs)} m/s。O₂ ${formatGas(oxygenVolumeFraction * 100)} vol%，标况 273.15 K、101.325 kPa，入口实态 293.15 K、140 kPa。`
+function axisRange(axis: SliceAxis, layout: FurnaceLayout, domain: FluidDomain) {
+  const { bounds, nadirYM } = domain
+  if (axis === 'x') return { minM: bounds.minX - layout.body.centerXM, maxM: bounds.maxX - layout.body.centerXM }
+  if (axis === 'z') return { minM: bounds.minZ - layout.body.centerZM, maxM: bounds.maxZ - layout.body.centerZM }
+  return { minM: bounds.minY - nadirYM, maxM: bounds.maxY - nadirYM }
 }
 
-export default function FurnaceFlowShowcase({ darkMode, design, scopeKey, oxygenVolumeFraction = 0.996, readOnly = false, framesRef, meshWireRef, onDecorationChange }: Props) {
+function clampPosition(axis: SliceAxis, positionM: number, layout: FurnaceLayout, domain: FluidDomain) {
+  const range = axisRange(axis, layout, domain)
+  return Math.min(range.maxM, Math.max(range.minM, positionM))
+}
+
+function defaultPosition(axis: SliceAxis, layout: FurnaceLayout, domain: FluidDomain) {
+  let value = 0
+  if (axis === 'x') value = (layout.tuyeres[0]?.centerXM ?? layout.body.centerXM) - layout.body.centerXM
+  else if (axis === 'y') value = (layout.tuyeres[0]?.centerYM ?? layout.body.centerYM) - domain.nadirYM
+  return clampPosition(axis, value, layout, domain)
+}
+
+function nearestHistoryIndex(timeS: number, times: number[]) {
+  let best = 0
+  let gap = Number.POSITIVE_INFINITY
+  times.forEach((time, index) => {
+    const delta = Math.abs(time - timeS)
+    if (delta < gap) {
+      gap = delta
+      best = index
+    }
+  })
+  return best
+}
+
+function sameDisplay(a: { view: FlowView; index: number | null } | null, b: { view: FlowView; index: number | null } | null) {
+  if (!a || !b || a.index !== b.index) return false
+  return JSON.stringify(a.view) === JSON.stringify(b.view)
+}
+
+function absolutePosition(slice: SliceDraft, layout: FurnaceLayout, domain: FluidDomain) {
+  if (slice.axis === 'x') return layout.body.centerXM + slice.positionM
+  if (slice.axis === 'z') return layout.body.centerZM + slice.positionM
+  return domain.nadirYM + slice.positionM
+}
+
+function statusLine(phase: MeshPhase, status: FlowStatus | null, running: boolean, error: string): { text: string; tone?: 'warn' | 'error' } {
+  if (error) return { text: `计算中断：${error}`, tone: 'error' }
+  if (phase === 'empty') return { text: '尚未生成网格' }
+  if (phase === 'building') return { text: '正在生成网格…' }
+  if (phase === 'stale') return { text: '参数已修改，请重新生成网格', tone: 'warn' }
+  if (!status || status.timeS === 0) return { text: '' }
+  const time = `${status.timeS.toFixed(2)} s`
+  if (status.phase === 'diverged') return { text: `计算发散（${time}），请重置后减小气量或加密网格`, tone: 'error' }
+  if (status.phase === 'limit') {
+    const cap = FURNACE_SIM_CONFIG.numerics.maxPhysicalTimeS
+    return status.averageFromS > 0
+      ? { text: `已达到 ${cap} s 上限 · ${time}` }
+      : { text: `已达到 ${cap} s 上限，未判定准稳态` }
+  }
+  if (status.phase === 'complete') return { text: `已完成 · 准稳态始于 ${status.averageFromS.toFixed(2)} s · 共 ${status.timeS.toFixed(2)} s` }
+  if (status.phase === 'unconverged') return { text: `${running ? '计算中' : '已暂停'} · ${time} · 压力未收敛，已自动减小时间步`, tone: 'warn' }
+  if (status.phase === 'steady') return { text: `已达准稳态（${status.averageFromS.toFixed(2)} s），再算 ${FURNACE_SIM_CONFIG.numerics.averageAfterSteadyS} s 自动停止 · ${time}` }
+  return { text: `${running ? '计算中' : '已暂停'} · ${time}` }
+}
+
+export default function FurnaceFlowShowcase({ darkMode, design, scopeKey, oxygenVolumeFraction = 0.996, readOnly = false, framesRef, meshWireRef, onDecorationChange, onNotice }: Props) {
   const { overrides, save } = useFurnaceModelEdits('smelting', scopeKey, readOnly)
   const layout = useMemo(() => buildSmeltingFurnaceLayout(design, overrides), [design, overrides])
   const tuyereKey = layout.tuyeres.map((tuyere) => tuyere.id).join('|')
@@ -148,7 +263,7 @@ export default function FurnaceFlowShowcase({ darkMode, design, scopeKey, oxygen
       ? customIds.filter((id) => layout.tuyeres.some((tuyere) => tuyere.id === id))
       : idsForMode(layout.tuyeres, mode)
   ), [mode, customIds, layout.tuyeres])
-  const openCount = openIds.length
+  const openKey = openIds.join('|')
   const [oxygenNm3h, setOxygenNm3h] = useState(design.oxygenNm3h)
   const [trackedOxygen, setTrackedOxygen] = useState(design.oxygenNm3h)
   if (trackedOxygen !== design.oxygenNm3h) {
@@ -156,154 +271,355 @@ export default function FurnaceFlowShowcase({ darkMode, design, scopeKey, oxygen
     setOxygenNm3h(design.oxygenNm3h)
   }
   const activeOxygen = trackedOxygen === design.oxygenNm3h ? oxygenNm3h : design.oxygenNm3h
-  const perTuyereNm3h = calculateTuyereOxygenPerTuyereNm3h(activeOxygen, openCount)
+  const perTuyereNm3h = calculateTuyereOxygenPerTuyereNm3h(activeOxygen, openIds.length)
   const liquidMaxM = Math.max(layout.body.heightM - 0.05, 0.1)
   const defaultLance = layout.tuyeres[0]?.centerYM ?? layout.body.heightM * 0.22
   const [liquidLevelM, setLiquidLevelM] = useState(() => Math.min(3, liquidMaxM))
   const [lanceHeightM, setLanceHeightM] = useState(defaultLance)
   const [bathDensityKgM3, setBathDensityKgM3] = useState(DEFAULT_BATH_DENSITY_KG_M3)
-  const tuyereDiameterMm = layout.lanceDiameterM * 1000
-  const lanceInsertionMm = layout.lanceInsertionM * 1000
-  const clampedInsertionM = clampLanceInsertionM(layout, lanceHeightM, tuyereDiameterMm / 1000, lanceInsertionMm / 1000)
-  const maxInsertionMm = clampLanceInsertionM(layout, lanceHeightM, tuyereDiameterMm / 1000, 1e6) * 1000
-  const wallHalfMm = furnaceWallHalfWidthM(layout, layout.body.centerYM + lanceHeightM) * 1000
-  const [showHorizontal, setShowHorizontal] = useState(true)
-  const [showLongitudinal, setShowLongitudinal] = useState(true)
-  const [viewMode, setViewMode] = useState<FlowViewMode>('section')
-  const [horizontalHeightM, setHorizontalHeightM] = useState(defaultLance)
-  const [showArrows, setShowArrows] = useState(true)
-  const [field, setField] = useState<FlowFieldKind>('injectedGas')
-  const [playing, setPlaying] = useState(false)
-  const [meshPhase, setMeshPhase] = useState<'empty' | 'ready' | 'stale'>('empty')
-  const [meshInfo, setMeshInfo] = useState<{ tetCount: number; cellSizeM: number; zoneSizeM?: { tuyereM: number; surfaceM: number; bathM: number; gasM: number } } | null>(null)
-  const [meshing, setMeshing] = useState(false)
+  const tuyereDiameterM = layout.lanceDiameterM
+  const insertionM = clampLanceInsertionM(layout, lanceHeightM, tuyereDiameterM, layout.lanceInsertionM)
+  const maxInsertionMm = clampLanceInsertionM(layout, lanceHeightM, tuyereDiameterM, 1e6) * 1000
+  const speedMs = inletSpeedMs(perTuyereNm3h, tuyereDiameterM / 2)
+
+  const [meshPhase, setMeshPhase] = useState<MeshPhase>('empty')
+  const [meshStats, setMeshStats] = useState<MeshStats | null>(null)
   const [showMesh, setShowMesh] = useState(true)
-  const heldWire = useRef<Float32Array | null>(null)
+  const [running, setRunning] = useState(false)
+  const [status, setStatus] = useState<FlowStatus | null>(null)
+  const [error, setError] = useState('')
+  const [showIso, setShowIso] = useState(true)
+  const [showLines, setShowLines] = useState(false)
+  const [isoAlpha, setIsoAlpha] = useState(FURNACE_SIM_CONFIG.post.defaultInterfaceAlpha)
+  const [slices, setSlices] = useState<SliceDraft[]>([])
+  const [historyTimes, setHistoryTimes] = useState<number[]>([])
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null)
+  const [playing, setPlaying] = useState(false)
+  const [loopPlayback, setLoopPlayback] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [dialogIds, setDialogIds] = useState<string[]>([])
-  const [solverSerial, setSolverSerial] = useState(0)
-  const [solverMetrics, setSolverMetrics] = useState({ physicalTimeS: 0, dtS: 0, pressureResidual: 0, divergenceMax: 0, massError: 0, iterations: 0 })
-  const [solverError, setSolverError] = useState('')
-  const pitchMm = layout.jacketPitchM * 1000
-  const inletRadiusM = tuyereDiameterMm / 2000
-  const openKey = openIds.join('|')
+  const heldWire = useRef<Float32Array | null>(null)
+  const sliceSerial = useRef(1)
+  const playingRef = useRef(false)
+  const loopRef = useRef(true)
+  const historyTimesRef = useRef<number[]>([])
+  const expectIndexRef = useRef<number | null>(null)
+  const playbackTicket = useRef(0)
+  const playbackPending = useRef(false)
+  const runningRef = useRef(false)
+  const pendingId = useRef<number | null>(null)
+  const requestSerial = useRef(0)
+  const desiredRef = useRef<{ view: FlowView; index: number | null } | null>(null)
+  const sentRef = useRef<{ view: FlowView; index: number | null } | null>(null)
+  const advanceAfter = useRef<number | null>(null)
+  const selectedRef = useRef<number | null>(null)
+  const heldGeometry = useRef<{ meshId: number; iso: FlowPostFrame['iso']; lines: FlowPostFrame['lines'] }>({ meshId: -1, iso: null, lines: null })
+  const flushRef = useRef<(force?: boolean) => number>(() => 0)
+  const playNextRef = useRef<() => void>(() => {})
+  loopRef.current = loopPlayback
+
+  const domain = useMemo(() => buildFluidDomain(layout, {
+    openTuyereIds: openIds,
+    lanceDiameterM: tuyereDiameterM,
+    lanceHeightM,
+    lanceInsertionM: insertionM,
+  }), [layout, openIds, tuyereDiameterM, lanceHeightM, insertionM])
+
+  const view = useMemo<FlowView>(() => ({
+    iso: showIso,
+    isoAlpha,
+    streamlines: showLines,
+    slices: slices.filter((slice) => slice.visible).map((slice): PostSliceRequest => ({
+      id: slice.id,
+      axis: slice.axis,
+      positionM: absolutePosition(slice, layout, domain),
+      field: slice.field,
+    })),
+  }), [showIso, isoAlpha, showLines, slices, layout, domain])
+  const physics = useMemo<FlowPhysics>(() => ({
+    perTuyereNm3h, oxygenFraction: oxygenVolumeFraction, liquidDensityKgM3: bathDensityKgM3,
+  }), [perTuyereNm3h, oxygenVolumeFraction, bathDensityKgM3])
 
   useEffect(() => {
     onDecorationChange({
-      field,
       openTuyereIds: openIds,
-      perTuyereNm3h,
-      tuyereDiameterM: tuyereDiameterMm / 1000,
+      tuyereDiameterM,
       liquidLevelM,
       lanceHeightM,
-      lanceInsertionM: clampedInsertionM,
-      viewMode,
-      horizontalSliceM: viewMode === 'section' && showHorizontal ? horizontalHeightM : null,
-      showHorizontalSlice: viewMode === 'section' && showHorizontal,
-      showLongitudinalSlice: viewMode === 'section' && showLongitudinal,
-      showArrows,
+      lanceInsertionM: insertionM,
       showField: meshPhase === 'ready',
-      playing,
+      playing: running,
     })
-  }, [onDecorationChange, field, openKey, perTuyereNm3h, tuyereDiameterMm, liquidLevelM, lanceHeightM, clampedInsertionM, viewMode, showHorizontal, showLongitudinal, horizontalHeightM, showArrows, playing, openIds, meshPhase])
-
-  const params = useMemo(() => ({
-    widthM: Math.max(layout.body.widthM, 0.2),
-    heightM: Math.max(layout.body.heightM, 0.2),
-    liquidLevelM,
-    lanceHeightM,
-    inletRadiusM,
-    outletWidthM: layout.flue.widthM,
-    liquidDensityKgM3: bathDensityKgM3,
-    gasState: { oxygenFraction: oxygenVolumeFraction, normalTemperatureK: 273.15, normalPressurePa: 101325, actualTemperatureK: 293.15, actualPressurePa: 140000 },
-    inletSpeedMs: inletSpeedMs(perTuyereNm3h, inletRadiusM, { oxygenFraction: oxygenVolumeFraction, normalTemperatureK: 273.15, normalPressurePa: 101325, actualTemperatureK: 293.15, actualPressurePa: 140000 }),
-  }), [layout.body.widthM, layout.body.heightM, layout.flue.widthM, liquidLevelM, lanceHeightM, perTuyereNm3h, oxygenVolumeFraction, inletRadiusM, bathDensityKgM3])
+  }, [onDecorationChange, openKey, openIds, tuyereDiameterM, liquidLevelM, lanceHeightM, insertionM, meshPhase, running])
 
   const meshSignature = useMemo(() => [
     layout.body.lengthM, layout.body.widthM, layout.body.heightM, layout.body.centerXM, layout.body.centerYM, layout.body.centerZM,
-    layout.flare.lowerHeightM, layout.flare.upperHeightM, layout.flare.bottomWidthM, layout.flare.topWidthM, layout.flare.bottomLengthM, layout.flare.topLengthM,
+    layout.flare.lowerHeightM, layout.flare.upperHeightM, layout.flare.bottomWidthM, layout.flare.topWidthM,
     layout.flue.lengthM, layout.flue.widthM, layout.flue.heightM, layout.flue.centerXM, layout.flue.centerYM, layout.flue.centerZM,
-    layout.jacketPitchM,
-    layout.tuyeres.map((tuyere) => `${tuyere.id}:${tuyere.centerXM}:${tuyere.centerYM}:${tuyere.centerZM}`).join(';'),
-    tuyereDiameterMm, clampedInsertionM, lanceHeightM, liquidLevelM, activeOxygen, openKey, bathDensityKgM3,
-  ].join('|'), [layout, tuyereDiameterMm, clampedInsertionM, lanceHeightM, liquidLevelM, activeOxygen, openKey, bathDensityKgM3])
+    layout.tuyeres.map((tuyere) => `${tuyere.id}:${tuyere.centerXM}:${tuyere.centerZM}`).join(';'),
+    tuyereDiameterM, insertionM, lanceHeightM, liquidLevelM,
+  ].join('|'), [layout, tuyereDiameterM, insertionM, lanceHeightM, liquidLevelM])
   const signatureRef = useRef(meshSignature)
   signatureRef.current = meshSignature
   const builtSignature = useRef<string | null>(null)
-  const pendingSignature = useRef<string | null>(null)
   const workerRef = useRef<Worker | null>(null)
-  useEffect(() => {
-    if (!builtSignature.current || builtSignature.current === meshSignature) return
-    setMeshPhase('stale')
-    setPlaying(false)
+  const viewRef = useRef(view)
+  viewRef.current = view
+  const physicsRef = useRef(physics)
+  physicsRef.current = physics
+  const showMeshRef = useRef(showMesh)
+  showMeshRef.current = showMesh
+
+  const clearResults = () => {
     framesRef.current = null
     heldWire.current = null
     if (meshWireRef) meshWireRef.current = null
-    workerRef.current?.postMessage({ type: 'playing', playing: false })
-  }, [framesRef, meshSignature, meshWireRef])
+  }
+
   useEffect(() => {
     const worker = new Worker(new URL('../../../../workers/furnaceSideBlowSolver.worker.ts', import.meta.url), { type: 'module' })
     workerRef.current = worker
-    worker.onmessage = (event: MessageEvent<FlowSolverFrames | { type: 'mesh'; tetCount: number; cellSizeM: number; zoneSizeM?: { tuyereM: number; surfaceM: number; bathM: number; gasM: number }; wirePositions: Float32Array } | { type: 'error'; message: string }>) => {
-      if (event.data.type === 'error') {
-        setPlaying(false)
-        setMeshing(false)
-        setSolverError(event.data.message)
+    worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      const message = event.data
+      if (message.type === 'error') {
+        setRunning(false)
+        setError(message.message)
+        setMeshPhase((current) => (current === 'building' ? 'empty' : current))
         return
       }
-      const fresh = pendingSignature.current != null && pendingSignature.current === signatureRef.current
-      if (!fresh) {
-        framesRef.current = null
-        heldWire.current = null
-        if (meshWireRef) meshWireRef.current = null
-        setMeshing(false)
-        setMeshPhase('stale')
-        return
-      }
-      if (event.data.type === 'mesh') {
-        heldWire.current = event.data.wirePositions
-        setShowMesh(true)
-        if (meshWireRef) meshWireRef.current = event.data.wirePositions
-        setMeshInfo({ tetCount: event.data.tetCount, cellSizeM: event.data.cellSizeM, zoneSizeM: event.data.zoneSizeM })
-        return
-      }
-      framesRef.current = event.data
-      if (builtSignature.current !== pendingSignature.current) {
-        builtSignature.current = pendingSignature.current
-        setMeshInfo((current) => ({ tetCount: event.data.tetCount, cellSizeM: event.data.cellSizeM, zoneSizeM: current?.zoneSizeM }))
+      if (builtSignature.current !== signatureRef.current) return
+      if (message.type === 'mesh') {
+        heldWire.current = message.wire
+        if (meshWireRef) meshWireRef.current = showMeshRef.current ? message.wire : null
+        setMeshStats(message.stats)
         setMeshPhase('ready')
+        return
       }
-      setMeshing(false)
-      setSolverSerial(event.data.serial)
-      setSolverMetrics({ physicalTimeS: event.data.physicalTimeS, dtS: event.data.dtS, pressureResidual: event.data.pressureResidual, divergenceMax: event.data.divergenceMax, massError: event.data.massError, iterations: event.data.iterations })
+      if (message.type === 'status') {
+        setStatus(message.status)
+        const wasRunning = runningRef.current
+        runningRef.current = message.running
+        setRunning(message.running)
+        historyTimesRef.current = message.historyTimesS
+        setHistoryTimes(message.historyTimesS)
+        if (message.running) {
+          playbackTicket.current += 1
+          playbackPending.current = false
+          advanceAfter.current = null
+          playingRef.current = false
+          setPlaying(false)
+          selectedRef.current = null
+          setHistoryIndex(null)
+        } else if (wasRunning) {
+          const last = Math.max(0, message.historyTimesS.length - 1)
+          selectedRef.current = last
+          setHistoryIndex(last)
+        }
+        return
+      }
+      if (message.meshId !== heldGeometry.current.meshId) heldGeometry.current = { meshId: message.meshId, iso: null, lines: null }
+      if (message.keepIso) message.iso = heldGeometry.current.iso
+      else heldGeometry.current.iso = message.iso
+      if (message.keepLines) message.lines = heldGeometry.current.lines
+      else heldGeometry.current.lines = message.lines
+      const answered = message.requestId > 0 && message.requestId === pendingId.current
+      if (answered) pendingId.current = null
+      framesRef.current = message
+      const followUp = answered ? flushRef.current() : 0
+      if (advanceAfter.current === -1 && followUp > 0) advanceAfter.current = followUp
+      if (message.requestId > 0 && advanceAfter.current === message.requestId) {
+        advanceAfter.current = null
+        window.setTimeout(() => playNextRef.current(), FURNACE_SIM_CONFIG.post.playbackFrameMs)
+      }
     }
     return () => {
-      worker.postMessage({ type: 'stop' })
+      worker.postMessage({ type: 'stop' } satisfies WorkerRequest)
       worker.terminate()
       if (workerRef.current === worker) workerRef.current = null
       framesRef.current = null
+      if (meshWireRef) meshWireRef.current = null
     }
   }, [framesRef, meshWireRef])
+
+  const send = (message: WorkerRequest) => workerRef.current?.postMessage(message)
+
+  const sendDisplay = (target: { view: FlowView; index: number | null }, force = false) => {
+    desiredRef.current = target
+    if (!workerRef.current) return 0
+    if (runningRef.current) {
+      workerRef.current.postMessage({ type: 'display', requestId: 0, view: target.view, index: null } satisfies WorkerRequest)
+      return 0
+    }
+    if (pendingId.current != null) return 0
+    if (!force && sameDisplay(sentRef.current, target)) return 0
+    const id = requestSerial.current + 1
+    requestSerial.current = id
+    pendingId.current = id
+    sentRef.current = target
+    workerRef.current.postMessage({ type: 'display', requestId: id, view: target.view, index: target.index } satisfies WorkerRequest)
+    return id
+  }
+  flushRef.current = (force?: boolean) => {
+    const desired = desiredRef.current
+    if (!desired) return 0
+    return sendDisplay(desired, force)
+  }
+  playNextRef.current = () => {
+    if (!playingRef.current) return
+    const times = historyTimesRef.current
+    if (times.length < 2) {
+      playingRef.current = false
+      setPlaying(false)
+      return
+    }
+    let next = (expectIndexRef.current ?? 0) + 1
+    if (next >= times.length) {
+      if (!loopRef.current) {
+        playbackTicket.current += 1
+        playingRef.current = false
+        setPlaying(false)
+        return
+      }
+      next = 0
+    }
+    expectIndexRef.current = next
+    selectedRef.current = next
+    setHistoryIndex(next)
+    const id = sendDisplay({ view: viewRef.current, index: next }, true)
+    advanceAfter.current = id > 0 ? id : -1
+  }
+
   useEffect(() => {
-    workerRef.current?.postMessage({ type: 'playing', playing })
-  }, [playing])
-  const divideMesh = () => {
-    pendingSignature.current = signatureRef.current
+    setSlices((current) => {
+      let changed = false
+      const next = current.map((slice) => {
+        const positionM = clampPosition(slice.axis, slice.positionM, layout, domain)
+        if (positionM === slice.positionM) return slice
+        changed = true
+        return { ...slice, positionM }
+      })
+      return changed ? next : current
+    })
+  }, [layout, domain])
+
+  const stopPlayback = () => {
+    playbackTicket.current += 1
+    playbackPending.current = false
+    advanceAfter.current = null
+    playingRef.current = false
     setPlaying(false)
-    setMeshing(true)
-    heldWire.current = null
-    if (meshWireRef) meshWireRef.current = null
-    workerRef.current?.postMessage({
+  }
+
+  useEffect(() => {
+    if (builtSignature.current == null || builtSignature.current === meshSignature) return
+    builtSignature.current = null
+    send({ type: 'pause' })
+    setRunning(false)
+    stopPlayback()
+    setHistoryIndex(null)
+    setHistoryTimes([])
+    historyTimesRef.current = []
+    setMeshPhase('stale')
+    clearResults()
+  }, [meshSignature])
+
+  useEffect(() => {
+    if (meshPhase !== 'ready') return
+    sendDisplay({ view, index: playingRef.current ? expectIndexRef.current : selectedRef.current })
+  }, [view, meshPhase])
+
+  useEffect(() => {
+    if (meshPhase === 'ready') send({ type: 'physics', physics })
+  }, [physics, meshPhase])
+
+  useEffect(() => {
+    if (meshPhase !== 'ready') return
+    send({ type: 'tuyeres', openTuyereIds: openIds })
+  }, [openKey, meshPhase])
+
+  const generateMesh = () => {
+    builtSignature.current = signatureRef.current
+    setRunning(false)
+    setStatus(null)
+    setError('')
+    stopPlayback()
+    setHistoryIndex(null)
+    setHistoryTimes([])
+    historyTimesRef.current = []
+    setMeshPhase('building')
+    clearResults()
+    send({
       type: 'configure',
       layout,
       openTuyereIds: openIds,
-      lanceDiameterM: tuyereDiameterMm / 1000,
+      lanceDiameterM: tuyereDiameterM,
       lanceHeightM,
-      lanceInsertionM: clampedInsertionM,
+      lanceInsertionM: insertionM,
       liquidLevelM,
-      inletSpeedMs: params.inletSpeedMs,
-      liquidDensityKgM3: bathDensityKgM3,
+      physics: physicsRef.current,
+      view: viewRef.current,
     })
+  }
+
+  const toggleRun = () => {
+    if (running) {
+      send({ type: 'pause' })
+      return
+    }
+    stopPlayback()
+    selectedRef.current = null
+    setHistoryIndex(null)
+    setError('')
+    setShowMesh(false)
+    if (meshWireRef) meshWireRef.current = null
+    if (status?.phase === 'diverged') send({ type: 'reset' })
+    send({ type: 'run' })
+  }
+
+  const showHistoryIndex = (index: number) => {
+    const last = Math.max(0, historyTimesRef.current.length - 1)
+    const next = Math.max(0, Math.min(last, index))
+    stopPlayback()
+    expectIndexRef.current = next
+    selectedRef.current = next
+    setHistoryIndex(next)
+    sendDisplay({ view: viewRef.current, index: next })
+  }
+
+  const togglePlayback = () => {
+    if (playingRef.current) {
+      stopPlayback()
+      return
+    }
+    const times = historyTimesRef.current
+    if (runningRef.current || times.length < 2) return
+    const last = times.length - 1
+    const index = selectedRef.current == null || selectedRef.current >= last ? 0 : selectedRef.current
+    expectIndexRef.current = index
+    selectedRef.current = index
+    setHistoryIndex(index)
+    playingRef.current = true
+    setPlaying(true)
+    const id = sendDisplay({ view: viewRef.current, index }, true)
+    advanceAfter.current = id > 0 ? id : -1
+  }
+
+  const addSlice = () => {
+    if (slices.length >= MAX_SLICES) return
+    const axis = SLICE_AXES[slices.length % SLICE_AXES.length].id
+    const id = `slice-${sliceSerial.current}`
+    sliceSerial.current += 1
+    setSlices((current) => [...current, { id, axis, positionM: defaultPosition(axis, layout, domain), field: 'alpha', visible: true }])
+  }
+
+  const updateSlice = (id: string, patch: Partial<SliceDraft>) => {
+    setSlices((current) => current.map((slice) => {
+      if (slice.id !== id) return slice
+      const next = { ...slice, ...patch }
+      if (patch.axis && patch.axis !== slice.axis && patch.positionM == null) next.positionM = defaultPosition(patch.axis, layout, domain)
+      else next.positionM = clampPosition(next.axis, next.positionM, layout, domain)
+      return next
+    }))
   }
 
   const chooseMode = (next: TuyereMode) => {
@@ -320,46 +636,45 @@ export default function FurnaceFlowShowcase({ darkMode, design, scopeKey, oxygen
       'smelting.primary-body': { ...(overrides['smelting.primary-body'] ?? {}), [key]: millimeters / 1000 },
     }, '调整炉体尺寸')
   }
-  const speedHint = inletSpeedHint(params.inletSpeedMs, oxygenVolumeFraction)
+  const saveCounts = (key: 'jacketPitchM' | 'lanceDiameterM' | 'lanceInsertionM', millimeters: number, label: string) => {
+    save({
+      ...overrides,
+      'smelting.annotation.counts': { ...(overrides['smelting.annotation.counts'] ?? {}), [key]: millimeters / 1000 },
+    }, label)
+  }
   const dialogPerTuyereNm3h = calculateTuyereOxygenPerTuyereNm3h(activeOxygen, dialogIds.length)
-  const dialogSpeedMs = inletSpeedMs(dialogPerTuyereNm3h, inletRadiusM)
-  const dialogSpeedHint = inletSpeedHint(dialogSpeedMs, oxygenVolumeFraction)
-  const heightLimitMm = Math.max(layout.body.heightM * 1000, 1)
+  const dialogSpeedMs = inletSpeedMs(dialogPerTuyereNm3h, tuyereDiameterM / 2)
+  const line = statusLine(meshPhase, status, running, error)
+  const onNoticeRef = useRef(onNotice)
+  onNoticeRef.current = onNotice
+  useEffect(() => {
+    if (!line.text) return
+    const tone = line.tone === 'error' ? 'error' : line.tone === 'warn' ? 'warning' : 'flow'
+    onNoticeRef.current?.(line.text, tone)
+  }, [line.text, line.tone])
+  const ready = meshPhase === 'ready'
+  const shownHistoryIndex = historyIndex == null ? Math.max(0, historyTimes.length - 1) : Math.min(historyIndex, Math.max(0, historyTimes.length - 1))
+  const shownHistoryTime = historyIndex == null ? (status?.timeS ?? historyTimes[shownHistoryIndex] ?? 0) : (historyTimes[shownHistoryIndex] ?? 0)
+  const historyEndS = historyTimes[historyTimes.length - 1] ?? 0
+  const meshIntro = `按当前炉型生成六面体网格，采用系统内置的优化网格。目标约 ${FURNACE_SIM_CONFIG.mesh.targetCells / 10_000} 万单元，加密后实际单元数会略高于目标值。`
 
   return (
-    <div className="furnace-sim-panel" data-solver-serial={solverSerial}>
+    <div className="furnace-sim-panel">
       <details open>
         <summary>参数</summary>
-        <div className="furnace-control-label">炉体</div>
         <SidebarNumber tone="gray" label="炉长" unit="mm" value={Math.round(layout.body.lengthM * 1000)} min={500} max={200000} disabled={readOnly} onChange={(value) => saveBody('lengthM', value)} />
         <SidebarNumber tone="gray" label="炉宽" unit="mm" value={Math.round(layout.body.widthM * 1000)} min={500} max={50000} disabled={readOnly} onChange={(value) => saveBody('widthM', value)} />
         <SidebarNumber tone="gray" label="炉高" unit="mm" value={Math.round(layout.body.heightM * 1000)} min={500} max={80000} disabled={readOnly} onChange={(value) => saveBody('heightM', value)} />
-        <div className="furnace-control-label">风口</div>
-        <SidebarNumber
-          tone="gray"
-          label="间距"
-          unit="mm"
-          value={pitchMm}
-          min={50}
-          max={5000}
-          disabled={readOnly}
-          onChange={(value) => save({
-            ...overrides,
-            'smelting.annotation.counts': { ...(overrides['smelting.annotation.counts'] ?? {}), jacketPitchM: value / 1000 },
-          }, '调整间距')}
-        />
-        <SidebarNumber label="风口直径" unit="mm" value={tuyereDiameterMm} min={5} max={500} disabled={readOnly} onChange={(value) => save({
-          ...overrides,
-          'smelting.annotation.counts': { ...(overrides['smelting.annotation.counts'] ?? {}), lanceDiameterM: value / 1000 },
-        }, '调整风口直径')} />
-        <SidebarNumber label="风口入炉深度" unit="mm" value={lanceInsertionMm} min={0} max={Math.max(maxInsertionMm, 1)} disabled={readOnly} onChange={(value) => save({
-          ...overrides,
-          'smelting.annotation.counts': { ...(overrides['smelting.annotation.counts'] ?? {}), lanceInsertionM: value / 1000 },
-        }, '调整风口入炉深度')} />
+        <SidebarNumber tone="gray" label="风口间距" unit="mm" value={layout.jacketPitchM * 1000} min={50} max={5000} disabled={readOnly} onChange={(value) => saveCounts('jacketPitchM', value, '调整间距')} />
+        <SidebarNumber label="风口直径" unit="mm" value={tuyereDiameterM * 1000} min={5} max={500} disabled={readOnly} onChange={(value) => saveCounts('lanceDiameterM', value, '调整风口直径')} />
+        <SidebarNumber label="风口入炉深度" unit="mm" value={layout.lanceInsertionM * 1000} min={0} max={Math.max(maxInsertionMm, 1)} disabled={readOnly} onChange={(value) => saveCounts('lanceInsertionM', value, '调整风口入炉深度')} />
+        <SidebarNumber label="氧枪高度" unit="mm" value={lanceHeightM * 1000} min={50} max={Math.max(layout.body.heightM * 1000 - 50, 100)} onChange={(value) => setLanceHeightM(value / 1000)} />
+        <SidebarNumber label="液面高度" unit="mm" value={liquidLevelM * 1000} min={50} max={liquidMaxM * 1000} onChange={(value) => setLiquidLevelM(value / 1000)} />
+        <SidebarNumber label="熔体密度" unit="kg/m³" value={bathDensityKgM3} min={1500} max={8000} onChange={setBathDensityKgM3} />
         <SidebarNumber tone="gray" label="氧气气量" unit="Nm³/h" value={activeOxygen} min={0} max={1_000_000} onChange={setOxygenNm3h} />
-        <div className="furnace-readonly-field furnace-speed-tip" title={speedHint}>
-          <span>入口速度</span>
-          <span>{formatGas(params.inletSpeedMs)} m/s</span>
+        <div className="furnace-readonly-field">
+          <span>风口出口速度</span>
+          <span>{formatGas(speedMs)} m/s</span>
         </div>
         <div className="furnace-control-label">风口开闭</div>
         <div className="furnace-segmented" role="group" aria-label="风口开闭">
@@ -367,98 +682,90 @@ export default function FurnaceFlowShowcase({ darkMode, design, scopeKey, oxygen
             <button key={item.id} type="button" aria-pressed={mode === item.id} onClick={() => chooseMode(item.id)}>{item.label}</button>
           ))}
         </div>
-        <div className="furnace-control-label">初始条件</div>
-        <SidebarNumber label="液面高度" unit="mm" value={liquidLevelM * 1000} min={50} max={liquidMaxM * 1000} onChange={(value) => setLiquidLevelM(value / 1000)} />
-        <p className="furnace-tool-note">液面自弧底最低点起算，默认 3000 mm。改参数后需要重新划分网格。</p>
-        <SidebarNumber label="氧枪高度" unit="mm" value={lanceHeightM * 1000} min={50} max={Math.max(layout.body.heightM * 1000 - 50, 100)} onChange={(value) => setLanceHeightM(value / 1000)} />
-        <p className="furnace-tool-note">水套随氧枪高度移动，不参与计算。当前位置内壁半宽 {formatMm(wallHalfMm / 1000)} mm，入炉深度不超过 {formatMm(maxInsertionMm / 1000)} mm，升到外扩段时炉壁变宽，允许的深度一起变大。</p>
-        <SidebarNumber label="熔池液相密度" unit="kg/m³" value={bathDensityKgM3} min={1500} max={8000} onChange={setBathDensityKgM3} />
       </details>
       <details open>
         <summary>网格</summary>
-        <p className="furnace-tool-note">按风口直径布 5 层同尺度网格，熔池和液面上 200 mm 用 200 mm，再往上每升高约 200 mm 竖向尺寸翻倍。2 m 炉宽约有 10 层，不再按目标个数反推。求解仍把每个六面体拆成 5 个四面体。</p>
-        <button type="button" onClick={divideMesh} disabled={meshing}>{meshing ? '正在划分网格' : meshPhase === 'empty' ? '划分网格' : '重新划分网格'}</button>
-        <label className="furnace-control-check"><input type="checkbox" checked={showMesh && heldWire.current != null} disabled={heldWire.current == null} onChange={(event) => {
-          const visible = event.target.checked
-          setShowMesh(visible)
-          if (meshWireRef) meshWireRef.current = visible ? heldWire.current : null
-        }} />显示网格</label>
-        <p className="furnace-tool-note">
-          {meshing && '正在划分网格，完成后炉内会显示网格线。'}
-          {!meshing && meshPhase === 'empty' && '尚未划分网格。划分后先看网格线，看完可以关掉。'}
-          {!meshing && meshPhase === 'stale' && '参数已变更，请重新划分网格。'}
-          {!meshing && meshPhase === 'ready' && meshInfo && `六面体约 ${Math.round(meshInfo.tetCount / 5)} · 四面体 ${meshInfo.tetCount}。风口 ${Math.round((meshInfo.zoneSizeM?.tuyereM ?? meshInfo.cellSizeM) * 1000)} mm × 5 层，熔池和液面带 200 mm，气相从 ${Math.round((meshInfo.zoneSizeM?.gasM ?? meshInfo.cellSizeM) * 1000)} mm 起随高度翻倍。`}
-        </p>
+        <p className="furnace-tool-note">{meshIntro}</p>
+        <div className="furnace-sim-row">
+          <label className="furnace-control-check"><input type="checkbox" checked={showMesh && heldWire.current != null} disabled={heldWire.current == null} onChange={(event) => {
+            const visible = event.target.checked
+            setShowMesh(visible)
+            if (meshWireRef) meshWireRef.current = visible ? heldWire.current : null
+          }} />显示网格</label>
+          <button type="button" className={meshPhase === 'building' || meshPhase === 'stale' ? 'furnace-mesh-button-muted' : 'furnace-mesh-button-ready'} onClick={generateMesh} disabled={meshPhase === 'building' || readOnly}>生成网格</button>
+        </div>
+        {ready && meshStats && <p className="furnace-tool-note">已生成 {(meshStats.fluidCells / 10_000).toFixed(1)} 万单元 · 最小单元 {(meshStats.minSizeM * 1000).toFixed(0)} mm</p>}
       </details>
       <details open>
         <summary>计算</summary>
-        <button type="button" aria-pressed={playing} disabled={!playing && meshPhase !== 'ready'} onClick={() => {
-          setPlaying((current) => {
-            if (!current) {
-              setShowMesh(false)
-              if (meshWireRef) meshWireRef.current = null
-              setHorizontalHeightM(lanceHeightM)
-              setShowHorizontal(true)
-              setViewMode('section')
-              setField('injectedGas')
-              setSolverError('')
-            }
-            return !current
-          })
-        }}>{playing ? '暂停计算' : '开始计算'}</button>
-        {meshPhase !== 'ready' && !playing && <p className="furnace-tool-note">{meshPhase === 'stale' ? '网格已过期，开始计算前请重新划分。' : '请先划分网格。'}</p>}
-        {solverError && <p role="alert" className="furnace-field-error">计算中断：{solverError}</p>}
-        <div className="furnace-solver-metrics" aria-live="polite">
-          <p className="furnace-tool-note">{playing ? `正在计算 · 第 ${solverSerial} 步` : meshPhase === 'ready' ? '初始场已生成，计算尚未开始。' : '计算未开始。'}{meshPhase === 'ready' ? ` · 物理时间 ${solverMetrics.physicalTimeS.toExponential(2)} s` : ''}</p>
-          {meshPhase === 'ready' && <>
-            <p className="furnace-tool-note">Δt {solverMetrics.dtS.toExponential(2)} s · 压力修正量 {solverMetrics.pressureResidual.toExponential(2)} Pa · 散度 {solverMetrics.divergenceMax.toExponential(2)} s⁻¹</p>
-            <p className="furnace-tool-note">液相守恒误差 {solverMetrics.massError.toExponential(2)} · 压力迭代 {solverMetrics.iterations}</p>
-          </>}
+        <div className="furnace-sim-actions">
+          <button type="button" aria-pressed={running} disabled={!ready} onClick={toggleRun}>{running ? '暂停' : status?.phase === 'complete' ? '继续计算' : '开始计算'}</button>
         </div>
-        <p className="furnace-tool-note">入口为开启风口的折算速度，出口为烟道顶静压出流。无热耦合、表面张力、化学反应和气泡滑移，仅用于方案演示。</p>
+      </details>
+      <details open>
+        <summary>过程回放</summary>
+        <RangeNumberField
+          label={`时间 / ${historyEndS.toFixed(2)}`}
+          unit="s"
+          value={shownHistoryTime}
+          min={0}
+          max={Math.max(historyEndS, 0.01)}
+          step={0.01}
+          digits={2}
+          disabled={running || historyTimes.length < 2}
+          onChange={(value) => showHistoryIndex(nearestHistoryIndex(value, historyTimes))}
+        />
+        <div className="furnace-sim-row">
+          <label className="furnace-control-check"><input type="checkbox" checked={loopPlayback} onChange={(event) => setLoopPlayback(event.target.checked)} />循环播放</label>
+          <button type="button" aria-pressed={playing} disabled={running || !ready || historyTimes.length < 2} onClick={togglePlayback}>{playing ? '暂停' : '播放'}</button>
+        </div>
       </details>
       <details open>
         <summary>结果显示</summary>
-        <label className="furnace-control-label">场变量
-          <select aria-label="显示场" value={field} onChange={(event) => setField(event.target.value as FlowFieldKind)}>
-            {FIELDS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select>
-        </label>
-        <p className="furnace-tool-note">{field === 'injectedGas' ? '气体从开启风口的伸入端水平吹入。开始计算后，步数增加，颜色从风口向炉内铺开。' : field === 'interface' ? '液相分数梯度显示界面位置。' : field === 'lvf' ? '液相体积分数 α，范围 0–1。' : field === 'velocity' ? '速度模值 m/s，箭头方向表示速度方向。' : '表压 Pa，按当前结果的范围着色。'} 当前是单速度混合物：一个速度场、液相分数和进气示踪，没有多相 k-ε，也不计算湍动能、耗散率、湍流黏度和温度。</p>
-        <label className="furnace-control-check"><input type="checkbox" checked={showArrows} onChange={(event) => setShowArrows(event.target.checked)} />显示速度箭头</label>
-        <div className="slice-switch">
-          <span>显示方式</span>
-          <div className="furnace-segmented" role="group" aria-label="流场显示方式">
-            <button type="button" aria-pressed={viewMode === 'section'} onClick={() => setViewMode('section')}>截面</button>
-            <button type="button" aria-pressed={viewMode === 'volume'} onClick={() => setViewMode('volume')}>三维流场</button>
-          </div>
-        </div>
-        {viewMode === 'section' && (
-          <>
-            <div className="slice-switch">
-              <span>喷枪口水平截面</span>
-              <div className="furnace-segmented" role="group" aria-label="喷枪口水平截面">
-                <button type="button" aria-pressed={showHorizontal} onClick={() => setShowHorizontal(true)}>显示</button>
-                <button type="button" aria-pressed={!showHorizontal} onClick={() => setShowHorizontal(false)}>隐藏</button>
-              </div>
-            </div>
-            {showHorizontal && (
-              <>
-                <SidebarNumber label="横切高度" unit="mm" value={horizontalHeightM * 1000} min={0} max={heightLimitMm} onChange={(value) => setHorizontalHeightM(value / 1000)} />
-                <label className="furnace-control-label slice-height-slider">拖动调整
-                  <input aria-label="横切高度滑块" type="range" min={0} max={heightLimitMm} step={1} value={Math.min(heightLimitMm, Math.round(horizontalHeightM * 1000))} onChange={(event) => setHorizontalHeightM(Number(event.target.value) / 1000)} />
-                </label>
-              </>
-            )}
-            <div className="slice-switch">
-              <span>纵轴中心截面</span>
-              <div className="furnace-segmented" role="group" aria-label="纵轴中心截面">
-                <button type="button" aria-pressed={showLongitudinal} onClick={() => setShowLongitudinal(true)}>显示</button>
-                <button type="button" aria-pressed={!showLongitudinal} onClick={() => setShowLongitudinal(false)}>隐藏</button>
-              </div>
-            </div>
-          </>
+        <label className="furnace-control-check"><input type="checkbox" checked={showIso} onChange={(event) => setShowIso(event.target.checked)} />等值面（LVF）</label>
+        {showIso && (
+          <RangeNumberField label="LVF 阈值" value={isoAlpha} min={0.02} max={0.98} step={0.01} digits={2} onChange={setIsoAlpha} />
         )}
+        <label className="furnace-control-check"><input type="checkbox" checked={showLines} onChange={(event) => setShowLines(event.target.checked)} />流线（速度）</label>
+      </details>
+      <details open>
+        <summary>截面</summary>
+        {slices.map((slice, index) => {
+          const range = axisRange(slice.axis, layout, domain)
+          const minMm = Math.round(range.minM * 1000)
+          const maxMm = Math.round(range.maxM * 1000)
+          const positionMm = Math.round(slice.positionM * 1000)
+          return (
+            <div className="furnace-sim-slice" key={slice.id}>
+              <div className="furnace-sim-slice-head">
+                <label className="furnace-control-check"><input type="checkbox" checked={slice.visible} onChange={(event) => updateSlice(slice.id, { visible: event.target.checked })} />截面 {index + 1}</label>
+                <button type="button" className="furnace-sim-slice-delete" onClick={() => setSlices((current) => current.filter((item) => item.id !== slice.id))}>删除</button>
+              </div>
+              <RangeNumberField
+                label="位置"
+                value={positionMm}
+                min={minMm}
+                max={Math.max(minMm, maxMm)}
+                step={1}
+                unit="mm"
+                onChange={(value) => updateSlice(slice.id, { positionM: value / 1000 })}
+              />
+              <label className="furnace-control-label">显示量
+                <select aria-label={`截面 ${index + 1} 显示量`} value={slice.field} onChange={(event) => updateSlice(slice.id, { field: event.target.value as PostScalar })}>
+                  {SLICE_FIELDS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                </select>
+              </label>
+              <div className="furnace-segmented furnace-segmented-3 furnace-slice-axes" role="group" aria-label={`截面 ${index + 1} 方向`}>
+                {SLICE_AXES.map((item) => (
+                  <button key={item.id} type="button" aria-pressed={slice.axis === item.id} onClick={() => updateSlice(slice.id, { axis: item.id })}>{item.label}</button>
+                ))}
+              </div>
+            </div>
+          )
+        })}
+        <div className="furnace-sim-actions">
+          <button type="button" disabled={slices.length >= MAX_SLICES} onClick={addSlice}>添加截面</button>
+        </div>
       </details>
       {dialogOpen && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label="自定义风口">
@@ -467,10 +774,9 @@ export default function FurnaceFlowShowcase({ darkMode, design, scopeKey, oxygen
             <div className={`tuyere-dialog-metrics ${darkMode ? 'tuyere-dialog-metrics-dark' : ''}`}>
               <div className="tuyere-dialog-metric"><small>总氧气进量</small><strong>{formatGas(activeOxygen)}</strong><span>Nm³/h</span></div>
               <div className="tuyere-dialog-metric"><small>单口进量</small><strong>{formatGas(dialogPerTuyereNm3h)}</strong><span>Nm³/h</span></div>
-              <div className="tuyere-dialog-metric" title={dialogSpeedHint}><small>入口速度</small><strong>{formatGas(dialogSpeedMs)}</strong><span>m/s</span></div>
+              <div className="tuyere-dialog-metric"><small>出口速度</small><strong>{formatGas(dialogSpeedMs)}</strong><span>m/s</span></div>
               <div className="tuyere-dialog-metric"><small>风口数量</small><strong>{dialogIds.length}/{layout.tuyeres.length}</strong><span>已开 / 总数</span></div>
             </div>
-            <p className={`mt-3 text-sm ${darkMode ? 'text-slate-300' : 'text-slate-600'}`}>俯视图中蓝色为开启，灰色为关闭。确定后用于本次仿真。</p>
             <TuyereTopView darkMode={darkMode} tuyeres={layout.tuyeres} furnaceLengthM={layout.body.lengthM} furnaceCenterXM={layout.body.centerXM} openIds={new Set(dialogIds)} onToggle={(id) => setDialogIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])} />
             <div className="mt-4 flex justify-end gap-2">
               <button type="button" className={btnSecondary(darkMode)} onClick={() => setDialogOpen(false)}>取消</button>

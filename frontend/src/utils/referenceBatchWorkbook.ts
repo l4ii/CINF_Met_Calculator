@@ -207,10 +207,6 @@ function sum(items: number[]) {
   return items.reduce((total, value) => total + value, 0)
 }
 
-function nonZeroBalanceItems(items: BalanceItem[]) {
-  return items.filter((item) => item.hourlyMass > EPSILON)
-}
-
 function parseBalanceSheet(sheet: ReferenceBatchWorkbookSheet | undefined): BalanceData | null {
   if (!sheet) return null
   const hourlyMassIndex = sheet.columns.findIndex((column) =>
@@ -291,10 +287,6 @@ function findRowByLabel(sheet: ReferenceBatchWorkbookSheet | undefined, matcher:
 
 function columnLabel(column: ReferenceBatchExportColumn) {
   return `${column.header}${column.subHeader ?? ''}`.replace(/\s+/g, '')
-}
-
-function findColumnIndex(sheet: ReferenceBatchWorkbookSheet | undefined, matcher: RegExp) {
-  return sheet?.columns.findIndex((column) => matcher.test(columnLabel(column))) ?? -1
 }
 
 type InputMaterialColumn = {

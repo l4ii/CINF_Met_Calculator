@@ -1,4 +1,4 @@
-# 富氧侧吹炉 VOF + 标准 k-ε 仿真 Implementation Plan
+﻿# 富氧侧吹炉 VOF + 标准 k-ε 仿真 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
@@ -19,50 +19,50 @@
 
 ### Task 1: 后台配置
 
-- [ ] 新建 `frontend/src/config/furnaceSimConfig.ts`：网格档位（粗 4 万、中 10 万、细 25 万）、渐变比、加密尺寸、物性、数值参数、k-ε 与壁面函数常数、后处理参数。
+- [x] 新建 `frontend/src/config/furnaceSimConfig.ts`：网格档位（粗 4 万、中 10 万、细 25 万）、渐变比、加密尺寸、物性、数值参数、k-ε 与壁面函数常数、后处理参数。
 
 ### Task 2: 网格
 
-- [ ] `furnaceFluidDomain.ts` 增加网格锚点。
-- [ ] 新建 `furnaceSim/mesh.ts`：渐变轴、档位反推、切割单元、入口与出口面、连通性、统计、线框。
+- [x] `furnaceFluidDomain.ts` 增加网格锚点。
+- [x] 新建 `furnaceSim/mesh.ts`：渐变轴、档位反推、切割单元、入口与出口面、连通性、统计、线框。
 
 ### Task 3: 压力
 
-- [ ] 新建 `furnaceSim/pressure.ts`：系数层级、红黑 Gauss-Seidel、V 循环、PCG。
+- [x] 新建 `furnaceSim/pressure.ts`：系数层级、红黑 Gauss-Seidel、V 循环、PCG。
 
 ### Task 4: VOF 与动量
 
-- [ ] 新建 `furnaceSim/vof.ts`、`furnaceSim/momentum.ts`。
+- [x] 新建 `furnaceSim/vof.ts`、`furnaceSim/momentum.ts`。
 
 ### Task 5: 湍流
 
-- [ ] 新建 `furnaceSim/turbulence.ts`。
+- [x] 新建 `furnaceSim/turbulence.ts`。
 
 ### Task 6: 时间推进
 
-- [ ] 新建 `furnaceSim/solver.ts`：状态、单步、Δt、监控、时均、准稳态、发散。
+- [x] 新建 `furnaceSim/solver.ts`：状态、单步、Δt、监控、时均、准稳态、发散。
 
 ### Task 7: 后处理
 
-- [ ] 新建 `furnaceSim/post.ts`：节点插值、Marching Cubes、流线、截面、色标。
+- [x] 新建 `furnaceSim/post.ts`：节点插值、Marching Cubes、流线、截面、色标。
 
 ### Task 8: Worker
 
-- [ ] 新建 `furnaceSim/protocol.ts`，重写 `workers/furnaceSideBlowSolver.worker.ts`。
+- [x] 新建 `furnaceSim/protocol.ts`，重写 `workers/furnaceSideBlowSolver.worker.ts`。
 
 ### Task 9: 场景与视口
 
-- [ ] `furnaceModelScene.ts` 删除贴图切片；`ParametricFurnaceViewport.tsx` 渲染后处理缓冲与色标；更新 `SmeltingFurnaceViewer.tsx`。
+- [x] `furnaceModelScene.ts` 删除贴图切片；`ParametricFurnaceViewport.tsx` 渲染后处理缓冲与色标；更新 `SmeltingFurnaceViewer.tsx`。
 
 ### Task 10: 页面
 
-- [ ] 精简 `FurnaceFlowShowcase.tsx`，清理 `index.css`。
+- [x] 精简 `FurnaceFlowShowcase.tsx`，清理 `index.css`。
 
 ### Task 11: 清理
 
-- [ ] 删除 `furnaceTetMesh.ts`、`furnaceTetSolver.ts`、`furnaceSideBlowSolver.ts`，新增 `furnaceGasInlet.ts`。
+- [x] 删除 `furnaceTetMesh.ts`、`furnaceTetSolver.ts`、`furnaceSideBlowSolver.ts`，新增 `furnaceGasInlet.ts`。
 
 ### Task 12: 验证
 
-- [ ] 重写 `frontend/scripts/test-furnace-solver.mjs`：网格、静水、溃坝、守恒、趋势、后处理、Worker 协议、性能报告。
-- [ ] `vite build`，启动 dev 检查页面。
+- [x] 重写 `frontend/scripts/test-furnace-solver.mjs`：网格、静水、溃坝、守恒、趋势、后处理、Worker 协议、性能报告。
+- [x] `vite build`，启动 dev 检查页面。

@@ -1,7 +1,7 @@
 import { forwardRef, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import type { SmeltingFurnaceDesignResult } from '../../utils/copperEquipmentSizing.ts'
 import { buildSmeltingFurnaceLayout } from '../../utils/copperFurnaceGeometry.ts'
-import ParametricFurnaceViewport, { type FurnaceViewportHandle } from './ParametricFurnaceViewport.tsx'
+import ParametricFurnaceViewport, { type FurnaceGlobalField, type FurnaceViewportHandle } from './ParametricFurnaceViewport.tsx'
 import { buildSmeltingModelScene, type FlowSolverFrames, type SmeltingFlowDecoration } from '../../utils/furnaceModelScene.ts'
 import { useFurnaceModelEdits } from './useFurnaceModelEdits.ts'
 
@@ -42,7 +42,7 @@ const SmeltingFurnaceViewer = forwardRef<SmeltingFurnaceViewerHandle, Props>(fun
     const param = key === 'jacketPitchMm' ? 'jacketPitchM' : key
     save({ ...overrides, [id]: { ...(overrides[id] ?? {}), [param]: key === 'jacketPitchMm' ? value / 1000 : value } }, key === 'jacketPitchMm' ? '调整水套间距' : '调整炉体尺寸')
   }, [overrides, save])
-  const globalFields = useMemo(() => [
+  const globalFields = useMemo<FurnaceGlobalField[]>(() => [
     { key: 'lengthM', label: '炉长', value: layout.body.lengthM, unit: 'm', min: 0.5, max: 200, tone: 'gray' },
     { key: 'widthM', label: '炉宽', value: layout.body.widthM, unit: 'm', min: 0.5, max: 50, tone: 'gray' },
     { key: 'jacketPitchMm', label: '水套间距', value: layout.jacketPitchM * 1000, unit: 'mm', min: 50, max: 5000, tone: 'gray' },
@@ -53,23 +53,16 @@ const SmeltingFurnaceViewer = forwardRef<SmeltingFurnaceViewerHandle, Props>(fun
     { key: 'flueHeightMm', label: '烟道出口高度', value: layout.flue.heightM * 1000, unit: 'mm', min: 100, max: 50000 },
   ], [layout])
   const flowKey = flow ? [
-    flow.field,
-    flow.perTuyereNm3h,
     flow.tuyereDiameterM,
     flow.liquidLevelM,
     flow.lanceHeightM,
     flow.lanceInsertionM,
-    flow.horizontalSliceM,
-    flow.showHorizontalSlice,
-    flow.showLongitudinalSlice,
-    flow.viewMode,
-    flow.showArrows,
-    flow.showField !== false,
+    Boolean(flow.showField),
     flow.openTuyereIds.join('|'),
   ].join(':') : ''
   const flowSnapshot = useRef(flow)
   flowSnapshot.current = flow
   const buildModel = useCallback(() => buildSmeltingModelScene(layout, darkMode, flowSnapshot.current), [layout, darkMode, flowKey])
-  return <ParametricFurnaceViewport ref={ref} darkMode={darkMode} modelName="侧吹熔炼炉" components={layout.components} buildModel={buildModel} readOnly={readOnly} globalFields={globalFields} onGlobalChange={onGlobalChange} onComponentChange={onComponentChange} onResetComponent={resetComponent} onReset={reset} storageError={storageError} historyControls={historyControls} simulationSidebar={simulationSidebar} solverFramesRef={solverFramesRef} meshWireRef={meshWireRef} flowField={flow?.field ?? ''} flowPlaying={Boolean(flow) && flowPlaying} />
+  return <ParametricFurnaceViewport ref={ref} darkMode={darkMode} modelName="侧吹熔炼炉" components={layout.components} buildModel={buildModel} readOnly={readOnly} globalFields={globalFields} onGlobalChange={onGlobalChange} onComponentChange={onComponentChange} onResetComponent={resetComponent} onReset={reset} storageError={storageError} historyControls={historyControls} simulationSidebar={simulationSidebar} solverFramesRef={flow ? solverFramesRef : undefined} meshWireRef={flow ? meshWireRef : undefined} flowPlaying={Boolean(flow) && flowPlaying} />
 })
 export default SmeltingFurnaceViewer

@@ -25,7 +25,7 @@ function predictDirection(state: FlowState, d: number, dt: number) {
   const centers = [mesh.xc, mesh.yc, mesh.zc]
   const counts = [mesh.nx, mesh.ny, mesh.nz]
   const dir = state.dirs[d]
-  const { fn0, fn1, fn2, fs, vel: U, star, ap, rf, rfOld, kind } = dir
+  const { fn0, fn1, fn2, fs, vel: U, star, ap, rf, kind } = dir
   const Md = dir.mass
   const nd = dir.n
   const csd = dir.cs

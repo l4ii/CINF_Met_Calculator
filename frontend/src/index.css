@@ -272,11 +272,51 @@ code {
 .furnace-workbench-dark .furnace-parameter-field input, .furnace-workbench-dark .furnace-control-label select { background: #0f172a; color: #f1f5f9; border-color: #64748b; }
 .furnace-sim-gray-field input { background: #e2e8f0; border-color: #cbd5e1; }
 .furnace-workbench-dark .furnace-sim-gray-field input { background: #334155; color: #f1f5f9; border-color: #64748b; }
-.furnace-speed-tip { cursor: help; }
-.slice-switch { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); align-items: center; gap: .4rem; margin: .45rem 0; }
-.slice-switch .furnace-segmented { margin: 0; }
-.slice-height-slider { display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: .5rem; }
-.slice-height-slider input { grid-column: 1 / -1; margin-top: .25rem; }
+.furnace-sim-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .4rem; }
+.furnace-sim-row { display: flex; justify-content: space-between; align-items: center; gap: .5rem; margin: .35rem 0; }
+.furnace-sim-calc-row { align-items: flex-start; }
+.furnace-sim-calc-row .furnace-sim-status { flex: 1; min-width: 0; margin: .35rem 0 0; }
+.furnace-sim-calc-row .furnace-sim-actions { flex: 0 0 auto; margin-left: auto; }
+.furnace-sim-row .furnace-control-check { margin: 0; }
+.furnace-sim-row button { margin: 0; }
+.furnace-sim-quantities { display: grid; gap: .35rem; margin: .35rem 0; }
+.furnace-sim-quantities label { display: flex; align-items: center; justify-content: flex-end; gap: .35rem; }
+.furnace-sim-quantities input { width: 5.5rem; min-height: 36px; border: 1px solid #cbd5e1; border-radius: .4rem; padding: .3rem .4rem; }
+.furnace-workbench-dark .furnace-sim-quantities input { background: #0f172a; color: #f1f5f9; border-color: #64748b; }
+.furnace-workbench-sidebar .furnace-sim-actions button { width: auto; margin: 0; }
+.furnace-workbench-sidebar button.furnace-mesh-button-ready { background: #2563eb; color: #fff; border-color: #2563eb; }
+.furnace-workbench-sidebar button.furnace-mesh-button-muted,
+.furnace-workbench-sidebar button.furnace-mesh-button-ready:disabled { background: #e2e8f0; color: #64748b; border-color: #cbd5e1; }
+.furnace-workbench-dark .furnace-workbench-sidebar button.furnace-mesh-button-ready:not(:disabled) { background: #2563eb; color: #fff; border-color: #2563eb; }
+.furnace-workbench-dark .furnace-workbench-sidebar button.furnace-mesh-button-muted,
+.furnace-workbench-dark .furnace-workbench-sidebar button.furnace-mesh-button-ready:disabled { background: #1e293b; color: #94a3b8; border-color: #475569; }
+.furnace-sim-slice { margin: .75rem 0; padding: .85rem .8rem 1rem; border: 1px solid #cbd5e1; border-radius: .5rem; }
+.furnace-slice-axes { margin: .85rem 0 .2rem; }
+.furnace-slice-axes button { white-space: nowrap; min-height: 36px; flex-direction: row; }
+.furnace-sim-slice-head { display: flex; align-items: center; justify-content: space-between; gap: .4rem; }
+.furnace-sim-slice-head .furnace-control-check { margin: 0; }
+.furnace-sim-slice-delete { margin: 0 !important; }
+.furnace-range-field { margin: .5rem 0; }
+.furnace-range-field .furnace-parameter-field { margin: 0; }
+.furnace-range { display: block; width: 100%; height: 28px; margin: .45rem 0 0; accent-color: #2563eb; }
+.furnace-workbench-dark .furnace-sim-slice { border-color: #475569; }
+.furnace-sim-status { margin: .55rem 0 .2rem; font-size: 14px; font-weight: 600; color: #0f172a; font-variant-numeric: tabular-nums; }
+.furnace-workbench-dark .furnace-sim-status { color: #f1f5f9; }
+.furnace-sim-status[data-tone=warn] { color: #b45309; }
+.furnace-sim-status[data-tone=error] { color: #b91c1c; }
+.furnace-workbench-dark .furnace-sim-status[data-tone=warn] { color: #fbbf24; }
+.furnace-workbench-dark .furnace-sim-status[data-tone=error] { color: #fca5a5; }
+.furnace-sim-toggles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .3rem; margin: .4rem 0; }
+.furnace-sim-toggles .furnace-control-check { margin: 0; }
+.furnace-flow-legend { position: absolute; z-index: 3; top: .75rem; right: .75rem; width: 220px; padding: .55rem .7rem; border: 1px solid #cbd5e1; border-radius: .5rem; background: rgba(255,255,255,.92); color: #0f172a; font-size: 12px; line-height: 1.35; pointer-events: none; }
+.furnace-flow-legend[hidden] { display: none; }
+.furnace-flow-legend-dark { border-color: #475569; background: rgba(15,23,42,.9); color: #e2e8f0; }
+.furnace-flow-legend-item + .furnace-flow-legend-item { margin-top: .5rem; }
+.furnace-flow-legend-title { margin-bottom: .25rem; font-weight: 600; }
+.furnace-flow-legend-bar { height: 10px; border-radius: 3px; }
+.furnace-flow-legend-scale { display: flex; justify-content: space-between; margin-top: .15rem; font-variant-numeric: tabular-nums; }
+.furnace-flow-legend-caption { margin-top: .45rem; color: #475569; }
+.furnace-flow-legend-dark .furnace-flow-legend-caption { color: #cbd5e1; }
 .tuyere-dialog-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; margin-top: .25rem; }
 .tuyere-dialog-metric { padding: .75rem .85rem; border-radius: .55rem; background: #e2e8f0; }
 .tuyere-dialog-metric small { display: block; font-size: 12px; font-weight: 600; color: #475569; }
